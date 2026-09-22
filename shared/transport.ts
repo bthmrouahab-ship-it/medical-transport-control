@@ -8,7 +8,7 @@ export type ClinicAppointment = {
   appointmentAt: string;
   kind: AppointmentKind;
   notes?: string;
-  status: "بانتظار طلب السيارة" | "تم طلب السيارة" | "مكتملة";
+  status: "بانتظار طلب السيارة" | "تم طلب السيارة" | "تم استلام المريض" | "طلب عودة" | "مكتملة";
 };
 
 export type Vehicle = {
@@ -24,6 +24,7 @@ export type VehicleRequest = {
   appointmentId: string;
   vehiclePlate: string;
   driver: string;
+  direction: "ذهاب" | "عودة";
   status: "مطلوب" | "تم التأكيد" | "وصلت السيارة" | "تم استلام المريض";
   notificationMethod: "whatsapp" | "call";
   createdAt: string;

@@ -38,8 +38,8 @@
 }
 
 :root {
-  --primary: #1f5c66;
-  --primary-foreground: #f1fffc;
+  --primary: #a61d2d;
+  --primary-foreground: #fff7f7;
   --background: #f5f7fb;
   --foreground: #17243b;
   --card: #ffffff;
@@ -50,13 +50,13 @@
   --secondary-foreground: #3d506c;
   --muted: #eef3f6;
   --muted-foreground: #728199;
-  --accent: #e6f4f1;
-  --accent-foreground: #165e5a;
+  --accent: #fff1f2;
+  --accent-foreground: #861b2a;
   --destructive: #c94747;
   --destructive-foreground: #fff7f7;
   --border: #e1e8ef;
   --input: #e1e8ef;
-  --ring: #83cfc1;
+  --ring: #e6a1aa;
   --sidebar: #10233f;
   --sidebar-foreground: #eef6ff;
   --sidebar-primary: #4de0bc;

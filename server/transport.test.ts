@@ -16,6 +16,7 @@ const request: VehicleRequest = {
   appointmentId: "APT-1",
   vehiclePlate: "943438",
   driver: "خرم",
+  direction: "ذهاب",
   status: "مطلوب",
   notificationMethod: "whatsapp",
   createdAt: "09:01",
