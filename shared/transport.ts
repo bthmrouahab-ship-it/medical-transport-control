@@ -24,7 +24,7 @@ export type VehicleRequest = {
   appointmentId: string;
   vehiclePlate: string;
   driver: string;
-  status: "مطلوب" | "تم التأكيد" | "في الطريق";
+  status: "مطلوب" | "تم التأكيد" | "وصلت السيارة" | "تم استلام المريض";
   notificationMethod: "whatsapp" | "call";
   createdAt: string;
 };
