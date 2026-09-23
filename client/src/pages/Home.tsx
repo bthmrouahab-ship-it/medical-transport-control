@@ -179,7 +179,7 @@ export default function Home() {
         <div className="flex h-full flex-col px-4 py-5">
           <div className="flex items-center gap-3 border-b border-white/10 px-2 pb-6">
             <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-[#4de0bc] text-[#10233f]"><Route className="h-6 w-6" /></div>
-            <div><p className="text-sm font-bold tracking-wide">فوكس ترانزيت</p><p className="mt-0.5 text-xs text-slate-300">إدارة النقل الطبي</p></div>
+            <div><p className="text-sm font-bold tracking-wide">سيارات مجمع الثمامة</p><p className="mt-0.5 text-xs text-slate-300">إدارة النقل الطبي</p></div>
           </div>
           <div className="mt-7 px-3 text-[10px] font-bold uppercase tracking-[0.22em] text-slate-400">مساحة التشغيل</div>
           <nav className="mt-3 space-y-1">
@@ -194,7 +194,7 @@ export default function Home() {
             <p className="mt-2 text-xs leading-5 text-slate-300">تحديث آخر رحلة قبل 28 ثانية</p>
             <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-white/10"><div className="h-full w-[82%] rounded-full bg-[#4de0bc]" /></div>
           </div>
-          <div className="mt-4 flex items-center gap-3 px-2 text-xs text-slate-400"><div className="flex h-8 w-8 items-center justify-center rounded-full bg-[#2b4b70] font-bold text-[#83f0d0]">م</div><div><p className="font-semibold text-slate-200">مشرف العمليات</p><p>إدارة الأسطول</p></div></div>
+          <div className="mt-4 flex items-center gap-3 px-2 text-xs text-slate-400"><div className="flex h-8 w-8 items-center justify-center rounded-full bg-[#2b4b70] font-bold text-[#83f0d0]">م</div><div><p className="font-semibold text-slate-200">مشرف العمليات</p><p>إدارة السيارات</p></div></div>
         </div>
       </aside>
 
