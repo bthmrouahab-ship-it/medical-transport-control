@@ -5,14 +5,12 @@ import {
   ClipboardList,
   Copy,
   KeyRound,
-  LogOut,
   Map as MapIcon,
   Pencil,
   Plus,
   ShieldCheck,
   Trash2,
   Truck,
-  UserCog,
   UserPlus,
   UsersRound,
   X,
@@ -37,6 +35,9 @@ import {
 import { hasSharedState, loadState, saveState, subscribeState } from "@/lib/appStore";
 import { appendAudit } from "@/lib/audit";
 import FleetDashboard from "@/components/FleetDashboard";
+import AppHeader from "@/components/AppHeader";
+import { HISTORY_SEED } from "@shared/seedData";
+import { syncHospitals, type Hospital } from "@shared/hospitals";
 import { authErrorMessage, createUser, resetUserPassword, updateUser, watchUsers } from "@/lib/auth";
 
 type Tab = "dashboard" | "users" | "vehicles" | "audit";
@@ -60,8 +61,14 @@ export default function AdminPanel({ profile, onLogout, onChangePassword }: {
   const [audit, setAudit] = useState<string[]>(() => loadState("fox_audit", []));
 
   useEffect(() => {
-    // أول دخول للمدير: حفظ قائمة السيارات الأولية في قاعدة البيانات حتى يعدّلها المشرفون.
+    // البيانات الأولية: السيارات والإحصائيات السابقة، وتحديث مواقع المستشفيات غير المؤكدة من الدليل.
     if (!hasSharedState("fox_fleet")) saveState("fox_fleet", DEFAULT_VEHICLES);
+    if (!hasSharedState("fox_history")) saveState("fox_history", HISTORY_SEED);
+    if (hasSharedState("fox_hospitals")) {
+      const stored = loadState<Hospital[]>("fox_hospitals", []);
+      const synced = syncHospitals(stored);
+      if (JSON.stringify(synced) !== JSON.stringify(stored)) saveState("fox_hospitals", synced);
+    }
     return subscribeState((key) => {
       if (key === "fox_fleet") setVehicles(loadState("fox_fleet", DEFAULT_VEHICLES));
       else if (key === "fox_requests") setRequests(loadRequests());
@@ -80,27 +87,17 @@ export default function AdminPanel({ profile, onLogout, onChangePassword }: {
   }
 
   const tabs: { id: Tab; label: string; icon: typeof UsersRound }[] = [
-    { id: "dashboard", label: "لوحة السيارات والخريطة", icon: MapIcon },
-    { id: "users", label: "المستخدمون والأدوار", icon: UsersRound },
-    { id: "vehicles", label: "السيارات والسائقون", icon: Truck },
+    { id: "dashboard", label: "الخريطة والإحصائيات", icon: MapIcon },
+    { id: "users", label: "المستخدمون", icon: UsersRound },
+    { id: "vehicles", label: "السيارات", icon: Truck },
     { id: "audit", label: "سجل العمليات", icon: ClipboardList },
   ];
 
   return (
     <div className="min-h-screen bg-[#f5f7fb]" dir="rtl">
-      <header className="sticky top-0 z-20 flex h-[76px] items-center justify-between border-b border-slate-200 bg-[#f5f7fb]/95 px-5 backdrop-blur-xl lg:px-10">
-        <div className="flex items-center gap-3">
-          <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-[#10233f] text-[#e43846]"><UserCog className="h-5 w-5" /></div>
-          <div><p className="text-xs font-semibold text-[#a61d2d]">مساحة مدير النظام</p><h1 className="text-xl font-bold">إدارة النظام</h1></div>
-        </div>
-        <div className="flex items-center gap-2">
-          <span className="hidden text-xs font-semibold text-slate-400 sm:inline">{profile.displayName}</span>
-          <button onClick={onChangePassword} aria-label="تغيير كلمة المرور" title="تغيير كلمة المرور" className="flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-500 hover:text-[#a61d2d]"><KeyRound className="h-4 w-4" /></button>
-          <button aria-label="تسجيل الخروج" onClick={onLogout} className="flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-500 hover:text-red-600"><LogOut className="h-4 w-4" /></button>
-        </div>
-      </header>
+      <AppHeader role="مدير النظام" name={profile.displayName} onChangePassword={onChangePassword} onLogout={onLogout} />
 
-      <main className="mx-auto max-w-6xl p-5 lg:p-10">
+      <main className="mx-auto max-w-7xl p-4 lg:p-8">
         <nav className="mb-7 flex gap-2 overflow-x-auto" aria-label="أقسام لوحة المدير">
           {tabs.map((item) => (
             <button key={item.id} onClick={() => setTab(item.id)} aria-current={tab === item.id ? "page" : undefined} className={`flex min-h-11 shrink-0 items-center gap-2 rounded-xl px-4 text-sm font-bold ${tab === item.id ? "bg-[#a61d2d] text-white" : "border border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}>
@@ -113,7 +110,7 @@ export default function AdminPanel({ profile, onLogout, onChangePassword }: {
         {tab === "vehicles" && <VehiclesTab vehicles={vehicles} requests={requests} onChange={updateVehicles} />}
         {tab === "audit" && (
           <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
-            <div className="border-b border-slate-100 p-5"><h3 className="font-bold">سجل العمليات</h3><p className="mt-1 text-xs text-slate-400">آخر 50 عملية في النظام مع اسم من نفّذها.</p></div>
+            <h3 className="border-b border-slate-100 px-5 py-4 font-bold">سجل العمليات</h3>
             <div className="max-h-[60vh] divide-y divide-slate-100 overflow-auto">
               {audit.length ? audit.map((item, index) => <p key={`${item}-${index}`} className="px-5 py-3 text-xs text-slate-500">{item}</p>) : <p className="p-5 text-xs text-slate-400">لا توجد عمليات مسجلة بعد</p>}
             </div>
@@ -158,8 +155,8 @@ function UsersTab({ profile, vehicles, onLog }: { profile: UserProfile; vehicles
 
   return (
     <>
-      <div className="mb-6 flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
-        <div><p className="text-sm font-bold text-[#a61d2d]">الحسابات والصلاحيات</p><h2 className="mt-2 text-2xl font-bold">المستخدمون</h2><p className="mt-2 text-sm text-slate-500">كل مستخدم يرى صفحة دوره فقط. الحساب الجديد يغيّر كلمة المرور المؤقتة عند أول دخول.</p></div>
+      <div className="mb-6 flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
+        <h2 className="text-2xl font-bold">المستخدمون</h2>
         <button onClick={() => { setShowForm(true); setIssued(null); }} className="flex min-h-11 items-center gap-2 rounded-xl bg-[#a61d2d] px-4 text-sm font-bold text-white hover:bg-[#8b1725]"><UserPlus className="h-4 w-4" /> إضافة مستخدم</button>
       </div>
 
@@ -318,6 +315,7 @@ function VehiclesTab({ vehicles, requests, onChange }: {
 }) {
   // null = لا يوجد نموذج مفتوح، "" = سيارة جديدة، غير ذلك = رقم السيارة قيد التعديل
   const [editing, setEditing] = useState<string | null>(null);
+  const missingSeed = DEFAULT_VEHICLES.filter((seed) => !vehicles.some((vehicle) => vehicle.plate === seed.plate));
 
   function save(draft: VehicleDraft) {
     const original = editing ? vehicles.find((vehicle) => vehicle.plate === editing) : undefined;
@@ -352,10 +350,16 @@ function VehiclesTab({ vehicles, requests, onChange }: {
 
   return (
     <>
-      <div className="mb-6 flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
-        <div><p className="text-sm font-bold text-[#a61d2d]">بيانات الأسطول</p><h2 className="mt-2 text-2xl font-bold">السيارات والسائقون</h2><p className="mt-2 text-sm text-slate-500">عدّل رقم السيارة واسم السائق ورقم هاتفه ونوع السيارة. التغييرات تظهر فورًا لمشرف السيارات.</p></div>
+      <div className="mb-6 flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
+        <h2 className="text-2xl font-bold">السيارات والسائقون</h2>
         <button onClick={() => setEditing("")} className="flex min-h-11 items-center gap-2 rounded-xl bg-[#a61d2d] px-4 text-sm font-bold text-white hover:bg-[#8b1725]"><Plus className="h-4 w-4" /> إضافة سيارة</button>
       </div>
+      {missingSeed.length > 0 && (
+        <div className="mb-4 flex flex-col gap-3 rounded-2xl border border-blue-100 bg-blue-50 p-4 text-sm text-blue-900 sm:flex-row sm:items-center sm:justify-between">
+          <span><b>{missingSeed.length}</b> سيارة من ملف السائقين غير مضافة: <span dir="ltr">{missingSeed.map((vehicle) => vehicle.plate).join("، ")}</span></span>
+          <button onClick={() => onChange([...vehicles, ...missingSeed], `إضافة ${missingSeed.length} سيارة من ملف السائقين`)} className="shrink-0 rounded-xl bg-blue-700 px-4 py-2 text-xs font-bold text-white">إضافة الكل</button>
+        </div>
+      )}
       {editing === "" && <VehicleForm onSave={save} onCancel={() => setEditing(null)} />}
       <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
         <div className="divide-y divide-slate-100">

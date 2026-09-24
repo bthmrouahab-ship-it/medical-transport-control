@@ -59,11 +59,11 @@ export default function HistoryCharts({ summary }: { summary: HistorySummary }) 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <Stat label="إجمالي المواعيد" value={summary.totalTrips.toLocaleString("en")} hint={`${summary.activeDays} يوم عمل`} />
         <Stat label="نسبة الإنجاز" value={`${completion}%`} hint={`${summary.completedTrips.toLocaleString("en")} رحلة منجزة`} />
-        <Stat label="متوسط المواعيد يوميًا" value={String(dailyAverage)} hint="في الأيام المسجلة" />
-        <Stat label="متوسط مدة الرحلة" value={summary.avgTripMinutes ? `${summary.avgTripMinutes} د` : "—"} hint="من خروج السيارة إلى عودتها" />
+        <Stat label="متوسط المواعيد يوميًا" value={String(dailyAverage)} />
+        <Stat label="متوسط مدة الرحلة" value={summary.avgTripMinutes ? `${summary.avgTripMinutes} د` : "—"} />
       </div>
 
-      <Card title="المواعيد يوميًا" subtitle="الإجمالي مقابل المنجز فعليًا">
+      <Card title="المواعيد يوميًا">
         <div dir="ltr" className="h-64">
           <ResponsiveContainer width="100%" height="100%">
             <LineChart data={summary.daily.filter((day) => day.total > 0)} margin={{ top: 8, right: 12, bottom: 0, left: -12 }}>
@@ -93,7 +93,7 @@ export default function HistoryCharts({ summary }: { summary: HistorySummary }) 
             </ResponsiveContainer>
           </div>
         </Card>
-        <Card title="متوسط المواعيد حسب اليوم" subtitle="إجمالي الرحلات ÷ عدد أيام العمل لكل يوم">
+        <Card title="متوسط المواعيد حسب اليوم">
           <div dir="ltr" className="h-56">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={weekdays} margin={{ top: 8, right: 8, bottom: 0, left: -16 }}>
@@ -109,7 +109,7 @@ export default function HistoryCharts({ summary }: { summary: HistorySummary }) 
       </div>
 
       <div className="grid gap-5 lg:grid-cols-[1.4fr_1fr]">
-        <Card title="أكثر الوجهات طلبًا" subtitle="الرحلات المنجزة لكل وجهة">
+        <Card title="أكثر الوجهات طلبًا">
           <div className="mb-3 flex justify-end"><button onClick={() => setShowTable((value) => !value)} className="rounded-lg border border-slate-200 px-3 py-1 text-xs font-bold text-slate-600 hover:bg-slate-50">{showTable ? "عرض كمخطط" : "عرض كجدول"}</button></div>
           {showTable ? (
             <div className="max-h-96 overflow-auto">
@@ -135,7 +135,7 @@ export default function HistoryCharts({ summary }: { summary: HistorySummary }) 
           )}
         </Card>
         <div className="space-y-5">
-          <Card title="الرحلات حسب المنطقة" subtitle="المستشفيات المتجاورة مجمّعة في منطقة واحدة">
+          <Card title="الرحلات حسب المنطقة">
             <ul className="space-y-2">
               {summary.zones.map((zone) => {
                 const share = Math.round((zone.trips / summary.completedTrips) * 100);

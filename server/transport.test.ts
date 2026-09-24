@@ -7,7 +7,12 @@ import {
   canRequestVehicle,
   migrateAppointment,
   parseImportedAppointments,
+  buildTripGroups,
+  findUnrequestedMatches,
   requestWindow,
+  suggestJoinDispatched,
+  whatsappLink,
+  whatsappNumber,
   suggestTripGroups,
   type ClinicAppointment,
   type VehicleRequest,
@@ -65,11 +70,20 @@ describe("medical transport rules", () => {
   });
 
   it("builds a driver message with the building, apartment, and mobile", () => {
-    const message = buildDriverMessage(appointment, request);
+    const message = buildDriverMessage([{ appointment, request }], { plate: "943438", driver: "خرم" });
     expect(message).toContain("مريض 001");
     expect(message).toContain("مبنى 12، شقة 4");
+    expect(message).toContain("Building 12, Apt 4");
+    expect(message).toContain("Al Wakra Hospital");
     expect(message).toContain("55123456");
     expect(message).toContain("943438");
+    expect(message).toContain("Needs escort");
+  });
+
+  it("builds WhatsApp links with the Qatar country code", () => {
+    expect(whatsappNumber("77712995")).toBe("97477712995");
+    expect(whatsappNumber("+974 7771 2995")).toBe("97477712995");
+    expect(whatsappLink("77712995", "مرحبا")).toBe("https://wa.me/97477712995?text=%D9%85%D8%B1%D8%AD%D8%A8%D8%A7");
   });
 
   it("migrates previously saved appointments without losing their pickup address", () => {
@@ -175,5 +189,35 @@ describe("medical transport rules", () => {
     const migrated = migrateAppointment({ id: "X", patientName: "p", clinic: "مستشفى سدرة / مجمع الثمامة", appointmentAt: "10:00" });
     expect(migrated?.appointmentDate).toMatch(/^\d{4}-\d{2}-\d{2}$/);
     expect(migrated?.hospitalId).toBe("sidra");
+  });
+
+  it("builds groups of three for the same destination but never mixes directions or exceeds seats", () => {
+    const make = (id: string, time: string, extra: Partial<ClinicAppointment> = {}): ClinicAppointment => ({ ...appointment, id, appointmentAt: time, ...extra });
+    const trips = [make("A", "09:00"), make("B", "09:10"), make("C", "09:15"), make("D", "09:20")];
+    const groups = buildTripGroups(trips.map((item) => ({ appointment: item, direction: "ذهاب" as const })));
+    expect(groups[0].appointmentIds).toHaveLength(3);
+    expect(groups).toHaveLength(1);
+    const special = buildTripGroups([make("S1", "09:00", { kind: "احتياجات خاصة" }), make("S2", "09:05", { kind: "احتياجات خاصة" }), make("S3", "09:10", { kind: "احتياجات خاصة" })]
+      .map((item) => ({ appointment: item, direction: "ذهاب" as const })));
+    expect(Math.max(...special.map((group) => group.appointmentIds.length))).toBe(2);
+    const mixed = buildTripGroups([{ appointment: make("X", "09:00"), direction: "ذهاب" }, { appointment: make("Y", "09:05"), direction: "عودة" }]);
+    expect(mixed).toHaveLength(0);
+  });
+
+  it("suggests joining a car already on its way to the same destination", () => {
+    const sent: VehicleRequest = { ...request, id: "R-SENT", status: "تم إرسال السيارة", vehiclePlate: "943438" };
+    const second: ClinicAppointment = { ...appointment, id: "APT-9", appointmentAt: "09:15" };
+    const newRequest: VehicleRequest = { ...request, id: "R-NEW", appointmentId: "APT-9", vehiclePlate: undefined };
+    const joins = suggestJoinDispatched([{ request: newRequest, appointment: second }], [{ request: sent, appointment }]);
+    expect(joins).toEqual([expect.objectContaining({ requestId: "R-NEW", plate: "943438" })]);
+  });
+
+  it("alerts about an unrequested appointment to the same destination at the same time", () => {
+    const now = new Date(2026, 8, 24, 8, 0);
+    const waiting: ClinicAppointment = { ...appointment, id: "APT-W", appointmentAt: "09:20", buildingNumber: "30" };
+    const other: ClinicAppointment = { ...appointment, id: "APT-X", clinic: "مستشفى حمد العام", appointmentAt: "09:05" };
+    const matches = findUnrequestedMatches([appointment, waiting, other], [request], undefined, now);
+    expect(matches.map((match) => match.appointment.id)).toEqual(["APT-W"]);
+    expect(matches[0]).toMatchObject({ gapMinutes: 20, sameDestination: true });
   });
 });

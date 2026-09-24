@@ -41,7 +41,7 @@ export default function ChangePasswordForm({ required, onDone, onCancel }: {
         <div>
           <h2 className="text-xl font-bold">تغيير كلمة المرور</h2>
           <p className="mt-1 text-xs leading-5 text-slate-500">
-            {required ? "هذه أول مرة تدخل فيها بكلمة مرور مؤقتة. اختر كلمة مرور خاصة بك للمتابعة." : "8 أحرف على الأقل، وتحتوي على أحرف وأرقام."}
+            8 أحرف على الأقل، أحرف وأرقام
           </p>
         </div>
       </div>

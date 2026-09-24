@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { doc, setDoc, updateDoc } from "firebase/firestore";
-import { KeyRound, LocateFixed, LogOut, MapPin, Pause, Play, Truck } from "lucide-react";
+import { LocateFixed, MapPin, Pause, Play } from "lucide-react";
+import AppHeader from "@/components/AppHeader";
 import { toast } from "sonner";
 import type { UserProfile } from "@shared/users";
 import { distanceKm } from "@shared/hospitals";
@@ -129,16 +130,7 @@ export default function DriverPage({ profile, onLogout, onChangePassword }: {
 
   return (
     <div className="min-h-screen bg-[#f5f7fb]" dir="rtl">
-      <header className="flex h-[72px] items-center justify-between border-b border-slate-200 px-5">
-        <div className="flex items-center gap-3">
-          <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-[#10233f] text-[#e43846]"><Truck className="h-5 w-5" /></div>
-          <div><p className="text-xs font-semibold text-[#a61d2d]">صفحة السائق</p><h1 className="text-lg font-bold">{profile.displayName}</h1></div>
-        </div>
-        <div className="flex gap-2">
-          <button onClick={onChangePassword} aria-label="تغيير كلمة المرور" className="flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-500"><KeyRound className="h-4 w-4" /></button>
-          <button onClick={() => { if (watchId.current !== null) stop(true); onLogout(); }} aria-label="تسجيل الخروج" className="flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-500"><LogOut className="h-4 w-4" /></button>
-        </div>
-      </header>
+      <AppHeader role="السائق" name={profile.displayName} onChangePassword={onChangePassword} onLogout={() => { if (watchId.current !== null) stop(true); onLogout(); }} />
       <main className="mx-auto max-w-md p-5">
         {!plate ? (
           <p className="rounded-2xl border border-amber-200 bg-amber-50 p-5 text-sm font-bold text-amber-800">لم يربط مدير النظام حسابك بسيارة بعد.</p>
@@ -152,12 +144,12 @@ export default function DriverPage({ profile, onLogout, onChangePassword }: {
             <p className="mt-4 font-bold">
               {status === "sharing" ? "يتم إرسال موقعك إلى مشرف السيارات" : status === "starting" ? "جارٍ تحديد الموقع..." : status === "error" ? "المشاركة متوقفة" : "مشاركة الموقع متوقفة"}
             </p>
-            {last && <p className="mt-1 text-xs text-slate-400">آخر تحديث {last.at.toLocaleTimeString("ar-SA", { hour: "2-digit", minute: "2-digit", second: "2-digit" })} · دقة ±{last.accuracy} م</p>}
+            {last && <p className="mt-1 text-xs text-slate-400">آخر تحديث <span dir="ltr">{last.at.toLocaleTimeString("en-GB")}</span> · دقة ±{last.accuracy} م</p>}
             {error && <p role="alert" className="mt-3 rounded-xl bg-red-50 p-3 text-xs font-bold text-red-700">{error}</p>}
             <button onClick={() => (sharing ? stop() : start())} className={`mt-6 flex h-14 w-full items-center justify-center gap-2 rounded-2xl text-base font-bold text-white ${sharing ? "bg-slate-700" : "bg-[#a61d2d]"}`}>
               {sharing ? <><Pause className="h-5 w-5" /> إيقاف المشاركة</> : <><Play className="h-5 w-5" /> بدء مشاركة الموقع</>}
             </button>
-            <p className="mt-4 text-[11px] leading-5 text-slate-400">أبقِ هذه الصفحة مفتوحة والشاشة مضاءة أثناء الرحلة. يتوقف الإرسال عند إغلاق الصفحة أو قفل الهاتف.</p>
+            <p className="mt-4 text-[11px] text-slate-400">أبقِ الشاشة مضاءة أثناء الرحلة</p>
           </div>
         )}
       </main>
