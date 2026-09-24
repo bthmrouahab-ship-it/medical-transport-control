@@ -23,6 +23,8 @@ export type ClinicAppointment = {
   appointmentAt: string;
   /** المستشفى من الدليل (إن وُجد) لحساب القرب بين الوجهات */
   hospitalId?: string;
+  /** رحلة غير طبية (جامعة، مدرسة، تسوق...) يضيفها مشرف السيارات */
+  category?: "غير طبية";
   kind: AppointmentKind;
   assistance: AssistanceNeed[];
   status: AppointmentStatus;
@@ -204,7 +206,9 @@ export function migrateAppointment(value: unknown, index = 0): ClinicAppointment
     // المواعيد القديمة بلا تاريخ تُعتبر مواعيد اليوم
     appointmentDate: normalizeDate(raw.appointmentDate) || localDateString(),
     appointmentAt,
-    hospitalId: toText(raw.hospitalId) || matchHospital(clinic)?.id || undefined,
+    ...(raw.category === "غير طبية"
+      ? { category: "غير طبية" as const }
+      : { hospitalId: toText(raw.hospitalId) || matchHospital(clinic)?.id || undefined }),
     kind,
     assistance: normalizeAssistance(raw.assistance ?? raw.notes),
     status,
@@ -338,6 +342,7 @@ export const NEARBY_KM = 3;
 export const SAME_DIRECTION_KM = 8;
 
 function hospitalFor(appointment: ClinicAppointment, hospitals: Hospital[]) {
+  if (isNonMedical(appointment)) return null;
   return (appointment.hospitalId && hospitals.find((hospital) => hospital.id === appointment.hospitalId))
     || matchHospital(appointment.clinic, hospitals);
 }
@@ -613,7 +618,21 @@ const byTime = (a: ClinicAppointment, b: ClinicAppointment) => appointmentDateTi
 const KIND_EN: Record<AppointmentKind, string> = { "عادي": "Regular", "احتياجات خاصة": "Special needs" };
 const NEED_EN: Record<AssistanceNeed, string> = { "يحتاج مرافق": "Needs escort", "كرسي متحرك": "Wheelchair" };
 
+/** وجهات الرحلات غير الطبية (مع «أخرى» تُكتب يدويًا). */
+export const NON_MEDICAL_DESTINATIONS: { ar: string; en: string }[] = [
+  { ar: "الجامعة", en: "University" },
+  { ar: "المدرسة", en: "School" },
+  { ar: "أنصار جاليري", en: "Ansar Gallery" },
+  { ar: "المطار القديم", en: "Old Airport" },
+];
+
+export const isNonMedical = (appointment: Pick<ClinicAppointment, "category">) => appointment.category === "غير طبية";
+
 function destinationLabels(appointment: ClinicAppointment, hospitals: Hospital[]) {
+  if (isNonMedical(appointment)) {
+    const known = NON_MEDICAL_DESTINATIONS.find((item) => item.ar === appointment.clinic);
+    return { ar: appointment.clinic, en: known?.en ?? appointment.clinic };
+  }
   const hospital = (appointment.hospitalId && hospitals.find((item) => item.id === appointment.hospitalId)) || matchHospital(appointment.clinic, hospitals);
   return { ar: hospital?.name ?? appointment.clinic, en: hospital?.nameEn || appointment.clinic };
 }
@@ -637,26 +656,27 @@ export function buildDriverMessage(
   sorted.forEach(({ appointment }, index) => {
     const destination = destinationLabels(appointment, hospitals);
     const prefix = sorted.length > 1 ? `${index + 1}) ` : "";
+    const rider = isNonMedical(appointment) ? { ar: "الراكب", en: "Passenger" } : { ar: "المريض", en: "Patient" };
     const needsAr = appointment.assistance.join("، ");
     const needsEn = appointment.assistance.map((need) => NEED_EN[need]).join(", ");
     const pickupAr = `مبنى ${appointment.buildingNumber}، شقة ${appointment.apartmentNumber}`;
     const pickupEn = `Building ${appointment.buildingNumber}, Apt ${appointment.apartmentNumber}`;
     ar.push(
       "",
-      `${prefix}المريض: ${appointment.patientName}`,
+      `${prefix}${rider.ar}: ${appointment.patientName}${isNonMedical(appointment) ? " (رحلة غير طبية)" : ""}`,
       returning ? `من: ${destination.ar}` : `من: ${pickupAr}`,
       returning ? `إلى: ${pickupAr}` : `إلى: ${destination.ar}`,
-      `الموعد: ${appointment.appointmentDate} ${appointment.appointmentAt}`,
-      `جوال المريض: ${appointment.mobile}`,
+      `${isNonMedical(appointment) ? "الوقت" : "الموعد"}: ${appointment.appointmentDate} ${appointment.appointmentAt}`,
+      `جوال ${rider.ar}: ${appointment.mobile}`,
       `نوع الرحلة: ${appointment.kind}${needsAr ? ` · ${needsAr}` : ""}`,
     );
     en.push(
       "",
-      `${prefix}Patient: ${appointment.patientName}`,
+      `${prefix}${rider.en}: ${appointment.patientName}${isNonMedical(appointment) ? " (non-medical trip)" : ""}`,
       returning ? `From: ${destination.en}` : `From: ${pickupEn}`,
       returning ? `To: ${pickupEn}` : `To: ${destination.en}`,
-      `Appointment: ${appointment.appointmentDate} ${appointment.appointmentAt}`,
-      `Patient mobile: ${appointment.mobile}`,
+      `${isNonMedical(appointment) ? "Time" : "Appointment"}: ${appointment.appointmentDate} ${appointment.appointmentAt}`,
+      `${rider.en} mobile: ${appointment.mobile}`,
       `Trip type: ${KIND_EN[appointment.kind]}${needsEn ? ` · ${needsEn}` : ""}`,
     );
   });

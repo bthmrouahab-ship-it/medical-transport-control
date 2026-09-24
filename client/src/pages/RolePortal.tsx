@@ -5,6 +5,7 @@ import { ArrowRight, Languages, Loader2, MapPin } from "lucide-react";
 import {
   DEFAULT_VEHICLES,
   buildDriverMessage,
+  isNonMedical,
   migrateAppointment,
   migrateRequest,
   whatsappLink,
@@ -402,7 +403,7 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
         {view === "home" && isClinic && (
           <ClinicHome
             t={t}
-            appointments={appointments}
+            appointments={appointments.filter((appointment) => !isNonMedical(appointment))}
             onNew={() => { setEditingAppointment(null); setView("form"); }}
             onEdit={openEditAppointment}
             onDelete={deleteAppointment}
@@ -466,6 +467,12 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
             onUpdate={(next) => { updateFleet(next); logAudit("تغيير حالة سيارة"); }}
             onDispatch={dispatch}
             onExport={exportStats}
+            onAddTrip={(appointment, request) => {
+              updateAppointments([...appointments, appointment].sort(byAppointmentTime));
+              updateRequests([...requests, request]);
+              logAudit(`إضافة رحلة غير طبية ${appointment.id} إلى ${appointment.clinic}`);
+              toast.success("تمت إضافة الرحلة إلى الطلبات");
+            }}
           />
         )}
       </main>

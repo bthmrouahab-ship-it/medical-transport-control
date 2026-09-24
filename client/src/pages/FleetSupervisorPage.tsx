@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { toast } from "sonner";
-import { BellRing, CheckCircle2, Clock3, Copy, Download, Link2, MapPin, MessageCircle, Phone, Send, Settings2, Sparkles, Truck, Users } from "lucide-react";
+import { BellRing, CheckCircle2, Plus, Clock3, Copy, Download, Link2, MapPin, MessageCircle, Phone, Send, Settings2, Sparkles, Truck, Users } from "lucide-react";
 import {
   appointmentPickupLabel,
   assignVehicleForTrips,
@@ -8,6 +8,7 @@ import {
   buildTripGroups,
   findUnrequestedMatches,
   groupCapacity,
+  isNonMedical,
   matchHospitalZone,
   suggestJoinDispatched,
   whatsappLink,
@@ -17,11 +18,12 @@ import {
 } from "@shared/transport";
 import type { Hospital } from "@shared/hospitals";
 import { InfoCard, PageHeading, SectionCard } from "@/components/ui-kit";
+import NonMedicalTripForm from "./NonMedicalTripForm";
 import { useHospitals, useNow } from "@/lib/useShared";
 
 type Trip = { request: VehicleRequest; appointment: ClinicAppointment };
 
-export function FleetSupervisorPage({ vehicles, appointments, requests, audit, onManager, onUpdate, onDispatch, onExport }: {
+export function FleetSupervisorPage({ vehicles, appointments, requests, audit, onManager, onUpdate, onDispatch, onExport, onAddTrip }: {
   vehicles: Vehicle[];
   appointments: ClinicAppointment[];
   requests: VehicleRequest[];
@@ -30,7 +32,9 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, audit, o
   onUpdate: (vehicles: Vehicle[]) => void;
   onDispatch: (requestIds: string[], vehicle: Vehicle, joinRequestIds?: string[]) => void;
   onExport: () => void;
+  onAddTrip: (appointment: ClinicAppointment, request: VehicleRequest) => void;
 }) {
+  const [addingTrip, setAddingTrip] = useState(false);
   const [selectedVehicles, setSelectedVehicles] = useState<Record<string, string>>({});
   const hospitals = useHospitals();
   const now = useNow();
@@ -89,11 +93,14 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, audit, o
         title="توزيع السيارات"
         action={(
           <div className="flex flex-wrap gap-2">
+            <button onClick={() => setAddingTrip(true)} className="flex min-h-11 items-center gap-2 rounded-xl bg-[#a61d2d] px-4 text-sm font-bold text-white hover:bg-[#8b1725]"><Plus className="h-4 w-4" /> رحلة غير طبية</button>
             <button onClick={onExport} className="flex min-h-11 items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 text-sm font-bold text-slate-600"><Download className="h-4 w-4 text-[#a61d2d]" /> Excel</button>
             <button onClick={onManager} className="flex min-h-11 items-center gap-2 rounded-xl bg-[#10233f] px-4 text-sm font-bold text-white"><MapPin className="h-4 w-4" /> الخريطة والإحصائيات</button>
           </div>
         )}
       />
+
+      {addingTrip && <NonMedicalTripForm onCancel={() => setAddingTrip(false)} onSave={(appointment, request) => { onAddTrip(appointment, request); setAddingTrip(false); }} />}
 
       <div className="mb-6 grid gap-4 sm:grid-cols-3">
         <InfoCard icon={BellRing} label="بانتظار التوزيع" value={String(pending.length)} tone="amber" />
@@ -144,7 +151,7 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, audit, o
               return (
                 <div key={trip.request.id} className="grid gap-4 p-5 lg:grid-cols-[1.4fr_.8fr_auto] lg:items-center">
                   <div>
-                    <div className="flex flex-wrap items-center gap-2"><p className="font-bold">{trip.appointment.patientName}</p><span className="rounded-full bg-slate-100 px-2 py-1 text-[10px] font-bold text-slate-500">{trip.request.direction}</span>{groupedIds.has(trip.appointment.id) && <span className="rounded-full bg-blue-50 px-2 py-1 text-[10px] font-bold text-blue-700">قابلة للجمع</span>}</div>
+                    <div className="flex flex-wrap items-center gap-2"><p className="font-bold">{trip.appointment.patientName}</p><span className="rounded-full bg-slate-100 px-2 py-1 text-[10px] font-bold text-slate-500">{trip.request.direction}</span>{isNonMedical(trip.appointment) && <span className="rounded-full bg-violet-50 px-2 py-1 text-[10px] font-bold text-violet-700">غير طبية</span>}{groupedIds.has(trip.appointment.id) && <span className="rounded-full bg-blue-50 px-2 py-1 text-[10px] font-bold text-blue-700">قابلة للجمع</span>}</div>
                     <p className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-500"><Clock3 className="h-4 w-4" />{trip.appointment.appointmentAt}<MapPin className="h-4 w-4" />{appointmentPickupLabel(trip.appointment)} ← {trip.appointment.clinic}{zone && <span className="rounded-full bg-blue-50 px-2 py-0.5 text-[10px] font-bold text-blue-700">{zone}</span>}</p>
                     <p className="mt-1 text-[11px] text-slate-400">{trip.appointment.kind}{trip.appointment.assistance.length ? ` · ${trip.appointment.assistance.join("، ")}` : ""}</p>
                   </div>

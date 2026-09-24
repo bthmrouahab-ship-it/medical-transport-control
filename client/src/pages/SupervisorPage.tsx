@@ -6,6 +6,7 @@ import {
   calculateTripGroupingScore,
   canRequestVehicle,
   findUnrequestedMatches,
+  isNonMedical,
   REQUEST_GRACE_MINUTES,
   requestWindow,
   type ClinicAppointment,
@@ -140,7 +141,7 @@ function SupervisorAppointment({ appointment, partner, now, request, onRequest, 
         <div className="flex flex-1 items-center gap-3">
           <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-[#eef4f7] text-[#a61d2d]"><CalendarDays className="h-5 w-5" /></div>
           <div>
-            <div className="flex flex-wrap items-center gap-2"><p className="font-bold">{appointment.patientName}</p><span className="rounded-full bg-slate-100 px-2 py-1 text-[10px] font-bold text-slate-500">{appointment.id}</span></div>
+            <div className="flex flex-wrap items-center gap-2"><p className="font-bold">{appointment.patientName}</p><span className="rounded-full bg-slate-100 px-2 py-1 text-[10px] font-bold text-slate-500">{appointment.id}</span>{isNonMedical(appointment) && <span className="rounded-full bg-violet-50 px-2 py-1 text-[10px] font-bold text-violet-700">غير طبية</span>}</div>
             <p className="mt-1 text-xs text-slate-500">{formatDay(appointment.appointmentDate, now)} {appointment.appointmentAt} · {returning ? appointment.clinic : pickup} ← {returning ? pickup : appointment.clinic} · {appointment.kind}</p>
             <p className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-slate-400"><Phone className="h-3.5 w-3.5" /><span dir="ltr">{appointment.mobile}</span>{assistance && <><span>·</span><Accessibility className="h-3.5 w-3.5" /><span>{assistance}</span></>}</p>
             {partner && <p className="mt-2 flex w-fit items-center gap-1 rounded-full bg-blue-50 px-2.5 py-1 text-[11px] font-bold text-blue-700"><Link2 className="h-3.5 w-3.5" /> رحلة مشتركة ممكنة مع {partner.patientName} (مبنى {partner.buildingNumber}، {partner.appointmentAt})</p>}

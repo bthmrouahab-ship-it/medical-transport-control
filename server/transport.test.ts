@@ -220,4 +220,16 @@ describe("medical transport rules", () => {
     expect(matches.map((match) => match.appointment.id)).toEqual(["APT-W"]);
     expect(matches[0]).toMatchObject({ gapMinutes: 20, sameDestination: true });
   });
+
+  it("builds a bilingual message for non-medical trips and never matches them to hospitals", () => {
+    const trip: ClinicAppointment = { ...appointment, id: "TRP-1", clinic: "الجامعة", category: "غير طبية" };
+    const message = buildDriverMessage([{ appointment: trip, request }], { plate: "943438", driver: "خرم" });
+    expect(message).toContain("الراكب");
+    expect(message).toContain("إلى: الجامعة");
+    expect(message).toContain("Passenger");
+    expect(message).toContain("To: University");
+    const migrated = migrateAppointment({ ...trip, clinic: "Hamad General Hospital" });
+    expect(migrated?.category).toBe("غير طبية");
+    expect(migrated?.hospitalId).toBeUndefined();
+  });
 });
