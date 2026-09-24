@@ -60,69 +60,15 @@ const vehicles: Vehicle[] = [
   { plate: "329538", driver: "عادل", phone: "55226916", kind: "باص", available: true },
 ];
 
-const seedAppointments: ClinicAppointment[] = [
-  {
-    id: "APT-1001",
-    patientName: "مريض 001",
-    clinic: "مركز الثمامة الصحي",
-    buildingNumber: "12",
-    apartmentNumber: "4",
-    mobile: "55123456",
-    appointmentAt: "07:30",
-    kind: "عادي",
-    assistance: [],
-    status: "بانتظار طلب السيارة",
-  },
-  {
-    id: "APT-1002",
-    patientName: "مريض 002",
-    clinic: "مستشفى الوكرة",
-    buildingNumber: "28",
-    apartmentNumber: "7",
-    mobile: "55234567",
-    appointmentAt: "08:00",
-    kind: "احتياجات خاصة",
-    assistance: ["يحتاج مرافق", "كرسي متحرك"],
-    status: "بانتظار طلب السيارة",
-  },
-  {
-    id: "APT-1003",
-    patientName: "مريض 003",
-    clinic: "مستشفى سدرة",
-    buildingNumber: "31",
-    apartmentNumber: "2",
-    mobile: "55345678",
-    appointmentAt: "08:15",
-    kind: "عادي",
-    assistance: [],
-    status: "تم طلب السيارة",
-  },
-];
-
-const seedRequests: VehicleRequest[] = [
-  {
-    id: "REQ-2001",
-    appointmentId: "APT-1003",
-    vehiclePlate: "956479",
-    driver: "كمال",
-    direction: "ذهاب",
-    status: "تم إرسال السيارة",
-    notificationMethod: "whatsapp",
-    createdAt: "08:02",
-  },
-];
-
-
 function loadAppointments() {
-  const stored = loadState<unknown[]>("fox_appointments", seedAppointments);
-  const migrated = stored
+  // يبدأ النظام بقائمة فارغة؛ المواعيد تُضاف من حساب العيادة.
+  return loadState<unknown[]>("fox_appointments", [])
     .map((appointment, index) => migrateAppointment(appointment, index))
     .filter((appointment): appointment is ClinicAppointment => Boolean(appointment));
-  return migrated.length ? migrated : seedAppointments;
 }
 
 function loadRequests() {
-  return loadState<unknown[]>("fox_requests", seedRequests)
+  return loadState<unknown[]>("fox_requests", [])
     .map(migrateRequest)
     .filter((request): request is VehicleRequest => Boolean(request));
 }
