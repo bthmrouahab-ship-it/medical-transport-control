@@ -12,6 +12,20 @@ const MIN_MOVE_KM = 0.05;
 
 type Status = "idle" | "starting" | "sharing" | "error";
 
+/** يحدد سبب رفض الموقع بدقة حتى يعرف السائق ما يجب تغييره. */
+async function diagnoseDenied() {
+  const policy = (document as Document & { featurePolicy?: { allowsFeature(feature: string): boolean } }).featurePolicy;
+  if (policy && !policy.allowsFeature("geolocation")) {
+    return "الموقع الجغرافي ممنوع من إعدادات الموقع الإلكتروني نفسه (Permissions-Policy). يجب إعادة نشر الموقع بالإعداد الصحيح.";
+  }
+  const state = await navigator.permissions?.query({ name: "geolocation" }).then((result) => result.state).catch(() => null);
+  if (state === "denied") {
+    return "الموقع محظور لهذا الموقع في Chrome: اضغط الأيقونة يسار شريط العنوان ← الأذونات ← الموقع الجغرافي ← السماح، ثم أعد تحميل الصفحة.";
+  }
+  return "لم يسمح الهاتف بالموقع. تأكد من: تشغيل الموقع (GPS) في الهاتف، وإذن الموقع لتطبيق Chrome، ثم أعد تحميل الصفحة واختر «السماح» عند ظهور الطلب."
+    + (state ? ` (حالة الإذن: ${state})` : "");
+}
+
 /**
  * صفحة السائق: مشاركة موقع السيارة (GPS الهاتف) مع مشرف السيارات.
  * المتصفح يوقف التتبع إذا أُغلقت الشاشة، لذلك نطلب إبقاءها مضاءة أثناء المشاركة.
@@ -87,9 +101,13 @@ export default function DriverPage({ profile, onLogout, onChangePassword }: {
       },
       (positionError) => {
         setStatus("error");
-        setError(positionError.code === positionError.PERMISSION_DENIED
-          ? "تم رفض إذن الموقع. اسمح للموقع من إعدادات المتصفح ثم حاول مرة أخرى."
-          : "تعذر تحديد الموقع. تأكد من تشغيل GPS.");
+        if (positionError.code !== positionError.PERMISSION_DENIED) {
+          setError(positionError.code === positionError.TIMEOUT
+            ? "انتهت مهلة تحديد الموقع. تأكد من تشغيل GPS وأنك في مكان مكشوف ثم حاول مرة أخرى."
+            : "تعذر تحديد الموقع. تأكد من تشغيل GPS (الموقع) من إعدادات الهاتف.");
+          return;
+        }
+        diagnoseDenied().then(setError);
       },
       { enableHighAccuracy: true, maximumAge: 10000, timeout: 30000 },
     );
