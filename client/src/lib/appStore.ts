@@ -7,7 +7,15 @@
  * للآخرين مباشرة. بيانات الجلسة (تسجيل الدخول) تبقى محلية دائمًا.
  */
 
-export const SHARED_KEYS = ["fox_appointments", "fox_requests", "fox_fleet", "fox_audit"] as const;
+export const SHARED_KEYS = [
+  "fox_appointments",
+  "fox_requests",
+  "fox_fleet",
+  "fox_audit",
+  "fox_hospitals",
+  "fox_history",
+  "fox_locations",
+] as const;
 export type SharedKey = (typeof SHARED_KEYS)[number];
 
 export interface SharedBackend {
@@ -98,6 +106,8 @@ export function saveState<T>(key: string, value: T) {
       console.error("[appStore] فشل الحفظ", error);
       onError?.(error);
     });
+    // إبلاغ باقي أجزاء الصفحة التي تعرض نفس البيانات
+    queueMicrotask(() => listeners.forEach((listener) => listener(key)));
     return;
   }
   writeLocal(key, value);
@@ -111,7 +121,7 @@ export function removeState(key: string) {
   }
 }
 
-/** يستدعي listener كلما وصل تغيير من مستخدم آخر لأحد المفاتيح المشتركة. */
+/** يستدعي listener كلما تغيّر أحد المفاتيح المشتركة (من هذا المستخدم أو من غيره). */
 export function subscribeState(listener: Listener) {
   listeners.add(listener);
   return () => {

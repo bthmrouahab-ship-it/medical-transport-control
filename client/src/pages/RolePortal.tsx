@@ -36,6 +36,9 @@ import {
   appointmentPickupLabel,
   assignVehicleForTrips,
   canRequestVehicle,
+  localDateString,
+  REQUEST_GRACE_MINUTES,
+  requestWindow,
   migrateAppointment,
   migrateRequest,
   parseImportedAppointments,
@@ -47,9 +50,12 @@ import {
   type VehicleRequest,
 } from "@shared/transport";
 import type { UserProfile } from "@shared/users";
-import Home from "./Home";
+import { matchHospital } from "@shared/hospitals";
+import { useHospitals, useNow } from "@/lib/useShared";
+import FleetDashboard from "@/components/FleetDashboard";
 import Login from "./Login";
 import AdminPanel from "./AdminPanel";
+import DriverPage from "./DriverPage";
 import ChangePasswordForm from "@/components/ChangePasswordForm";
 import { SHARED_KEYS, clearSharedBackend, loadState, removeState, saveState, setSharedBackend, subscribeState } from "@/lib/appStore";
 import { appendAudit } from "@/lib/audit";
@@ -75,6 +81,9 @@ function loadRequests() {
     .map(migrateRequest)
     .filter((request): request is VehicleRequest => Boolean(request));
 }
+
+const byAppointmentTime = (a: ClinicAppointment, b: ClinicAppointment) =>
+  `${a.appointmentDate} ${a.appointmentAt}`.localeCompare(`${b.appointmentDate} ${b.appointmentAt}`);
 
 function RoleIcon({ role }: { role: Role }) {
   if (role === "clinic") return <Stethoscope className="h-5 w-5" />;
@@ -139,7 +148,12 @@ export default function RolePortal() {
             signOutNow(profile ? "تم إيقاف حسابك. تواصل مع مدير النظام." : "انتهت صلاحية هذا الحساب. سجّل الدخول مرة أخرى.");
             return;
           }
-          setGate((current) => current.status === "ready" && dataLoaded.current && dataUid.current === profile.uid
+          // تحديث الملف (مثل تغيير الاسم) لا يعيد تحميل الصفحة؛ السائق لا يحتاج تحميل بيانات
+          const stillReady = (current: Gate) => current.status === "ready" && current.profile.uid === profile.uid
+            && (profile.role === "driver"
+              ? current.profile.role === "driver"
+              : dataLoaded.current && dataUid.current === profile.uid);
+          setGate((current) => stillReady(current)
             ? { status: "ready", profile }
             : { status: "profile", profile });
         }, (error) => {
@@ -159,6 +173,14 @@ export default function RolePortal() {
   useEffect(() => {
     if (gate.status !== "profile" || gate.profile.mustChangePassword) return;
     const profile = gate.profile;
+    // السائق لا يحمّل بيانات المرضى أو الطلبات؛ صفحته ترسل الموقع فقط
+    if (profile.role === "driver") {
+      clearSharedBackend();
+      dataUid.current = null;
+      dataLoaded.current = false;
+      setGate({ status: "ready", profile });
+      return;
+    }
     if (dataUid.current === profile.uid) {
       if (dataLoaded.current) setGate({ status: "ready", profile });
       return;
@@ -232,17 +254,24 @@ export default function RolePortal() {
     );
   }
 
+  if (profile.role === "driver") {
+    return <DriverPage profile={profile} onLogout={() => signOutNow()} onChangePassword={() => setChangingPassword(true)} />;
+  }
+
   if (profile.role === "admin") {
     return <AdminPanel profile={profile} onLogout={() => signOutNow()} onChangePassword={() => setChangingPassword(true)} />;
   }
 
   if (showManager && profile.role === "fleetSupervisor") {
     return (
-      <div>
-        <button onClick={() => setShowManager(false)} className="fixed left-5 top-5 z-50 rounded-xl bg-white px-4 py-2 text-sm font-bold text-slate-700 shadow-lg">
-          <ArrowLeft className="ml-1 inline h-4 w-4" /> العودة للبوابة
-        </button>
-        <Home />
+      <div className="min-h-screen bg-[#f5f7fb]" dir="rtl">
+        <header className="sticky top-0 z-[1000] flex h-[76px] items-center justify-between border-b border-slate-200 bg-[#f5f7fb]/95 px-5 backdrop-blur-xl lg:px-10">
+          <div><p className="text-xs font-semibold text-[#a61d2d]">مشرف السيارات</p><h1 className="text-xl font-bold">لوحة السيارات والخريطة</h1></div>
+          <button onClick={() => setShowManager(false)} className="flex items-center gap-1 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700">
+            <ArrowLeft className="h-4 w-4" /> العودة للطلبات
+          </button>
+        </header>
+        <main className="mx-auto max-w-7xl p-5 lg:p-10"><FleetDashboard actor={profile.displayName} /></main>
       </div>
     );
   }
@@ -302,6 +331,7 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
           "الوجهة": appointment.clinic,
           "رقم المبنى": appointment.buildingNumber,
           "رقم الشقة": appointment.apartmentNumber,
+          "تاريخ الموعد": appointment.appointmentDate,
           "وقت الموعد": appointment.appointmentAt,
           "نوع الرحلة": appointment.kind,
           "احتياجات المريض": appointment.assistance.join("، ") || "لا يحتاج",
@@ -313,7 +343,7 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
       const worksheet = XLSX.utils.json_to_sheet(rows);
       worksheet["!cols"] = [
         { wch: 16 }, { wch: 22 }, { wch: 16 }, { wch: 26 }, { wch: 12 }, { wch: 12 },
-        { wch: 12 }, { wch: 18 }, { wch: 24 }, { wch: 20 }, { wch: 34 },
+        { wch: 14 }, { wch: 12 }, { wch: 18 }, { wch: 24 }, { wch: 20 }, { wch: 34 },
       ];
       XLSX.utils.book_append_sheet(workbook, worksheet, "الإحصائيات");
       XLSX.writeFile(workbook, `medical-transport-statistics-${new Date().toISOString().slice(0, 10)}.xlsx`);
@@ -353,7 +383,7 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
     const next = editingAppointment
       ? appointments.map((item) => item.id === appointment.id ? appointment : item)
       : [...appointments, appointment];
-    updateAppointments(next.sort((a, b) => a.appointmentAt.localeCompare(b.appointmentAt)));
+    updateAppointments(next.sort(byAppointmentTime));
     logAudit(editingAppointment ? `تعديل الموعد ${appointment.id}` : `إضافة الموعد ${appointment.id}`);
     setEditingAppointment(null);
     setView("home");
@@ -394,7 +424,7 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
             onEdit={openEditAppointment}
             onDelete={deleteAppointment}
             onImport={(imported) => {
-              updateAppointments([...appointments, ...imported].sort((a, b) => a.appointmentAt.localeCompare(b.appointmentAt)));
+              updateAppointments([...appointments, ...imported].sort(byAppointmentTime));
               logAudit(`استيراد ${imported.length} موعد من Excel`);
             }}
           />
@@ -484,6 +514,8 @@ function ClinicHome({ appointments, onNew, onEdit, onDelete, onImport }: {
 }) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [importing, setImporting] = useState(false);
+  const hospitals = useHospitals();
+  const now = useNow();
 
   async function importExcel(file?: File) {
     if (!file) return;
@@ -494,7 +526,7 @@ function ClinicHome({ appointments, onNew, onEdit, onDelete, onImport }: {
       const firstSheet = workbook.SheetNames[0];
       if (!firstSheet) throw new Error("empty workbook");
       const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(workbook.Sheets[firstSheet], { defval: "" });
-      const result = parseImportedAppointments(rows, appointments);
+      const result = parseImportedAppointments(rows, appointments, Date.now(), localDateString(), hospitals);
       if (!result.appointments.length) {
         toast.error(result.errors[0] ?? "لم يتم العثور على مواعيد صالحة في الملف");
         return;
@@ -520,13 +552,14 @@ function ClinicHome({ appointments, onNew, onEdit, onDelete, onImport }: {
         "رقم المبنى": "12",
         "رقم الشقة": "4",
         "رقم الموبايل": "55123456",
+        "تاريخ الموعد": localDateString(),
         "وقت الموعد": "09:30",
         "نوع الرحلة": "عادي",
         "احتياجات المريض": "يحتاج مرافق، كرسي متحرك",
       }]);
       worksheet["!cols"] = [
         { wch: 22 }, { wch: 28 }, { wch: 14 }, { wch: 14 },
-        { wch: 16 }, { wch: 14 }, { wch: 18 }, { wch: 30 },
+        { wch: 16 }, { wch: 14 }, { wch: 14 }, { wch: 18 }, { wch: 30 },
       ];
       const workbook = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(workbook, worksheet, "المواعيد");
@@ -554,21 +587,21 @@ function ClinicHome({ appointments, onNew, onEdit, onDelete, onImport }: {
       />
 
       <div className="mb-6 grid gap-4 sm:grid-cols-3">
-        <InfoCard icon={CalendarDays} label="مواعيد اليوم" value={String(appointments.length)} tone="teal" />
+        <InfoCard icon={CalendarDays} label="مواعيد اليوم" value={String(appointments.filter((appointment) => appointment.appointmentDate === localDateString(now)).length)} tone="teal" />
         <InfoCard icon={Clock3} label="بانتظار السيارة" value={String(appointments.filter((appointment) => appointment.status === "بانتظار طلب السيارة").length)} tone="amber" />
         <InfoCard icon={CheckCircle2} label="مرتبطة بطلب سيارة" value={String(appointments.filter((appointment) => appointment.status !== "بانتظار طلب السيارة").length)} tone="blue" />
       </div>
 
       <div className="mb-6 flex items-start gap-3 rounded-2xl border border-blue-100 bg-blue-50 p-4 text-xs leading-6 text-blue-800">
         <FileSpreadsheet className="mt-0.5 h-5 w-5 shrink-0" />
-        <span><b>استيراد Excel:</b> استخدم القالب المعتمد. الأعمدة المطلوبة هي اسم المريض، المستشفى، رقم المبنى، رقم الشقة، رقم الموبايل، وقت الموعد، ونوع الرحلة. يمكن كتابة احتياجات المريض في عمود واحد.</span>
+        <span><b>استيراد Excel:</b> استخدم القالب المعتمد. الأعمدة المطلوبة هي اسم المريض، المستشفى، رقم المبنى، رقم الشقة، رقم الموبايل، وقت الموعد، ونوع الرحلة. عمود تاريخ الموعد اختياري (الافتراضي اليوم)، ويمكن كتابة احتياجات المريض في عمود واحد.</span>
       </div>
 
       <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
         <div className="border-b border-slate-100 p-5"><h3 className="font-bold">المواعيد المسجلة</h3><p className="mt-1 text-xs text-slate-400">التعديل والحذف متاحان قبل إنشاء طلب السيارة فقط.</p></div>
         <div className="divide-y divide-slate-100">
           {appointments.length
-            ? appointments.map((appointment) => <AppointmentCard key={appointment.id} appointment={appointment} onEdit={onEdit} onDelete={onDelete} />)
+            ? appointments.map((appointment) => <AppointmentCard key={appointment.id} appointment={appointment} now={now} onEdit={onEdit} onDelete={onDelete} />)
             : <EmptyState />}
         </div>
       </div>
@@ -585,11 +618,16 @@ function SupervisorHome({ appointments, requests, onRequest, onUpdateRequest, on
   onReturn: (appointment: ClinicAppointment, request: VehicleRequest) => void;
 }) {
   const [buildingFilter, setBuildingFilter] = useState("all");
+  const now = useNow();
   const pending = appointments.filter((appointment) => appointment.status !== "مكتملة");
   const buildingNumbers = Array.from(new Set(pending.map((appointment) => appointment.buildingNumber))).sort((first, second) => first.localeCompare(second, "ar", { numeric: true }));
-  const visibleAppointments = buildingFilter === "all"
+  // المواعيد التي انتهت مهلتها دون طلب تنزل لآخر القائمة
+  const isExpired = (appointment: ClinicAppointment) => appointment.status === "بانتظار طلب السيارة" && !requestWindow(appointment, now).open;
+  const visibleAppointments = (buildingFilter === "all"
     ? pending
-    : pending.filter((appointment) => appointment.buildingNumber === buildingFilter);
+    : pending.filter((appointment) => appointment.buildingNumber === buildingFilter))
+    .slice()
+    .sort((a, b) => Number(isExpired(a)) - Number(isExpired(b)) || byAppointmentTime(a, b));
 
   return (
     <>
@@ -612,7 +650,7 @@ function SupervisorHome({ appointments, requests, onRequest, onUpdateRequest, on
         {visibleAppointments.length
           ? visibleAppointments.map((appointment) => {
             const request = [...requests].reverse().find((item) => item.appointmentId === appointment.id);
-            return <SupervisorAppointment key={appointment.id} appointment={appointment} request={request} onRequest={onRequest} onUpdateRequest={onUpdateRequest} onCancel={onCancel} onReturn={onReturn} />;
+            return <SupervisorAppointment key={appointment.id} appointment={appointment} now={now} request={request} onRequest={onRequest} onUpdateRequest={onUpdateRequest} onCancel={onCancel} onReturn={onReturn} />;
           })
           : <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-10 text-center"><Building2 className="mx-auto h-8 w-8 text-slate-300" /><p className="mt-3 font-bold text-slate-600">لا توجد مواعيد مطابقة</p><p className="mt-1 text-sm text-slate-400">غيّر رقم المبنى من الفلتر لعرض مواعيد أخرى.</p></div>}
       </div>
@@ -620,8 +658,9 @@ function SupervisorHome({ appointments, requests, onRequest, onUpdateRequest, on
   );
 }
 
-function SupervisorAppointment({ appointment, request, onRequest, onUpdateRequest, onCancel, onReturn }: {
+function SupervisorAppointment({ appointment, now, request, onRequest, onUpdateRequest, onCancel, onReturn }: {
   appointment: ClinicAppointment;
+  now: Date;
   request?: VehicleRequest;
   onRequest: (request: VehicleRequest, appointmentId: string) => void;
   onUpdateRequest: (requestId: string, status: VehicleRequest["status"]) => void;
@@ -630,7 +669,14 @@ function SupervisorAppointment({ appointment, request, onRequest, onUpdateReques
 }) {
   const [method, setMethod] = useState<"whatsapp" | "call">("whatsapp");
 
+  const deadlineInfo = requestWindow(appointment, now);
+  const expired = !request && !deadlineInfo.open;
+
   function requestCar() {
+    if (!requestWindow(appointment).open) {
+      toast.error(`مضى أكثر من ${REQUEST_GRACE_MINUTES} دقيقة على الموعد. يجب أن تعدّل العيادة الموعد أولًا.`);
+      return;
+    }
     if (!canRequestVehicle(appointment, request)) {
       toast.error("لا يوجد موعد قابل للطلب");
       return;
@@ -661,7 +707,7 @@ function SupervisorAppointment({ appointment, request, onRequest, onUpdateReques
           <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-[#eef4f7] text-[#a61d2d]"><CalendarDays className="h-5 w-5" /></div>
           <div>
             <div className="flex flex-wrap items-center gap-2"><p className="font-bold">{appointment.patientName}</p><span className="rounded-full bg-slate-100 px-2 py-1 text-[10px] font-bold text-slate-500">{appointment.id}</span></div>
-            <p className="mt-1 text-xs text-slate-400">{appointment.appointmentAt} · {request?.direction === "عودة" ? appointment.clinic : pickup} إلى {request?.direction === "عودة" ? pickup : appointment.clinic} · {appointment.kind}</p>
+            <p className="mt-1 text-xs text-slate-400">{formatDay(appointment.appointmentDate, now)} {appointment.appointmentAt} · {request?.direction === "عودة" ? appointment.clinic : pickup} إلى {request?.direction === "عودة" ? pickup : appointment.clinic} · {appointment.kind}</p>
             <p className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-slate-400"><Phone className="h-3.5 w-3.5" /><span dir="ltr">{appointment.mobile}</span>{assistance && <><span>·</span><Accessibility className="h-3.5 w-3.5" /><span>{assistance}</span></>}</p>
           </div>
         </div>
@@ -674,8 +720,12 @@ function SupervisorAppointment({ appointment, request, onRequest, onUpdateReques
         )}
         <span className={`w-fit rounded-full px-3 py-1.5 text-xs font-bold ${request ? "bg-violet-50 text-violet-700" : "bg-amber-50 text-amber-700"}`}>{request?.status ?? "بانتظار الطلب"}</span>
 
-        {!request && (
-          <div className="flex items-center gap-2">
+        {expired && (
+          <div className="flex max-w-xs items-start gap-2 rounded-xl bg-red-50 px-3 py-2 text-xs font-bold leading-5 text-red-700"><XCircle className="mt-0.5 h-4 w-4 shrink-0" /> مضى أكثر من {REQUEST_GRACE_MINUTES} دقيقة على الموعد. لا يمكن طلب السيارة حتى تعدّل العيادة الموعد.</div>
+        )}
+        {!request && !expired && (
+          <div className="flex flex-wrap items-center gap-2">
+            <span className={`text-[11px] font-bold ${deadlineInfo.minutesLeft <= 15 ? "text-red-600" : "text-slate-400"}`}>آخر موعد للطلب {String(deadlineInfo.deadline.getHours()).padStart(2, "0")}:{String(deadlineInfo.deadline.getMinutes()).padStart(2, "0")}</span>
             <select value={method} onChange={(event) => setMethod(event.target.value as "whatsapp" | "call")} className="h-10 rounded-xl border border-slate-200 bg-white px-2 text-xs font-bold"><option value="whatsapp">واتساب</option><option value="call">اتصال</option></select>
             <button onClick={requestCar} className="flex min-h-10 items-center gap-2 rounded-xl bg-[#a61d2d] px-3 text-xs font-bold text-white hover:bg-[#8b1725]"><BellRing className="h-4 w-4" /> طلب السيارة</button>
           </div>
@@ -708,7 +758,10 @@ function FleetSupervisorNotice({ vehicles: currentVehicles, appointments, reques
   const pendingAppointments = pendingRequests
     .map((request) => appointments.find((appointment) => appointment.id === request.appointmentId))
     .filter((appointment): appointment is ClinicAppointment => Boolean(appointment));
-  const groupSuggestions = suggestTripGroups(pendingAppointments).slice(0, 4);
+  const hospitals = useHospitals();
+  const groupSuggestions = suggestTripGroups(pendingAppointments, hospitals).slice(0, 4);
+  const zoneOf = (appointment: ClinicAppointment) => (appointment.hospitalId && hospitals.find((hospital) => hospital.id === appointment.hospitalId)?.zone)
+    || matchHospital(appointment.clinic, hospitals)?.zone;
   const sentRequests = [...requests].filter((request) => request.status !== "بانتظار التوزيع").reverse().slice(0, 6);
 
   function dispatchRequest(request: VehicleRequest, appointment: ClinicAppointment) {
@@ -768,7 +821,7 @@ function FleetSupervisorNotice({ vehicles: currentVehicles, appointments, reques
               <div key={request.id} className="grid gap-4 p-5 lg:grid-cols-[1.4fr_.8fr_auto] lg:items-center">
                 <div>
                   <div className="flex flex-wrap items-center gap-2"><p className="font-bold">{appointment.patientName}</p><span className="rounded-full bg-slate-100 px-2 py-1 text-[10px] font-bold text-slate-500">{request.direction} · {request.id}</span></div>
-                  <p className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-500"><Clock3 className="h-4 w-4" />{appointment.appointmentAt}<MapPin className="mr-2 h-4 w-4" />{appointmentPickupLabel(appointment)} إلى {appointment.clinic}</p>
+                  <p className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-500"><Clock3 className="h-4 w-4" />{appointment.appointmentDate === localDateString() ? "" : `${appointment.appointmentDate} `}{appointment.appointmentAt}<MapPin className="mr-2 h-4 w-4" />{appointmentPickupLabel(appointment)} إلى {appointment.clinic}{zoneOf(appointment) && <span className="rounded-full bg-blue-50 px-2 py-0.5 text-[10px] font-bold text-blue-700">{zoneOf(appointment)}</span>}</p>
                   <p className="mt-2 text-[11px] text-slate-400">{appointment.kind} · الإشعار المطلوب: {request.notificationMethod === "whatsapp" ? "واتساب" : "اتصال تلقائي"}</p>
                 </div>
                 <label>
@@ -786,7 +839,7 @@ function FleetSupervisorNotice({ vehicles: currentVehicles, appointments, reques
       </section>
 
       <section className="mt-6 overflow-hidden rounded-2xl border border-blue-100 bg-white">
-        <div className="border-b border-blue-100 bg-blue-50/60 p-5"><h3 className="flex items-center gap-2 font-bold text-blue-900"><Sparkles className="h-5 w-5" /> اقتراحات جمع الرحلات</h3><p className="mt-1 text-xs leading-5 text-blue-700">المعادلة: 45 نقطة للقرب الزمني ناقص فرق الدقائق، +35 لنفس المبنى، +25 لنفس الوجهة، +10 لنفس نوع الرحلة. يظهر الاقتراح عند 55 نقطة فأكثر وخلال 45 دقيقة.</p></div>
+        <div className="border-b border-blue-100 bg-blue-50/60 p-5"><h3 className="flex items-center gap-2 font-bold text-blue-900"><Sparkles className="h-5 w-5" /> اقتراحات جمع الرحلات</h3><p className="mt-1 text-xs leading-5 text-blue-700">المعادلة: 45 نقطة للقرب الزمني ناقص فرق الدقائق، +35 لنفس المبنى، +25 لنفس المستشفى أو +20 لمستشفيات متجاورة (حتى 3 كم، مثل مباني مدينة حمد الطبية) أو +10 لنفس الاتجاه (حتى 8 كم)، +10 لنفس نوع الرحلة. يظهر الاقتراح عند 55 نقطة فأكثر وخلال 45 دقيقة.</p></div>
         <div className="grid gap-4 p-5 lg:grid-cols-2">
           {groupSuggestions.length ? groupSuggestions.map((suggestion) => {
             const groupedAppointments = suggestion.appointmentIds.map((id) => appointments.find((appointment) => appointment.id === id)).filter((appointment): appointment is ClinicAppointment => Boolean(appointment));
@@ -825,12 +878,14 @@ function FleetSupervisorNotice({ vehicles: currentVehicles, appointments, reques
 }
 
 function ClinicForm({ initial, onBack, onSave }: { initial: ClinicAppointment | null; onBack: () => void; onSave: (appointment: ClinicAppointment) => void }) {
+  const hospitals = useHospitals();
   const [form, setForm] = useState(() => ({
     patientName: initial?.patientName ?? "",
     clinic: initial?.clinic ?? "",
     buildingNumber: initial?.buildingNumber ?? "",
     apartmentNumber: initial?.apartmentNumber ?? "",
     mobile: initial?.mobile === "-" ? "" : initial?.mobile ?? "",
+    appointmentDate: initial?.appointmentDate ?? localDateString(),
     appointmentAt: initial?.appointmentAt ?? "09:00",
     kind: initial?.kind ?? "عادي" as AppointmentKind,
     assistance: initial?.assistance ?? [] as AssistanceNeed[],
@@ -847,7 +902,7 @@ function ClinicForm({ initial, onBack, onSave }: { initial: ClinicAppointment | 
 
   function submit(event: React.FormEvent) {
     event.preventDefault();
-    if (!form.patientName || !form.clinic || !form.buildingNumber || !form.apartmentNumber || !form.mobile || !form.appointmentAt) {
+    if (!form.patientName || !form.clinic || !form.buildingNumber || !form.apartmentNumber || !form.mobile || !form.appointmentDate || !form.appointmentAt) {
       toast.error("أكمل بيانات المريض والمبنى والشقة والموبايل والموعد");
       return;
     }
@@ -856,8 +911,15 @@ function ClinicForm({ initial, onBack, onSave }: { initial: ClinicAppointment | 
       toast.error("أدخل رقم موبايل صحيحًا من 8 إلى 15 رقمًا");
       return;
     }
+    if (!requestWindow(form).open) {
+      toast.error(`وقت الموعد مضى عليه أكثر من ${REQUEST_GRACE_MINUTES} دقيقة. أدخل التاريخ والوقت الصحيحين.`);
+      return;
+    }
+    const clinic = form.clinic.trim();
     onSave({
       ...form,
+      clinic,
+      hospitalId: matchHospital(clinic, hospitals)?.id,
       mobile: normalizedMobile,
       id: initial?.id ?? `APT-${Date.now().toString().slice(-6)}`,
       status: initial?.status ?? "بانتظار طلب السيارة",
@@ -874,10 +936,12 @@ function ClinicForm({ initial, onBack, onSave }: { initial: ClinicAppointment | 
         </div>
         <form onSubmit={submit} className="mt-7 grid gap-4 sm:grid-cols-2">
           <Field label="اسم المريض أو الرقم" value={form.patientName} onChange={(value) => setForm({ ...form, patientName: value })} placeholder="مريض 009" wide />
-          <Field label="اسم العيادة أو المستشفى" value={form.clinic} onChange={(value) => setForm({ ...form, clinic: value })} placeholder="مستشفى حمد العام" wide />
+          <Field label="اسم العيادة أو المستشفى" value={form.clinic} onChange={(value) => setForm({ ...form, clinic: value })} placeholder="اكتب أو اختر من القائمة" list="hospital-options" wide />
+          <datalist id="hospital-options">{hospitals.map((hospital) => <option key={hospital.id} value={hospital.name}>{hospital.zone}</option>)}</datalist>
           <Field label="رقم المبنى" value={form.buildingNumber} onChange={(value) => setForm({ ...form, buildingNumber: value })} placeholder="12" />
           <Field label="رقم الشقة" value={form.apartmentNumber} onChange={(value) => setForm({ ...form, apartmentNumber: value })} placeholder="4" />
           <Field label="رقم الموبايل" value={form.mobile} onChange={(value) => setForm({ ...form, mobile: value })} placeholder="55123456" type="tel" dir="ltr" />
+          <Field label="تاريخ الموعد" value={form.appointmentDate} onChange={(value) => setForm({ ...form, appointmentDate: value })} type="date" />
           <Field label="وقت الموعد" value={form.appointmentAt} onChange={(value) => setForm({ ...form, appointmentAt: value })} type="time" />
 
           <fieldset className="sm:col-span-2">
@@ -917,7 +981,7 @@ function ClinicForm({ initial, onBack, onSave }: { initial: ClinicAppointment | 
   );
 }
 
-function Field({ label, value, onChange, placeholder = "", type = "text", wide, dir }: {
+function Field({ label, value, onChange, placeholder = "", type = "text", wide, dir, list }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
@@ -925,36 +989,52 @@ function Field({ label, value, onChange, placeholder = "", type = "text", wide, 
   type?: string;
   wide?: boolean;
   dir?: "rtl" | "ltr";
+  list?: string;
 }) {
   return (
     <label className={`block ${wide ? "sm:col-span-2" : ""}`}>
       <span className="mb-1.5 block text-xs font-bold text-slate-600">{label}</span>
-      <input dir={dir} type={type} value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none focus:border-[#e6a1aa]" />
+      <input dir={dir} list={list} type={type} value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none focus:border-[#e6a1aa]" />
     </label>
   );
 }
 
-function AppointmentCard({ appointment, onEdit, onDelete }: {
+function AppointmentCard({ appointment, now, onEdit, onDelete }: {
   appointment: ClinicAppointment;
+  now: Date;
   onEdit: (appointment: ClinicAppointment) => void;
   onDelete: (appointment: ClinicAppointment) => void;
 }) {
   const editable = appointment.status === "بانتظار طلب السيارة";
+  const expired = editable && !requestWindow(appointment, now).open;
   return (
-    <div className="flex flex-col gap-4 p-5 lg:flex-row lg:items-center">
-      <div className="flex min-w-[95px] items-center gap-2 text-sm font-bold"><Clock3 className="h-4 w-4 text-slate-300" />{appointment.appointmentAt}</div>
+    <div className={`flex flex-col gap-4 p-5 lg:flex-row lg:items-center ${expired ? "bg-red-50/40" : ""}`}>
+      <div className="min-w-[95px] text-sm font-bold"><p className="flex items-center gap-2"><Clock3 className="h-4 w-4 text-slate-300" />{appointment.appointmentAt}</p><p className="mt-1 text-[11px] font-semibold text-slate-400">{formatDay(appointment.appointmentDate, now)}</p></div>
       <div className="flex-1">
         <div className="flex flex-wrap items-center gap-2"><p className="text-sm font-bold">{appointment.patientName}</p><span className="rounded-full bg-slate-100 px-2 py-1 text-[10px] font-bold text-slate-500">{appointment.id}</span></div>
         <p className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-400"><Building2 className="h-3.5 w-3.5" />{appointmentPickupLabel(appointment)}<span>·</span>{appointment.clinic}<span>·</span>{appointment.kind}</p>
         <p className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-slate-400"><Phone className="h-3.5 w-3.5" /><span dir="ltr">{appointment.mobile}</span>{appointment.assistance.length > 0 && <><span>·</span><Accessibility className="h-3.5 w-3.5" /><span>{appointment.assistance.join("، ")}</span></>}</p>
       </div>
-      <span className={`w-fit rounded-full px-3 py-1.5 text-xs font-bold ${appointment.status === "بانتظار طلب السيارة" ? "bg-amber-50 text-amber-700" : "bg-violet-50 text-violet-700"}`}>{appointment.status}</span>
+      {expired
+        ? <span className="w-fit rounded-full bg-red-100 px-3 py-1.5 text-xs font-bold text-red-700" title="لا يمكن لمشرف المبنى طلب سيارة حتى تعدّل الموعد">انتهت مهلة الطلب · عدّل الموعد</span>
+        : <span className={`w-fit rounded-full px-3 py-1.5 text-xs font-bold ${appointment.status === "بانتظار طلب السيارة" ? "bg-amber-50 text-amber-700" : "bg-violet-50 text-violet-700"}`}>{appointment.status}</span>}
       <div className="flex items-center gap-2">
         <button disabled={!editable} title={editable ? "تعديل الموعد" : "لا يمكن التعديل بعد طلب السيارة"} onClick={() => onEdit(appointment)} className="flex min-h-10 items-center gap-1 rounded-xl border border-slate-200 px-3 text-xs font-bold text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"><Pencil className="h-3.5 w-3.5" /> تعديل</button>
         <button disabled={!editable} title={editable ? "حذف الموعد" : "لا يمكن الحذف بعد طلب السيارة"} onClick={() => onDelete(appointment)} className="flex min-h-10 items-center gap-1 rounded-xl border border-red-100 px-3 text-xs font-bold text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-40"><Trash2 className="h-3.5 w-3.5" /> حذف</button>
       </div>
     </div>
   );
+}
+
+/** "اليوم" / "غدًا" / التاريخ */
+function formatDay(date: string, now: Date) {
+  const today = localDateString(now);
+  const tomorrow = localDateString(new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1));
+  const yesterday = localDateString(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1));
+  if (date === today) return "اليوم";
+  if (date === tomorrow) return "غدًا";
+  if (date === yesterday) return "أمس";
+  return date;
 }
 
 function InfoCard({ icon: Icon, label, value, tone }: { icon: typeof CalendarDays; label: string; value: string; tone: "teal" | "amber" | "blue" }) {

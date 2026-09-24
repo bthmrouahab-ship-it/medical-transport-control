@@ -22,9 +22,15 @@ const COLLECTIONS: Partial<Record<SharedKey, { col: string; idField: string; sor
   },
   fox_requests: { col: "requests", idField: "id" },
   fox_fleet: { col: "fleet", idField: "plate" },
+  fox_hospitals: { col: "hospitals", idField: "id" },
+  // مواقع GPS يكتبها السائقون مباشرة؛ هنا للقراءة والمتابعة فقط
+  fox_locations: { col: "vehicleLocations", idField: "plate" },
 };
-/** سجل العمليات (آخر 50 عملية) يُحفظ في مستند واحد. */
-const AUDIT = { col: "meta", id: "audit" };
+/** قيم تُحفظ كمستند واحد: سجل العمليات (آخر 50 عملية) وملخص الإحصائيات السابقة. */
+const SINGLE_DOCS: Partial<Record<SharedKey, { col: string; id: string; field: string }>> = {
+  fox_audit: { col: "meta", id: "audit", field: "items" },
+  fox_history: { col: "meta", id: "history", field: "data" },
+};
 
 const docId = (value: unknown) => String(value ?? "").replace(/\//g, "_") || "_";
 const strip = ({ _o, ...rest }: Rec) => rest;
@@ -70,16 +76,19 @@ export function createFirestoreBackend(db: Firestore): SharedBackend {
         const snap = await getDocs(collection(db, COLLECTIONS[key]!.col));
         out[key] = toArray(key, snap.docs);
       }
-      const audit = await getDoc(doc(db, AUDIT.col, AUDIT.id));
-      out.fox_audit = audit.exists() ? audit.data().items : undefined;
+      for (const [key, cfg] of Object.entries(SINGLE_DOCS) as [SharedKey, { col: string; id: string; field: string }][]) {
+        const snap = await getDoc(doc(db, cfg.col, cfg.id));
+        out[key] = snap.exists() ? snap.data()[cfg.field] : undefined;
+      }
       return out;
     },
 
     async write(key, next, previous) {
       pending.set(key, (pending.get(key) ?? 0) + 1);
       try {
-        if (key === "fox_audit") {
-          await chain(`${AUDIT.col}/${AUDIT.id}`, () => setDoc(doc(db, AUDIT.col, AUDIT.id), { items: clean(next) }));
+        const single = SINGLE_DOCS[key];
+        if (single) {
+          await chain(`${single.col}/${single.id}`, () => setDoc(doc(db, single.col, single.id), { [single.field]: clean(next) }));
           return;
         }
         const cfg = COLLECTIONS[key]!;
@@ -121,13 +130,15 @@ export function createFirestoreBackend(db: Firestore): SharedBackend {
           (error) => console.error("[firestore]", key, error),
         ),
       );
-      offs.push(
-        onSnapshot(
-          doc(db, AUDIT.col, AUDIT.id),
-          (snap) => deliver("fox_audit", snap.exists() ? snap.data().items : undefined),
-          (error) => console.error("[firestore] audit", error),
-        ),
-      );
+      for (const [key, cfg] of Object.entries(SINGLE_DOCS) as [SharedKey, { col: string; id: string; field: string }][]) {
+        offs.push(
+          onSnapshot(
+            doc(db, cfg.col, cfg.id),
+            (snap) => deliver(key, snap.exists() ? snap.data()[cfg.field] : undefined),
+            (error) => console.error("[firestore]", key, error),
+          ),
+        );
+      }
       return () => offs.forEach((off) => off());
     },
   };

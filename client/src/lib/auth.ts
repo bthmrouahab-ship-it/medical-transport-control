@@ -191,7 +191,7 @@ async function createAuthAccount(username: string, password: string) {
   }
 }
 
-export async function createUser(input: { username: string; displayName: string; role: UserRole; password: string }, createdBy: string) {
+export async function createUser(input: { username: string; displayName: string; role: UserRole; password: string; vehiclePlate?: string }, createdBy: string) {
   const username = normalizeUsername(input.username);
   const usernameError = validateUsername(username);
   if (usernameError) throw new AuthError(usernameError);
@@ -199,6 +199,7 @@ export async function createUser(input: { username: string; displayName: string;
   if (displayName.length < 2 || displayName.length > 60) throw new AuthError("الاسم الظاهر يجب أن يكون من 2 إلى 60 حرفًا");
   const passwordError = validatePassword(input.password);
   if (passwordError) throw new AuthError(passwordError);
+  if (input.role === "driver" && !input.vehiclePlate) throw new AuthError("اختر السيارة المرتبطة بالسائق");
   if ((await getDoc(usernameRef(username))).exists()) throw new AuthError("اسم المستخدم مستخدم مسبقًا");
 
   const account = await createAuthAccount(username, input.password);
@@ -209,6 +210,7 @@ export async function createUser(input: { username: string; displayName: string;
     role: input.role,
     active: true,
     mustChangePassword: true,
+    ...(input.role === "driver" ? { vehiclePlate: input.vehiclePlate } : {}),
     createdAt: new Date().toISOString(),
     createdBy,
   });
@@ -216,7 +218,7 @@ export async function createUser(input: { username: string; displayName: string;
   await batch.commit();
 }
 
-export async function updateUser(uid: string, changes: Partial<Pick<UserProfile, "displayName" | "role" | "active">>) {
+export async function updateUser(uid: string, changes: Partial<Pick<UserProfile, "displayName" | "role" | "active" | "vehiclePlate">>) {
   if (changes.displayName !== undefined) {
     const displayName = changes.displayName.trim();
     if (displayName.length < 2 || displayName.length > 60) throw new AuthError("الاسم الظاهر يجب أن يكون من 2 إلى 60 حرفًا");

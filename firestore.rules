@@ -17,6 +17,8 @@ service cloud.firestore {
     }
     function hasRole(roles) { return isStaff() && profile().role in roles; }
     function isAdmin() { return hasRole(['admin']); }
+    // موظفو المكتب: كل الأدوار ما عدا السائق (السائق لا يرى بيانات المرضى)
+    function isOffice() { return hasRole(['admin', 'clinic', 'buildingSupervisor', 'fleetSupervisor']); }
 
     function setupDone() { return exists(/databases/$(database)/documents/meta/setup); }
     function setupDoneAfter() { return existsAfter(/databases/$(database)/documents/meta/setup); }
@@ -28,11 +30,12 @@ service cloud.firestore {
       return name is string && name.matches('^[a-z0-9][a-z0-9._-]{2,31}$');
     }
     function validProfile(data, uid) {
-      return data.keys().hasOnly(['username', 'displayName', 'role', 'active', 'mustChangePassword', 'createdAt', 'createdBy'])
+      return data.keys().hasOnly(['username', 'displayName', 'role', 'active', 'mustChangePassword', 'vehiclePlate', 'createdAt', 'createdBy'])
         && data.keys().hasAll(['username', 'displayName', 'role', 'active', 'mustChangePassword'])
         && validUsername(data.username)
         && data.displayName is string && data.displayName.size() >= 2 && data.displayName.size() <= 60
-        && data.role in ['admin', 'clinic', 'buildingSupervisor', 'fleetSupervisor']
+        && data.role in ['admin', 'clinic', 'buildingSupervisor', 'fleetSupervisor', 'driver']
+        && (data.role != 'driver' || (data.get('vehiclePlate', null) is string && data.vehiclePlate.size() > 0))
         && data.active is bool
         && data.mustChangePassword is bool
         // اسم المستخدم يجب أن يشير إلى هذا الحساب نفسه
@@ -98,16 +101,22 @@ service cloud.firestore {
 
     // سجل العمليات المشترك
     match /meta/audit {
-      allow read: if isStaff();
-      allow write: if isStaff()
+      allow read: if isOffice();
+      allow write: if isOffice()
         && request.resource.data.keys().hasOnly(['items'])
         && request.resource.data.items is list
         && request.resource.data.items.size() <= 50;
     }
 
     // المواعيد: تضيفها العيادة، ويحدّث مشرف المبنى حالتها
+    // ملخص الإحصائيات السابقة المستورد من Excel (إجماليات فقط، بلا بيانات مرضى)
+    match /meta/history {
+      allow read: if isOffice();
+      allow write: if isAdmin() && request.resource.data.keys().hasOnly(['data']);
+    }
+
     match /appointments/{id} {
-      allow read: if isStaff();
+      allow read: if isOffice();
       allow create: if hasRole(['admin', 'clinic']) && reasonableSize();
       allow update: if hasRole(['admin', 'clinic', 'buildingSupervisor']) && reasonableSize();
       allow delete: if hasRole(['admin', 'clinic']);
@@ -115,7 +124,7 @@ service cloud.firestore {
 
     // طلبات السيارات: ينشئها مشرف المبنى، ويوزعها مشرف السيارات
     match /requests/{id} {
-      allow read: if isStaff();
+      allow read: if isOffice();
       allow create: if hasRole(['admin', 'buildingSupervisor']) && reasonableSize();
       allow update: if hasRole(['admin', 'buildingSupervisor', 'fleetSupervisor']) && reasonableSize();
       allow delete: if hasRole(['admin', 'buildingSupervisor']);
@@ -123,7 +132,7 @@ service cloud.firestore {
 
     // السيارات: المدير يعدّل كل البيانات، ومشرف السيارات يغيّر حالة الإتاحة فقط
     match /fleet/{plate} {
-      allow read: if isStaff();
+      allow read: if isOffice();
       allow create, update: if isAdmin()
         && request.resource.data.keys().hasOnly(['plate', 'driver', 'phone', 'kind', 'available', '_o'])
         && request.resource.data.plate == plate
@@ -131,6 +140,32 @@ service cloud.firestore {
       allow update: if hasRole(['fleetSupervisor'])
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['available'])
         && request.resource.data.available is bool;
+      allow delete: if isAdmin();
+    }
+
+    // دليل المستشفيات: يقرؤه الموظفون ويعدّله المدير
+    match /hospitals/{id} {
+      allow read: if isOffice();
+      allow create, update: if isAdmin()
+        && request.resource.data.keys().hasOnly(['id', 'name', 'nameEn', 'zone', 'lat', 'lng', 'aliases', 'verified', '_o'])
+        && request.resource.data.id == id
+        && request.resource.data.name is string && request.resource.data.name.size() <= 120
+        && request.resource.data.lat is number && request.resource.data.lat > 24 && request.resource.data.lat < 27
+        && request.resource.data.lng is number && request.resource.data.lng > 50 && request.resource.data.lng < 52.5
+        && request.resource.data.aliases is list && request.resource.data.aliases.size() <= 40;
+      allow delete: if isAdmin();
+    }
+
+    // مواقع GPS: كل سائق يكتب موقع سيارته فقط، ويقرؤها موظفو المكتب
+    match /vehicleLocations/{plate} {
+      allow read: if isOffice();
+      allow create, update: if hasRole(['driver'])
+        && profile().vehiclePlate == plate
+        && request.resource.data.keys().hasOnly(['plate', 'lat', 'lng', 'accuracy', 'speed', 'heading', 'driver', 'sharing', 'updatedAt'])
+        && request.resource.data.plate == plate
+        && request.resource.data.lat is number && request.resource.data.lng is number
+        && request.resource.data.sharing is bool
+        && request.resource.data.updatedAt is string;
       allow delete: if isAdmin();
     }
   }

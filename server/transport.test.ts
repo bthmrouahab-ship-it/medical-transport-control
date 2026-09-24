@@ -7,6 +7,7 @@ import {
   canRequestVehicle,
   migrateAppointment,
   parseImportedAppointments,
+  requestWindow,
   suggestTripGroups,
   type ClinicAppointment,
   type VehicleRequest,
@@ -19,6 +20,7 @@ const appointment: ClinicAppointment = {
   buildingNumber: "12",
   apartmentNumber: "4",
   mobile: "55123456",
+  appointmentDate: "2026-09-24",
   appointmentAt: "09:00",
   kind: "عادي",
   assistance: ["يحتاج مرافق"],
@@ -38,9 +40,19 @@ const request: VehicleRequest = {
 
 describe("medical transport rules", () => {
   it("blocks a vehicle request without an appointment", () => {
+    const beforeAppointment = new Date(2026, 8, 24, 8, 0);
     expect(canRequestVehicle(undefined)).toBe(false);
-    expect(canRequestVehicle(appointment, request)).toBe(false);
-    expect(canRequestVehicle(appointment)).toBe(true);
+    expect(canRequestVehicle(appointment, request, beforeAppointment)).toBe(false);
+    expect(canRequestVehicle(appointment, undefined, beforeAppointment)).toBe(true);
+  });
+
+  it("closes vehicle requests 30 minutes after the appointment time", () => {
+    expect(canRequestVehicle(appointment, undefined, new Date(2026, 8, 24, 9, 30))).toBe(true);
+    expect(canRequestVehicle(appointment, undefined, new Date(2026, 8, 24, 9, 31))).toBe(false);
+    expect(requestWindow(appointment, new Date(2026, 8, 24, 9, 10)).minutesLeft).toBe(20);
+    // تعديل العيادة لوقت الموعد يعيد فتح الطلب
+    const edited = { ...appointment, appointmentAt: "11:00" };
+    expect(canRequestVehicle(edited, undefined, new Date(2026, 8, 24, 9, 31))).toBe(true);
   });
 
   it("chooses the correct vehicle for normal and special-needs trips", () => {
@@ -97,7 +109,7 @@ describe("medical transport rules", () => {
         "اسم المريض أو الرقم": "مريض ناقص",
         "اسم العيادة أو المستشفى": "مستشفى حمد العام",
       },
-    ], [], 123456789);
+    ], [], 123456789, "2026-09-24");
 
     expect(result.appointments).toHaveLength(1);
     expect(result.appointments[0]).toMatchObject({
@@ -105,6 +117,7 @@ describe("medical transport rules", () => {
       buildingNumber: "22",
       apartmentNumber: "8",
       mobile: "55667788",
+      appointmentDate: "2026-09-24",
       appointmentAt: "10:30",
       kind: "احتياجات خاصة",
       assistance: ["يحتاج مرافق", "كرسي متحرك"],
@@ -123,7 +136,7 @@ describe("medical transport rules", () => {
       "رقم الموبايل": appointment.mobile,
       "وقت الموعد": appointment.appointmentAt,
       "نوع الرحلة": appointment.kind,
-    }], [appointment], 1000);
+    }], [appointment], 1000, appointment.appointmentDate);
 
     expect(result.appointments).toHaveLength(0);
     expect(result.errors[0]).toContain("مكرر");
@@ -141,5 +154,26 @@ describe("medical transport rules", () => {
     expect(score.score).toBeGreaterThanOrEqual(55);
     expect(score.sameBuilding).toBe(true);
     expect(suggestTripGroups([appointment, second])).toHaveLength(1);
+  });
+
+  it("groups trips to neighbouring hospitals in Hamad Medical City", () => {
+    const first: ClinicAppointment = { ...appointment, clinic: "Hamad General Hospital", buildingNumber: "12" };
+    const second: ClinicAppointment = { ...appointment, id: "APT-3", clinic: "Bone and joint center", buildingNumber: "30", appointmentAt: "09:10" };
+    const score = calculateTripGroupingScore(first, second);
+    expect(score.sameDestination).toBe(false);
+    expect(score.nearbyDestination).toBe(true);
+    expect(score.zone).toBe("مدينة حمد الطبية");
+    expect(suggestTripGroups([first, second])[0].reason).toContain("متجاورة");
+  });
+
+  it("does not group appointments on different days", () => {
+    const tomorrow: ClinicAppointment = { ...appointment, id: "APT-4", appointmentDate: "2026-09-25" };
+    expect(suggestTripGroups([appointment, tomorrow])).toHaveLength(0);
+  });
+
+  it("migrates legacy appointments without a date to today and links the hospital", () => {
+    const migrated = migrateAppointment({ id: "X", patientName: "p", clinic: "مستشفى سدرة / مجمع الثمامة", appointmentAt: "10:00" });
+    expect(migrated?.appointmentDate).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(migrated?.hospitalId).toBe("sidra");
   });
 });

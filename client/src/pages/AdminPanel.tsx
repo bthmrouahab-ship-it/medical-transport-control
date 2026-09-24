@@ -6,6 +6,7 @@ import {
   Copy,
   KeyRound,
   LogOut,
+  Map as MapIcon,
   Pencil,
   Plus,
   ShieldCheck,
@@ -35,9 +36,10 @@ import {
 } from "@shared/users";
 import { hasSharedState, loadState, saveState, subscribeState } from "@/lib/appStore";
 import { appendAudit } from "@/lib/audit";
+import FleetDashboard from "@/components/FleetDashboard";
 import { authErrorMessage, createUser, resetUserPassword, updateUser, watchUsers } from "@/lib/auth";
 
-type Tab = "users" | "vehicles" | "audit";
+type Tab = "dashboard" | "users" | "vehicles" | "audit";
 
 const inputClass = "h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none focus:border-[#e6a1aa]";
 
@@ -78,6 +80,7 @@ export default function AdminPanel({ profile, onLogout, onChangePassword }: {
   }
 
   const tabs: { id: Tab; label: string; icon: typeof UsersRound }[] = [
+    { id: "dashboard", label: "لوحة السيارات والخريطة", icon: MapIcon },
     { id: "users", label: "المستخدمون والأدوار", icon: UsersRound },
     { id: "vehicles", label: "السيارات والسائقون", icon: Truck },
     { id: "audit", label: "سجل العمليات", icon: ClipboardList },
@@ -105,7 +108,8 @@ export default function AdminPanel({ profile, onLogout, onChangePassword }: {
             </button>
           ))}
         </nav>
-        {tab === "users" && <UsersTab profile={profile} onLog={log} />}
+        {tab === "dashboard" && <FleetDashboard canEdit actor={profile.displayName} />}
+        {tab === "users" && <UsersTab profile={profile} vehicles={vehicles} onLog={log} />}
         {tab === "vehicles" && <VehiclesTab vehicles={vehicles} requests={requests} onChange={updateVehicles} />}
         {tab === "audit" && (
           <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
@@ -122,7 +126,7 @@ export default function AdminPanel({ profile, onLogout, onChangePassword }: {
 
 // ————— المستخدمون —————
 
-function UsersTab({ profile, onLog }: { profile: UserProfile; onLog: (message: string) => void }) {
+function UsersTab({ profile, vehicles, onLog }: { profile: UserProfile; vehicles: Vehicle[]; onLog: (message: string) => void }) {
   const [users, setUsers] = useState<UserProfile[] | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [issued, setIssued] = useState<{ username: string; password: string } | null>(null);
@@ -162,6 +166,7 @@ function UsersTab({ profile, onLog }: { profile: UserProfile; onLog: (message: s
       {issued && <IssuedPassword {...issued} onClose={() => setIssued(null)} />}
       {showForm && (
         <NewUserForm
+          vehicles={vehicles}
           onCancel={() => setShowForm(false)}
           onCreate={async (input) => {
             await createUser(input, profile.username);
@@ -199,10 +204,24 @@ function UsersTab({ profile, onLog }: { profile: UserProfile; onLog: (message: s
                   <span className="sr-only">الدور</span>
                   <select disabled={isSelf || busy} value={user.role} onChange={(event) => {
                     const role = event.target.value as UserRole;
-                    run(user.uid, () => updateUser(user.uid, { role }), "تم تغيير الدور", `تغيير دور ${user.username} إلى ${ROLE_LABELS[role]}`);
+                    const vehiclePlate = role === "driver" ? user.vehiclePlate ?? vehicles[0]?.plate : undefined;
+                    if (role === "driver" && !vehiclePlate) {
+                      toast.error("أضف سيارة أولًا لربطها بالسائق");
+                      return;
+                    }
+                    run(user.uid, () => updateUser(user.uid, vehiclePlate ? { role, vehiclePlate } : { role }), "تم تغيير الدور", `تغيير دور ${user.username} إلى ${ROLE_LABELS[role]}`);
                   }} className={`${inputClass} font-bold disabled:bg-slate-50 disabled:text-slate-400`}>
                     {USER_ROLES.map((role) => <option key={role} value={role}>{ROLE_LABELS[role]}</option>)}
                   </select>
+                  {user.role === "driver" && (
+                    <select aria-label="سيارة السائق" disabled={busy} value={user.vehiclePlate ?? ""} onChange={(event) => {
+                      const vehiclePlate = event.target.value;
+                      run(user.uid, () => updateUser(user.uid, { vehiclePlate }), "تم ربط السائق بالسيارة", `ربط السائق ${user.username} بالسيارة ${vehiclePlate}`);
+                    }} className={`${inputClass} mt-2`}>
+                      {!user.vehiclePlate && <option value="">اختر السيارة</option>}
+                      {vehicles.map((vehicle) => <option key={vehicle.plate} value={vehicle.plate}>{vehicle.plate} · {vehicle.driver}</option>)}
+                    </select>
+                  )}
                 </label>
                 <div className="flex flex-wrap gap-2">
                   <button disabled={isSelf || busy} onClick={() => resetPassword(user)} className="flex min-h-10 items-center gap-1 rounded-xl border border-slate-200 px-3 text-xs font-bold text-slate-600 hover:bg-slate-50 disabled:opacity-40"><KeyRound className="h-3.5 w-3.5" /> كلمة مرور جديدة</button>
@@ -220,11 +239,12 @@ function UsersTab({ profile, onLog }: { profile: UserProfile; onLog: (message: s
   );
 }
 
-function NewUserForm({ onCreate, onCancel }: {
-  onCreate: (input: { username: string; displayName: string; role: UserRole; password: string }) => Promise<void>;
+function NewUserForm({ vehicles, onCreate, onCancel }: {
+  vehicles: Vehicle[];
+  onCreate: (input: { username: string; displayName: string; role: UserRole; password: string; vehiclePlate?: string }) => Promise<void>;
   onCancel: () => void;
 }) {
-  const [form, setForm] = useState({ username: "", displayName: "", role: "clinic" as UserRole, password: generateTemporaryPassword() });
+  const [form, setForm] = useState({ username: "", displayName: "", role: "clinic" as UserRole, password: generateTemporaryPassword(), vehiclePlate: vehicles[0]?.plate ?? "" });
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -251,6 +271,13 @@ function NewUserForm({ onCreate, onCancel }: {
           {USER_ROLES.map((role) => <option key={role} value={role}>{ROLE_LABELS[role]}</option>)}
         </select>
       </label>
+      {form.role === "driver" && (
+        <label className="sm:col-span-2"><span className="mb-1.5 block text-xs font-bold text-slate-600">السيارة (يرسل السائق موقعها عبر GPS الهاتف)</span>
+          <select value={form.vehiclePlate} onChange={(event) => setForm({ ...form, vehiclePlate: event.target.value })} className={`${inputClass} font-bold`}>
+            {vehicles.map((vehicle) => <option key={vehicle.plate} value={vehicle.plate}>{vehicle.plate} · {vehicle.driver} · {vehicle.kind}</option>)}
+          </select>
+        </label>
+      )}
       <label><span className="mb-1.5 block text-xs font-bold text-slate-600">كلمة المرور المؤقتة</span>
         <div className="flex gap-2">
           <input dir="ltr" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} className={`${inputClass} font-mono`} />

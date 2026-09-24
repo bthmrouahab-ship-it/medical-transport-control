@@ -1,4 +1,4 @@
-export type UserRole = "admin" | "clinic" | "buildingSupervisor" | "fleetSupervisor";
+export type UserRole = "admin" | "clinic" | "buildingSupervisor" | "fleetSupervisor" | "driver";
 
 export type UserProfile = {
   uid: string;
@@ -8,17 +8,20 @@ export type UserProfile = {
   active: boolean;
   /** يُطلب من المستخدم تغيير كلمة المرور المؤقتة عند أول دخول. */
   mustChangePassword: boolean;
+  /** للسائق فقط: رقم السيارة التي يرسل موقعها */
+  vehiclePlate?: string;
   createdAt: string;
   createdBy: string;
 };
 
-export const USER_ROLES: UserRole[] = ["admin", "clinic", "buildingSupervisor", "fleetSupervisor"];
+export const USER_ROLES: UserRole[] = ["admin", "clinic", "buildingSupervisor", "fleetSupervisor", "driver"];
 
 export const ROLE_LABELS: Record<UserRole, string> = {
   admin: "مدير النظام",
   clinic: "العيادة",
   buildingSupervisor: "مشرف المبنى",
   fleetSupervisor: "مشرف السيارات",
+  driver: "سائق",
 };
 
 /**
