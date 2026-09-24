@@ -117,7 +117,9 @@ service cloud.firestore {
 
     match /appointments/{id} {
       allow read: if isOffice();
-      allow create: if hasRole(['admin', 'clinic']) && reasonableSize();
+      allow create: if reasonableSize() && (hasRole(['admin', 'clinic'])
+        // مشرف السيارات يضيف رحلات غير طبية فقط
+        || (hasRole(['fleetSupervisor']) && request.resource.data.get('category', '') == 'غير طبية'));
       allow update: if hasRole(['admin', 'clinic', 'buildingSupervisor']) && reasonableSize();
       allow delete: if hasRole(['admin', 'clinic']);
     }
@@ -125,7 +127,7 @@ service cloud.firestore {
     // طلبات السيارات: ينشئها مشرف المبنى، ويوزعها مشرف السيارات
     match /requests/{id} {
       allow read: if isOffice();
-      allow create: if hasRole(['admin', 'buildingSupervisor']) && reasonableSize();
+      allow create: if hasRole(['admin', 'buildingSupervisor', 'fleetSupervisor']) && reasonableSize();
       allow update: if hasRole(['admin', 'buildingSupervisor', 'fleetSupervisor']) && reasonableSize();
       allow delete: if hasRole(['admin', 'buildingSupervisor']);
     }

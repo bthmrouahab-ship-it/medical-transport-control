@@ -89,7 +89,12 @@ export default function FleetDashboard({ canEdit = false, actor }: { canEdit?: b
                 })}
               </ul>
             </section>
-            <p className="rounded-xl bg-slate-50 p-3 text-[11px] leading-5 text-slate-500">يظهر موقع السيارة عندما يسجل السائق الدخول بحساب «سائق» ويضغط «بدء مشاركة الموقع» من هاتفه. الدوائر الزرقاء المستشفيات (حجمها حسب الرحلات السابقة، والمتقطعة موقعها تقريبي)، والخطوط البرتقالية الرحلات الجارية.</p>
+            <ul className="grid grid-cols-2 gap-2 rounded-xl bg-white p-3 text-[11px] font-semibold text-slate-600 ring-1 ring-slate-200">
+              <li className="flex items-center gap-2"><span className="h-3 w-3 rounded-full bg-[#2a78d6]" /> مستشفى</li>
+              <li className="flex items-center gap-2"><span className="h-3 w-3 rounded-full border-2 border-dashed border-[#2a78d6] bg-[#2a78d6]/40" /> موقع تقريبي</li>
+              <li className="flex items-center gap-2"><span className="h-0.5 w-4 border-t-2 border-dashed border-[#eb6834]" /> رحلة جارية</li>
+              <li className="flex items-center gap-2"><span className="h-3 w-3 rounded-full bg-[#1baf7a]" /> GPS مباشر</li>
+            </ul>
           </aside>
         </div>
       )}
@@ -176,7 +181,6 @@ function HistoryImport({ fleet, hospitals, actor, hasHistory }: { fleet: Vehicle
       <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
         <div>
           <h3 className="flex items-center gap-2 font-bold"><Upload className="h-4 w-4 text-[#a61d2d]" /> استيراد ملف حركة السيارات (Excel)</h3>
-          <p className="mt-1 text-xs leading-5 text-slate-500">تُحفظ الإجماليات فقط (الأيام، الوجهات، الساعات، السيارات). أسماء المرضى وأرقامهم وأرقام الشقق لا تُرفع إلى قاعدة البيانات.</p>
         </div>
         <input ref={input} type="file" accept=".xlsx,.xls" className="hidden" onChange={(event) => read(event.target.files?.[0])} />
         <button disabled={busy} onClick={() => input.current?.click()} className="flex min-h-11 shrink-0 items-center gap-2 rounded-xl bg-[#a61d2d] px-4 text-sm font-bold text-white disabled:opacity-60"><FileSpreadsheet className="h-4 w-4" /> {busy ? "جارٍ القراءة..." : hasHistory ? "رفع ملف جديد" : "اختيار الملف"}</button>
