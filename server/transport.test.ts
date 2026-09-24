@@ -3,6 +3,10 @@ import {
   appointmentPickupLabel,
   assignVehicle,
   buildDriverMessage,
+  buildDriverTripsMessage,
+  driverCallLink,
+  driverWhatsAppLink,
+  toInternationalDigits,
   calculateTripGroupingScore,
   canRequestVehicle,
   migrateAppointment,
@@ -141,5 +145,34 @@ describe("medical transport rules", () => {
     expect(score.score).toBeGreaterThanOrEqual(55);
     expect(score.sameBuilding).toBe(true);
     expect(suggestTripGroups([appointment, second])).toHaveLength(1);
+  });
+});
+
+describe("driver contact links", () => {
+  it("formats Qatar numbers for WhatsApp and calls", () => {
+    expect(toInternationalDigits("77712995")).toBe("97477712995");
+    expect(toInternationalDigits("+974 5533 9592")).toBe("97455339592");
+    expect(toInternationalDigits("0097455339592")).toBe("97455339592");
+    expect(toInternationalDigits("123")).toBe("");
+    expect(driverCallLink("77712995")).toBe("tel:+97477712995");
+    expect(driverCallLink("")).toBe("");
+  });
+
+  it("builds a prefilled WhatsApp link", () => {
+    const link = driverWhatsAppLink("77712995", "رحلة جديدة");
+    expect(link.startsWith("https://wa.me/97477712995?text=")).toBe(true);
+    expect(decodeURIComponent(link.split("text=")[1])).toBe("رحلة جديدة");
+  });
+
+  it("lists every trip in a grouped message", () => {
+    const second = { ...appointment, id: "APT-2", patientName: "مريض 002", assistance: [] };
+    const sent = { ...request, vehiclePlate: "943438" };
+    const message = buildDriverTripsMessage([{ appointment, request: sent }, { appointment: second, request: { ...sent, id: "REQ-2", appointmentId: "APT-2" } }]);
+    expect(message).toContain("لديك 2 رحلات");
+    expect(message).toContain("مريض 001");
+    expect(message).toContain("مريض 002");
+    const single = buildDriverTripsMessage([{ appointment, request: sent }]);
+    expect(single).toContain(buildDriverMessage(appointment, sent));
+    expect(single).toContain("يحتاج مرافق");
   });
 });
