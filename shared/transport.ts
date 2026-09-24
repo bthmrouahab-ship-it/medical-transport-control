@@ -323,3 +323,34 @@ export function suggestTripGroups(appointments: ClinicAppointment[]) {
 export function buildDriverMessage(appointment: ClinicAppointment, request: VehicleRequest) {
   return `رحلة جديدة: ${appointment.patientName} من ${appointmentPickupLabel(appointment)} إلى ${appointment.clinic} الساعة ${appointment.appointmentAt}. رقم الموبايل ${appointment.mobile}. السيارة ${request.vehiclePlate ?? "بانتظار التحديد"}.`;
 }
+
+/** رقم الجوال بصيغة دولية بلا "+" (مثل 97477712995) كما تطلبه روابط واتساب. رقم قطري من 8 أرقام يُضاف له 974. */
+export function toInternationalDigits(phone: string, countryCode = "974") {
+  const digits = normalizeMobile(phone).replace(/^\+/, "").replace(/^00/, "").replace(/\D/g, "");
+  if (digits.length === 8) return `${countryCode}${digits}`;
+  return digits.length > 8 ? digits : "";
+}
+
+/** رسالة السائق لرحلة واحدة أو لعدة رحلات مجمّعة على نفس السيارة. */
+export function buildDriverTripsMessage(trips: { appointment: ClinicAppointment; request: VehicleRequest }[]) {
+  if (trips.length === 1) {
+    const { appointment, request } = trips[0];
+    const needs = appointment.assistance.length ? ` احتياجات: ${appointment.assistance.join("، ")}.` : "";
+    return `${buildDriverMessage(appointment, request)}${needs}`;
+  }
+  const lines = trips.map(({ appointment, request }, index) =>
+    `${index + 1}) ${request.direction}: ${appointment.patientName} من ${appointmentPickupLabel(appointment)} إلى ${appointment.clinic} الساعة ${appointment.appointmentAt}. رقم الموبايل ${appointment.mobile}.${appointment.assistance.length ? ` (${appointment.assistance.join("، ")})` : ""}`);
+  return [`لديك ${trips.length} رحلات مجمّعة على السيارة ${trips[0].request.vehiclePlate ?? ""}:`, ...lines].join("\n");
+}
+
+/** رابط يفتح واتساب برسالة جاهزة للسائق (يعمل على الجوال والكمبيوتر). */
+export function driverWhatsAppLink(phone: string, message: string) {
+  const number = toInternationalDigits(phone);
+  return number ? `https://wa.me/${number}?text=${encodeURIComponent(message)}` : "";
+}
+
+/** رابط اتصال مباشر بالسائق. */
+export function driverCallLink(phone: string) {
+  const number = toInternationalDigits(phone);
+  return number ? `tel:+${number}` : "";
+}

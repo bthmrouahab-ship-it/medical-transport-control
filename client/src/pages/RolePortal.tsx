@@ -17,6 +17,7 @@ import {
   LogOut,
   MapPin,
   Pencil,
+  MessageCircle,
   Phone,
   RotateCcw,
   Send,
@@ -34,7 +35,10 @@ import {
   appointmentPickupLabel,
   assignVehicle,
   assignVehicleForTrips,
+  buildDriverTripsMessage,
   canRequestVehicle,
+  driverCallLink,
+  driverWhatsAppLink,
   migrateAppointment,
   migrateRequest,
   parseImportedAppointments,
@@ -60,69 +64,15 @@ const vehicles: Vehicle[] = [
   { plate: "329538", driver: "عادل", phone: "55226916", kind: "باص", available: true },
 ];
 
-const seedAppointments: ClinicAppointment[] = [
-  {
-    id: "APT-1001",
-    patientName: "مريض 001",
-    clinic: "مركز الثمامة الصحي",
-    buildingNumber: "12",
-    apartmentNumber: "4",
-    mobile: "55123456",
-    appointmentAt: "07:30",
-    kind: "عادي",
-    assistance: [],
-    status: "بانتظار طلب السيارة",
-  },
-  {
-    id: "APT-1002",
-    patientName: "مريض 002",
-    clinic: "مستشفى الوكرة",
-    buildingNumber: "28",
-    apartmentNumber: "7",
-    mobile: "55234567",
-    appointmentAt: "08:00",
-    kind: "احتياجات خاصة",
-    assistance: ["يحتاج مرافق", "كرسي متحرك"],
-    status: "بانتظار طلب السيارة",
-  },
-  {
-    id: "APT-1003",
-    patientName: "مريض 003",
-    clinic: "مستشفى سدرة",
-    buildingNumber: "31",
-    apartmentNumber: "2",
-    mobile: "55345678",
-    appointmentAt: "08:15",
-    kind: "عادي",
-    assistance: [],
-    status: "تم طلب السيارة",
-  },
-];
-
-const seedRequests: VehicleRequest[] = [
-  {
-    id: "REQ-2001",
-    appointmentId: "APT-1003",
-    vehiclePlate: "956479",
-    driver: "كمال",
-    direction: "ذهاب",
-    status: "تم إرسال السيارة",
-    notificationMethod: "whatsapp",
-    createdAt: "08:02",
-  },
-];
-
-
 function loadAppointments() {
-  const stored = loadState<unknown[]>("fox_appointments", seedAppointments);
-  const migrated = stored
+  // يبدأ النظام بقائمة فارغة؛ المواعيد تُضاف من حساب العيادة.
+  return loadState<unknown[]>("fox_appointments", [])
     .map((appointment, index) => migrateAppointment(appointment, index))
     .filter((appointment): appointment is ClinicAppointment => Boolean(appointment));
-  return migrated.length ? migrated : seedAppointments;
 }
 
 function loadRequests() {
-  return loadState<unknown[]>("fox_requests", seedRequests)
+  return loadState<unknown[]>("fox_requests", [])
     .map(migrateRequest)
     .filter((request): request is VehicleRequest => Boolean(request));
 }
@@ -420,7 +370,7 @@ function RoleShell({ session, onLogout, onManager }: { session: Session; onLogou
                 ? { ...request, vehiclePlate: vehicle.plate, driver: vehicle.driver, status: "تم إرسال السيارة", groupId, notificationSentAt: sentAt }
                 : request));
               logAudit(`إرسال السيارة ${vehicle.plate} إلى ${requestIds.length} طلب`);
-              toast.success(requestIds.length > 1 ? `تم جمع ${requestIds.length} رحلات وإرسال السيارة ${vehicle.plate}` : `تم إرسال السيارة ${vehicle.plate} وتنبيه السائق`);
+              toast.success(requestIds.length > 1 ? `تم جمع ${requestIds.length} رحلات وإرسال السيارة ${vehicle.plate}` : `تم إرسال السيارة ${vehicle.plate}`);
             }}
             onExport={exportStats}
           />
@@ -675,6 +625,34 @@ function FleetSupervisorNotice({ vehicles: currentVehicles, appointments, reques
   const groupSuggestions = suggestTripGroups(pendingAppointments).slice(0, 4);
   const sentRequests = [...requests].filter((request) => request.status !== "بانتظار التوزيع").reverse().slice(0, 6);
 
+  /** بيانات تواصل السائق لطلب مُرسل: الرسالة تشمل كل رحلات المجموعة إن وُجدت. */
+  function driverContact(sentRequestIds: string[], vehicle: Vehicle | undefined) {
+    if (!vehicle) return { whatsapp: "", call: "" };
+    const trips = sentRequestIds
+      .map((id) => requests.find((item) => item.id === id))
+      .filter((item): item is VehicleRequest => Boolean(item))
+      .map((item) => ({ request: { ...item, vehiclePlate: vehicle.plate }, appointment: appointments.find((appointment) => appointment.id === item.appointmentId) }))
+      .filter((trip): trip is { request: VehicleRequest; appointment: ClinicAppointment } => Boolean(trip.appointment));
+    return {
+      whatsapp: trips.length ? driverWhatsAppLink(vehicle.phone, buildDriverTripsMessage(trips)) : "",
+      call: driverCallLink(vehicle.phone),
+    };
+  }
+
+  /** يرسل السيارة ثم يفتح واتساب برسالة جاهزة للسائق (ضمن نفس الضغطة حتى لا يحجبها المتصفح). */
+  function dispatchAndNotify(requestIds: string[], vehicle: Vehicle) {
+    onDispatch(requestIds, vehicle);
+    const wantsWhatsApp = requestIds.some((id) => requests.find((item) => item.id === id)?.notificationMethod === "whatsapp");
+    const { whatsapp, call } = driverContact(requestIds, vehicle);
+    if (wantsWhatsApp && whatsapp) {
+      window.open(whatsapp, "_blank", "noopener");
+    } else if (!wantsWhatsApp && call) {
+      toast.info(`اتصل بالسائق ${vehicle.driver} لإبلاغه بالرحلة`, { action: { label: "اتصال", onClick: () => { window.location.href = call; } }, duration: 15000 });
+    } else if (!whatsapp && !call) {
+      toast.error(`رقم السائق ${vehicle.driver} غير صالح، عدّله في لوحة السيارات`);
+    }
+  }
+
   function dispatchRequest(request: VehicleRequest, appointment: ClinicAppointment) {
     const suggested = assignVehicleForTrips(dispatchableVehicles, [appointment]);
     const selectedPlate = selectedVehicles[request.id] || suggested?.plate;
@@ -683,7 +661,7 @@ function FleetSupervisorNotice({ vehicles: currentVehicles, appointments, reques
       toast.error("اختر سيارة متاحة ومناسبة للرحلة");
       return;
     }
-    onDispatch([request.id], vehicle);
+    dispatchAndNotify([request.id], vehicle);
   }
 
   function dispatchGroup(appointmentIds: string[]) {
@@ -698,7 +676,7 @@ function FleetSupervisorNotice({ vehicles: currentVehicles, appointments, reques
       toast.error("لا توجد سيارة مناسبة ومتاحة لجمع هذه الرحلات");
       return;
     }
-    onDispatch(groupedRequestIds, vehicle);
+    dispatchAndNotify(groupedRequestIds, vehicle);
   }
 
   return (
@@ -706,7 +684,7 @@ function FleetSupervisorNotice({ vehicles: currentVehicles, appointments, reques
       <PageHeading
         eyebrow="مشرف السيارات"
         title="طلبات السيارات والتوزيع"
-        description="استقبل تنبيهات مشرفي المباني، اختر السيارة والسائق، ثم أرسل التنبيه ليظهر التعيين لمشرف المبنى."
+        description="استقبل تنبيهات مشرفي المباني، اختر السيارة والسائق، ثم أرسلها: يفتح واتساب برسالة جاهزة للسائق، ويظهر التعيين لمشرف المبنى."
         action={<div className="flex flex-wrap gap-2"><button onClick={onExport} className="flex min-h-11 items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 text-sm font-bold text-slate-600"><Download className="h-4 w-4 text-[#a61d2d]" /> إصدار Excel</button><button onClick={onManager} className="flex min-h-11 items-center gap-2 rounded-xl bg-[#a61d2d] px-4 text-sm font-bold text-white hover:bg-[#8b1725]"><Truck className="h-4 w-4" /> لوحة السيارات</button></div>}
       />
 
@@ -733,7 +711,7 @@ function FleetSupervisorNotice({ vehicles: currentVehicles, appointments, reques
                 <div>
                   <div className="flex flex-wrap items-center gap-2"><p className="font-bold">{appointment.patientName}</p><span className="rounded-full bg-slate-100 px-2 py-1 text-[10px] font-bold text-slate-500">{request.direction} · {request.id}</span></div>
                   <p className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-500"><Clock3 className="h-4 w-4" />{appointment.appointmentAt}<MapPin className="mr-2 h-4 w-4" />{appointmentPickupLabel(appointment)} إلى {appointment.clinic}</p>
-                  <p className="mt-2 text-[11px] text-slate-400">{appointment.kind} · الإشعار المطلوب: {request.notificationMethod === "whatsapp" ? "واتساب" : "اتصال تلقائي"}</p>
+                  <p className="mt-2 text-[11px] text-slate-400">{appointment.kind} · تنبيه السائق: {request.notificationMethod === "whatsapp" ? "واتساب" : "اتصال"}</p>
                 </div>
                 <label>
                   <span className="mb-1.5 block text-xs font-bold text-slate-600">السيارة والسائق</span>
@@ -771,7 +749,11 @@ function FleetSupervisorNotice({ vehicles: currentVehicles, appointments, reques
         <div className="divide-y divide-slate-100">
           {sentRequests.length ? sentRequests.map((request) => {
             const appointment = appointments.find((item) => item.id === request.appointmentId);
-            return <div key={request.id} className="flex flex-col gap-3 p-5 sm:flex-row sm:items-center"><div className="flex-1"><p className="font-bold">{appointment?.patientName ?? request.appointmentId}</p><p className="mt-1 text-xs text-slate-400">{request.direction} · {appointment?.appointmentAt ?? "—"} · {appointment?.clinic ?? "—"}</p></div><div className="text-xs font-bold text-slate-600">{request.vehiclePlate ?? "—"} · {request.driver ?? "—"}</div><span className="w-fit rounded-full bg-emerald-50 px-3 py-1.5 text-xs font-bold text-emerald-700">{request.status}</span></div>;
+            const vehicle = currentVehicles.find((item) => item.plate === request.vehiclePlate);
+            const active = request.status === "تم إرسال السيارة" || request.status === "وصلت السيارة";
+            const groupIds = request.groupId ? requests.filter((item) => item.groupId === request.groupId).map((item) => item.id) : [request.id];
+            const contact = active ? driverContact(groupIds, vehicle) : { whatsapp: "", call: "" };
+            return <div key={request.id} className="flex flex-col gap-3 p-5 sm:flex-row sm:items-center"><div className="flex-1"><p className="font-bold">{appointment?.patientName ?? request.appointmentId}</p><p className="mt-1 text-xs text-slate-400">{request.direction} · {appointment?.appointmentAt ?? "—"} · {appointment?.clinic ?? "—"}</p></div><div className="text-xs font-bold text-slate-600">{request.vehiclePlate ?? "—"} · {request.driver ?? "—"}</div>{(contact.whatsapp || contact.call) && <div className="flex gap-2">{contact.whatsapp && <a href={contact.whatsapp} target="_blank" rel="noopener noreferrer" className="flex min-h-9 items-center gap-1.5 rounded-xl bg-emerald-600 px-3 text-xs font-bold text-white hover:bg-emerald-700"><MessageCircle className="h-4 w-4" /> واتساب</a>}{contact.call && <a href={contact.call} className="flex min-h-9 items-center gap-1.5 rounded-xl border border-slate-200 px-3 text-xs font-bold text-slate-700 hover:bg-slate-50"><Phone className="h-4 w-4" /> اتصال</a>}</div>}<span className="w-fit rounded-full bg-emerald-50 px-3 py-1.5 text-xs font-bold text-emerald-700">{request.status}</span></div>;
           }) : <p className="p-5 text-xs text-slate-400">لا توجد سيارات مرسلة بعد.</p>}
         </div>
       </section>
