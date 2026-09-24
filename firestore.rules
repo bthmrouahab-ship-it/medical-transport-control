@@ -1,0 +1,20 @@
+rules_version = '2';
+
+// قواعد مرحلة التجربة:
+// - القراءة والكتابة فقط لمن فتح الموقع (تسجيل دخول مجهول تلقائي من التطبيق).
+// - مسموح فقط بالمجموعات التي يستخدمها التطبيق، وبحجم معقول لكل مستند.
+// تنبيه: هذا لا يمنع شخصًا يعرف الرابط من الوصول للبيانات. قبل استخدام بيانات مرضى
+// حقيقية يجب إضافة تسجيل دخول حقيقي لكل مستخدم وتقييد القواعد حسب الدور.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{col}/{docId} {
+      allow read: if request.auth != null
+        && col in ['appointments', 'requests', 'fleet', 'meta'];
+      allow delete: if request.auth != null
+        && col in ['appointments', 'requests', 'fleet', 'meta'];
+      allow create, update: if request.auth != null
+        && col in ['appointments', 'requests', 'fleet', 'meta']
+        && request.resource.data.size() <= 40;
+    }
+  }
+}

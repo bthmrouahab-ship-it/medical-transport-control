@@ -10,7 +10,8 @@
     "check": "tsc --noEmit",
     "format": "prettier --write .",
     "test": "vitest run",
-    "db:push": "drizzle-kit generate && drizzle-kit migrate"
+    "db:push": "drizzle-kit generate && drizzle-kit migrate",
+    "deploy": "vite build && firebase deploy --only hosting,firestore"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.693.0",
@@ -56,6 +57,7 @@
     "drizzle-orm": "^0.44.5",
     "embla-carousel-react": "^8.6.0",
     "express": "^4.21.2",
+    "firebase": "^12.3.0",
     "framer-motion": "^12.23.22",
     "input-otp": "^1.4.2",
     "jose": "6.1.0",

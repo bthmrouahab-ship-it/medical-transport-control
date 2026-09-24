@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
   Accessibility,
@@ -46,6 +46,7 @@ import {
   type VehicleRequest,
 } from "@shared/transport";
 import Home from "./Home";
+import { loadState, removeState, saveState, subscribeState } from "@/lib/appStore";
 
 type Role = "clinic" | "buildingSupervisor" | "fleetSupervisor";
 type Session = { role: Role; name: string };
@@ -111,18 +112,6 @@ const seedRequests: VehicleRequest[] = [
   },
 ];
 
-function loadState<T>(key: string, fallback: T): T {
-  try {
-    const value = localStorage.getItem(key);
-    return value ? JSON.parse(value) as T : fallback;
-  } catch {
-    return fallback;
-  }
-}
-
-function saveState<T>(key: string, value: T) {
-  localStorage.setItem(key, JSON.stringify(value));
-}
 
 function loadAppointments() {
   const stored = loadState<unknown[]>("fox_appointments", seedAppointments);
@@ -166,7 +155,7 @@ export default function RolePortal() {
   return (
     <RoleShell
       session={session}
-      onLogout={() => { setSession(null); localStorage.removeItem("fox_session"); }}
+      onLogout={() => { setSession(null); removeState("fox_session"); }}
       onManager={() => setShowManager(true)}
     />
   );
@@ -248,6 +237,14 @@ function RoleShell({ session, onLogout, onManager }: { session: Session; onLogou
   const isBuildingSupervisor = session.role === "buildingSupervisor";
   const isFleetSupervisor = session.role === "fleetSupervisor";
   const title = isClinic ? "مواعيد العيادة" : isBuildingSupervisor ? "طلبات واستلام المرضى" : "إدارة السيارات";
+
+  // تحديث الشاشة فورًا عند وصول تغييرات من مستخدمين آخرين
+  useEffect(() => subscribeState((key) => {
+    if (key === "fox_appointments") setAppointments(loadAppointments());
+    else if (key === "fox_requests") setRequests(loadRequests());
+    else if (key === "fox_fleet") setFleetVehicles(loadState("fox_fleet", vehicles));
+    else if (key === "fox_audit") setAudit(loadState("fox_audit", []));
+  }), []);
 
   function updateAppointments(next: ClinicAppointment[]) { setAppointments(next); saveState("fox_appointments", next); }
   function updateRequests(next: VehicleRequest[]) { setRequests(next); saveState("fox_requests", next); }
