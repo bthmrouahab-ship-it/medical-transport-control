@@ -7,7 +7,15 @@
  * للآخرين مباشرة. بيانات الجلسة (تسجيل الدخول) تبقى محلية دائمًا.
  */
 
-export const SHARED_KEYS = ["fox_appointments", "fox_requests", "fox_fleet", "fox_audit"] as const;
+export const SHARED_KEYS = [
+  "fox_appointments",
+  "fox_requests",
+  "fox_fleet",
+  "fox_audit",
+  "fox_hospitals",
+  "fox_history",
+  "fox_locations",
+] as const;
 export type SharedKey = (typeof SHARED_KEYS)[number];
 
 export interface SharedBackend {
@@ -24,6 +32,7 @@ type Listener = (key: string) => void;
 const cache = new Map<string, unknown>();
 const listeners = new Set<Listener>();
 let backend: SharedBackend | null = null;
+let stopWatching: (() => void) | null = null;
 let onError: ((error: unknown) => void) | null = null;
 
 function isShared(key: string): key is SharedKey {
@@ -49,18 +58,33 @@ function writeLocal(key: string, value: unknown) {
 
 /** يفعّل قاعدة بيانات مشتركة بدل التخزين المحلي، ويحمّل بياناتها قبل عرض الواجهة. */
 export async function setSharedBackend(next: SharedBackend, handleError?: (error: unknown) => void) {
+  clearSharedBackend();
   const initial = await next.init();
   for (const key of SHARED_KEYS) {
     if (initial[key] !== undefined) cache.set(key, initial[key]);
   }
   backend = next;
   onError = handleError ?? null;
-  next.watch((key, value) => {
+  stopWatching = next.watch((key, value) => {
     if (JSON.stringify(cache.get(key)) === JSON.stringify(value)) return;
     if (value === undefined) cache.delete(key);
     else cache.set(key, value);
     listeners.forEach((listener) => listener(key));
   });
+}
+
+/** يوقف المزامنة ويمسح البيانات من الذاكرة (عند تسجيل الخروج). */
+export function clearSharedBackend() {
+  stopWatching?.();
+  stopWatching = null;
+  backend = null;
+  onError = null;
+  cache.clear();
+}
+
+/** هل توجد قيمة محفوظة لهذا المفتاح المشترك في قاعدة البيانات؟ */
+export function hasSharedState(key: SharedKey) {
+  return cache.has(key);
 }
 
 export function isUsingSharedBackend() {
@@ -82,6 +106,8 @@ export function saveState<T>(key: string, value: T) {
       console.error("[appStore] فشل الحفظ", error);
       onError?.(error);
     });
+    // إبلاغ باقي أجزاء الصفحة التي تعرض نفس البيانات
+    queueMicrotask(() => listeners.forEach((listener) => listener(key)));
     return;
   }
   writeLocal(key, value);
@@ -95,7 +121,7 @@ export function removeState(key: string) {
   }
 }
 
-/** يستدعي listener كلما وصل تغيير من مستخدم آخر لأحد المفاتيح المشتركة. */
+/** يستدعي listener كلما تغيّر أحد المفاتيح المشتركة (من هذا المستخدم أو من غيره). */
 export function subscribeState(listener: Listener) {
   listeners.add(listener);
   return () => {

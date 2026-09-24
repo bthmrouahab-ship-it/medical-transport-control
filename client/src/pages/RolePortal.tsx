@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import { onAuthStateChanged } from "firebase/auth";
 import {
   Accessibility,
   ArrowLeft,
@@ -7,13 +8,13 @@ import {
   Building2,
   CalendarDays,
   CheckCircle2,
-  ChevronLeft,
   ClipboardPlus,
   Clock3,
   Download,
   FileSpreadsheet,
   Hospital,
-  LockKeyhole,
+  KeyRound,
+  Loader2,
   LogOut,
   MapPin,
   Pencil,
@@ -31,10 +32,13 @@ import {
   XCircle,
 } from "lucide-react";
 import {
+  DEFAULT_VEHICLES,
   appointmentPickupLabel,
-  assignVehicle,
   assignVehicleForTrips,
   canRequestVehicle,
+  localDateString,
+  REQUEST_GRACE_MINUTES,
+  requestWindow,
   migrateAppointment,
   migrateRequest,
   parseImportedAppointments,
@@ -45,87 +49,41 @@ import {
   type Vehicle,
   type VehicleRequest,
 } from "@shared/transport";
-import Home from "./Home";
-import { loadState, removeState, saveState, subscribeState } from "@/lib/appStore";
+import type { UserProfile } from "@shared/users";
+import { matchHospital } from "@shared/hospitals";
+import { useHospitals, useNow } from "@/lib/useShared";
+import FleetDashboard from "@/components/FleetDashboard";
+import Login from "./Login";
+import AdminPanel from "./AdminPanel";
+import DriverPage from "./DriverPage";
+import ChangePasswordForm from "@/components/ChangePasswordForm";
+import { SHARED_KEYS, clearSharedBackend, loadState, removeState, saveState, setSharedBackend, subscribeState } from "@/lib/appStore";
+import { appendAudit } from "@/lib/audit";
+import { auth, authReady, firestore } from "@/lib/firebase";
+import { createFirestoreBackend } from "@/lib/firestoreBackend";
+import { isLoginInProgress, logout, watchProfile } from "@/lib/auth";
 
 type Role = "clinic" | "buildingSupervisor" | "fleetSupervisor";
 type Session = { role: Role; name: string };
 type ClinicView = "home" | "form";
 
-const vehicles: Vehicle[] = [
-  { plate: "943438", driver: "خرم", phone: "77712995", kind: "سيدان", available: true },
-  { plate: "956479", driver: "كمال", phone: "55339592", kind: "سيدان", available: true },
-  { plate: "108443", driver: "جودي عبد الرحمن", phone: "70734689", kind: "احتياجات خاصة", available: true },
-  { plate: "157724", driver: "محمد سراج", phone: "70922766", kind: "احتياجات خاصة", available: true },
-  { plate: "329538", driver: "عادل", phone: "55226916", kind: "باص", available: true },
-];
-
-const seedAppointments: ClinicAppointment[] = [
-  {
-    id: "APT-1001",
-    patientName: "مريض 001",
-    clinic: "مركز الثمامة الصحي",
-    buildingNumber: "12",
-    apartmentNumber: "4",
-    mobile: "55123456",
-    appointmentAt: "07:30",
-    kind: "عادي",
-    assistance: [],
-    status: "بانتظار طلب السيارة",
-  },
-  {
-    id: "APT-1002",
-    patientName: "مريض 002",
-    clinic: "مستشفى الوكرة",
-    buildingNumber: "28",
-    apartmentNumber: "7",
-    mobile: "55234567",
-    appointmentAt: "08:00",
-    kind: "احتياجات خاصة",
-    assistance: ["يحتاج مرافق", "كرسي متحرك"],
-    status: "بانتظار طلب السيارة",
-  },
-  {
-    id: "APT-1003",
-    patientName: "مريض 003",
-    clinic: "مستشفى سدرة",
-    buildingNumber: "31",
-    apartmentNumber: "2",
-    mobile: "55345678",
-    appointmentAt: "08:15",
-    kind: "عادي",
-    assistance: [],
-    status: "تم طلب السيارة",
-  },
-];
-
-const seedRequests: VehicleRequest[] = [
-  {
-    id: "REQ-2001",
-    appointmentId: "APT-1003",
-    vehiclePlate: "956479",
-    driver: "كمال",
-    direction: "ذهاب",
-    status: "تم إرسال السيارة",
-    notificationMethod: "whatsapp",
-    createdAt: "08:02",
-  },
-];
-
+/** تسجيل خروج تلقائي بعد هذه المدة من دون أي نشاط على الصفحة. */
+const IDLE_LOGOUT_MS = 60 * 60 * 1000;
 
 function loadAppointments() {
-  const stored = loadState<unknown[]>("fox_appointments", seedAppointments);
-  const migrated = stored
+  return loadState<unknown[]>("fox_appointments", [])
     .map((appointment, index) => migrateAppointment(appointment, index))
     .filter((appointment): appointment is ClinicAppointment => Boolean(appointment));
-  return migrated.length ? migrated : seedAppointments;
 }
 
 function loadRequests() {
-  return loadState<unknown[]>("fox_requests", seedRequests)
+  return loadState<unknown[]>("fox_requests", [])
     .map(migrateRequest)
     .filter((request): request is VehicleRequest => Boolean(request));
 }
+
+const byAppointmentTime = (a: ClinicAppointment, b: ClinicAppointment) =>
+  `${a.appointmentDate} ${a.appointmentAt}`.localeCompare(`${b.appointmentDate} ${b.appointmentAt}`);
 
 function RoleIcon({ role }: { role: Role }) {
   if (role === "clinic") return <Stethoscope className="h-5 w-5" />;
@@ -133,103 +91,211 @@ function RoleIcon({ role }: { role: Role }) {
   return <Truck className="h-5 w-5" />;
 }
 
-export default function RolePortal() {
-  const [session, setSession] = useState<Session | null>(() => loadState<Session | null>("fox_session", null));
-  const [showManager, setShowManager] = useState(false);
+type Gate =
+  | { status: "loading" }
+  | { status: "signedOut" }
+  | { status: "profile"; profile: UserProfile }
+  | { status: "ready"; profile: UserProfile }
+  | { status: "error"; message: string };
 
-  if (showManager) {
+/**
+ * بوابة الدخول: لا تُحمَّل أي بيانات قبل تسجيل الدخول بحساب مفعّل،
+ * ثم تُفتح صفحة الدور المسجل في ملف المستخدم (وليس دورًا يختاره المستخدم).
+ */
+export default function RolePortal() {
+  const [gate, setGate] = useState<Gate>({ status: "loading" });
+  const [changingPassword, setChangingPassword] = useState(false);
+  const [showManager, setShowManager] = useState(false);
+  // المستخدم الذي حُمّلت (أو يجري تحميل) بياناته المشتركة
+  const dataUid = useRef<string | null>(null);
+  const dataLoaded = useRef(false);
+
+  const signOutNow = useCallback(async (message?: string) => {
+    clearSharedBackend();
+    dataUid.current = null;
+    dataLoaded.current = false;
+    setShowManager(false);
+    setChangingPassword(false);
+    await logout().catch(() => {});
+    if (message) toast.error(message);
+  }, []);
+
+  useEffect(() => {
+    // مسح بقايا الإصدارات السابقة التي كانت تحفظ الجلسة وبيانات المرضى على الجهاز.
+    ["fox_session", ...SHARED_KEYS].forEach(removeState);
+
+    let stopProfile: (() => void) | null = null;
+    let stopAuth: (() => void) | null = null;
+    let cancelled = false;
+    authReady.then(() => {
+      if (cancelled) return;
+      stopAuth = onAuthStateChanged(auth, (user) => {
+        stopProfile?.();
+        stopProfile = null;
+        if (!user || user.isAnonymous) {
+          if (user) logout().catch(() => {});
+          clearSharedBackend();
+          dataUid.current = null;
+          dataLoaded.current = false;
+          setGate({ status: "signedOut" });
+          return;
+        }
+        // أثناء تسجيل الدخول تبقى شاشة الدخول ظاهرة حتى تظهر رسالة الخطأ إن كان الحساب موقوفًا
+        if (!isLoginInProgress()) setGate({ status: "loading" });
+        stopProfile = watchProfile(user.uid, (profile) => {
+          if (!profile || !profile.active) {
+            if (isLoginInProgress()) return;
+            signOutNow(profile ? "تم إيقاف حسابك. تواصل مع مدير النظام." : "انتهت صلاحية هذا الحساب. سجّل الدخول مرة أخرى.");
+            return;
+          }
+          // تحديث الملف (مثل تغيير الاسم) لا يعيد تحميل الصفحة؛ السائق لا يحتاج تحميل بيانات
+          const stillReady = (current: Gate) => current.status === "ready" && current.profile.uid === profile.uid
+            && (profile.role === "driver"
+              ? current.profile.role === "driver"
+              : dataLoaded.current && dataUid.current === profile.uid);
+          setGate((current) => stillReady(current)
+            ? { status: "ready", profile }
+            : { status: "profile", profile });
+        }, (error) => {
+          console.error("[auth] profile", error);
+          if (!isLoginInProgress()) signOutNow("تعذر التحقق من صلاحيات الحساب. سجّل الدخول مرة أخرى.");
+        });
+      });
+    });
+    return () => {
+      cancelled = true;
+      stopProfile?.();
+      stopAuth?.();
+    };
+  }, [signOutNow]);
+
+  // تحميل البيانات المشتركة بعد التحقق من الحساب وتغيير كلمة المرور المؤقتة.
+  useEffect(() => {
+    if (gate.status !== "profile" || gate.profile.mustChangePassword) return;
+    const profile = gate.profile;
+    // السائق لا يحمّل بيانات المرضى أو الطلبات؛ صفحته ترسل الموقع فقط
+    if (profile.role === "driver") {
+      clearSharedBackend();
+      dataUid.current = null;
+      dataLoaded.current = false;
+      setGate({ status: "ready", profile });
+      return;
+    }
+    if (dataUid.current === profile.uid) {
+      if (dataLoaded.current) setGate({ status: "ready", profile });
+      return;
+    }
+    dataUid.current = profile.uid;
+    dataLoaded.current = false;
+    setSharedBackend(createFirestoreBackend(firestore), (error) => {
+      console.error("[firestore]", error);
+      toast.error("تعذر حفظ التغيير في قاعدة البيانات. تحقق من الاتصال وحاول مرة أخرى.");
+    })
+      .then(() => {
+        if (dataUid.current !== profile.uid) return;
+        dataLoaded.current = true;
+        setGate((current) => current.status === "profile" && current.profile.uid === profile.uid ? { status: "ready", profile: current.profile } : current);
+      })
+      .catch((error) => {
+        console.error("[firestore] init", error);
+        if (dataUid.current !== profile.uid) return;
+        dataUid.current = null;
+        setGate({ status: "error", message: "تعذر تحميل البيانات. تحقق من الاتصال ثم أعد تحميل الصفحة." });
+      });
+  }, [gate]);
+
+  // تسجيل خروج تلقائي عند عدم النشاط
+  const signedIn = gate.status === "profile" || gate.status === "ready";
+  useEffect(() => {
+    if (!signedIn) return;
+    let last = Date.now();
+    const touch = () => { last = Date.now(); };
+    const events = ["pointerdown", "keydown", "scroll", "touchstart"] as const;
+    events.forEach((name) => window.addEventListener(name, touch, { passive: true }));
+    const timer = window.setInterval(() => {
+      if (Date.now() - last > IDLE_LOGOUT_MS) signOutNow("تم تسجيل الخروج تلقائيًا بسبب عدم النشاط.");
+    }, 60 * 1000);
+    return () => {
+      events.forEach((name) => window.removeEventListener(name, touch));
+      window.clearInterval(timer);
+    };
+  }, [signedIn, signOutNow]);
+
+  if (gate.status === "loading" || (gate.status === "profile" && !gate.profile.mustChangePassword)) {
+    return <div className="flex min-h-screen items-center justify-center bg-[#f5f7fb] text-slate-400" dir="rtl"><Loader2 className="h-6 w-6 animate-spin" /><span className="sr-only">جارٍ التحميل</span></div>;
+  }
+  if (gate.status === "signedOut") return <Login />;
+  if (gate.status === "error") {
     return (
-      <div>
-        <button onClick={() => setShowManager(false)} className="fixed left-5 top-5 z-50 rounded-xl bg-white px-4 py-2 text-sm font-bold text-slate-700 shadow-lg">
-          <ArrowLeft className="ml-1 inline h-4 w-4" /> العودة للبوابة
-        </button>
-        <Home />
+      <div className="flex min-h-screen items-center justify-center bg-[#f5f7fb] p-4" dir="rtl">
+        <div className="max-w-md rounded-2xl border border-slate-200 bg-white p-8 text-center">
+          <p className="font-bold text-slate-700">{gate.message}</p>
+          <div className="mt-5 flex justify-center gap-3">
+            <button onClick={() => window.location.reload()} className="rounded-xl bg-[#a61d2d] px-4 py-2 text-sm font-bold text-white">إعادة المحاولة</button>
+            <button onClick={() => signOutNow()} className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-bold text-slate-600">تسجيل الخروج</button>
+          </div>
+        </div>
       </div>
     );
   }
 
-  if (!session) {
-    return <Login onLogin={(next) => { setSession(next); saveState("fox_session", next); }} />;
+  const profile = gate.profile;
+  if (profile.mustChangePassword || changingPassword) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-[#f5f7fb] p-4">
+        <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 shadow-[0_24px_70px_rgba(16,35,63,.08)] sm:p-8">
+          <ChangePasswordForm
+            required={profile.mustChangePassword}
+            onDone={() => setChangingPassword(false)}
+            onCancel={profile.mustChangePassword ? () => signOutNow() : () => setChangingPassword(false)}
+          />
+        </div>
+      </div>
+    );
+  }
+
+  if (profile.role === "driver") {
+    return <DriverPage profile={profile} onLogout={() => signOutNow()} onChangePassword={() => setChangingPassword(true)} />;
+  }
+
+  if (profile.role === "admin") {
+    return <AdminPanel profile={profile} onLogout={() => signOutNow()} onChangePassword={() => setChangingPassword(true)} />;
+  }
+
+  if (showManager && profile.role === "fleetSupervisor") {
+    return (
+      <div className="min-h-screen bg-[#f5f7fb]" dir="rtl">
+        <header className="sticky top-0 z-[1000] flex h-[76px] items-center justify-between border-b border-slate-200 bg-[#f5f7fb]/95 px-5 backdrop-blur-xl lg:px-10">
+          <div><p className="text-xs font-semibold text-[#a61d2d]">مشرف السيارات</p><h1 className="text-xl font-bold">لوحة السيارات والخريطة</h1></div>
+          <button onClick={() => setShowManager(false)} className="flex items-center gap-1 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700">
+            <ArrowLeft className="h-4 w-4" /> العودة للطلبات
+          </button>
+        </header>
+        <main className="mx-auto max-w-7xl p-5 lg:p-10"><FleetDashboard actor={profile.displayName} /></main>
+      </div>
+    );
   }
 
   return (
     <RoleShell
-      session={session}
-      onLogout={() => { setSession(null); removeState("fox_session"); }}
+      key={profile.uid + profile.role}
+      session={{ role: profile.role, name: profile.displayName }}
+      onLogout={() => signOutNow()}
       onManager={() => setShowManager(true)}
+      onChangePassword={() => setChangingPassword(true)}
     />
   );
 }
 
-function Login({ onLogin }: { onLogin: (session: Session) => void }) {
-  const [role, setRole] = useState<Role>("buildingSupervisor");
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
-  const roles: { id: Role; title: string; description: string }[] = [
-    { id: "clinic", title: "العيادة", description: "إضافة مواعيد المرضى فقط" },
-    { id: "buildingSupervisor", title: "مشرف المبنى", description: "طلب السيارة وتأكيد الحضور والاستلام" },
-    { id: "fleetSupervisor", title: "مشرف السيارات", description: "إدارة السيارات والسائقين" },
-  ];
-  const demo = role === "clinic" ? "clinic / clinic123" : role === "buildingSupervisor" ? "building / building123" : "fleet / fleet123";
-
-  function submit(event: React.FormEvent) {
-    event.preventDefault();
-    const expected = role === "clinic" ? ["clinic", "clinic123"] : role === "buildingSupervisor" ? ["building", "building123"] : ["fleet", "fleet123"];
-    if (username !== expected[0] || password !== expected[1]) {
-      toast.error("اسم المستخدم أو كلمة المرور غير صحيحة");
-      return;
-    }
-    onLogin({ role, name: role === "clinic" ? "موظف العيادة" : role === "buildingSupervisor" ? "مشرف المبنى" : "مشرف السيارات" });
-  }
-
-  return (
-    <div className="flex min-h-screen items-center justify-center bg-[#f5f7fb] p-4" dir="rtl">
-      <div className="grid w-full max-w-5xl overflow-hidden rounded-[28px] border border-slate-200 bg-white shadow-[0_24px_70px_rgba(16,35,63,.12)] lg:grid-cols-[.9fr_1.1fr]">
-        <div className="hidden bg-[#10233f] p-10 text-white lg:block">
-          <div className="flex items-center gap-3">
-            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[#e43846] text-[#10233f]"><Truck className="h-6 w-6" /></div>
-            <div className="flex items-center gap-2">
-              <img src="/manus-storage/qrc-logo_b418c07b.png" alt="الهلال الأحمر القطري" className="h-10 w-28 rounded-lg bg-white p-1 object-contain" />
-              <div><p className="font-bold">الهلال الأحمر القطري</p><p className="text-xs text-slate-300">سيارات مجمع الثمامة</p></div>
-            </div>
-          </div>
-          <div className="mt-24">
-            <p className="text-sm font-bold text-[#ff9ba3]">دخول آمن حسب الدور</p>
-            <h1 className="mt-3 text-4xl font-bold leading-[1.25]">الموعد أولًا،<br />والسيارة في وقتها.</h1>
-            <p className="mt-5 max-w-sm text-sm leading-7 text-slate-300">لا يمكن إنشاء طلب سيارة من دون موعد طبي مسجل. كل دور يرى ما يحتاجه فقط.</p>
-          </div>
-          <div className="mt-24 flex items-center gap-2 text-xs text-slate-400"><LockKeyhole className="h-4 w-4 text-[#e43846]" /> صلاحيات منفصلة للعيادة ومشرف المبنى ومشرف السيارات</div>
-        </div>
-        <div className="p-6 sm:p-10">
-          <div className="lg:hidden"><img src="/manus-storage/qrc-logo_b418c07b.png" alt="الهلال الأحمر القطري" className="h-14 w-40 object-contain" /><h1 className="mt-2 text-2xl font-bold">سيارات مجمع الثمامة</h1></div>
-          <div className="mt-6">
-            <p className="text-sm font-bold text-[#a61d2d]">اختر نوع الدخول</p>
-            <div className="mt-4 grid gap-2 sm:grid-cols-3">
-              {roles.map((item) => (
-                <button key={item.id} onClick={() => setRole(item.id)} className={`min-h-[92px] rounded-2xl border p-3 text-right transition ${role === item.id ? "border-[#e6a1aa] bg-[#fff1f2] text-[#861b2a]" : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50"}`}>
-                  <div className="flex items-center justify-between"><RoleIcon role={item.id} /><span className={`h-2.5 w-2.5 rounded-full ${role === item.id ? "bg-[#1f9d88]" : "bg-slate-200"}`} /></div>
-                  <p className="mt-4 text-sm font-bold">{item.title}</p>
-                  <p className="mt-1 text-[10px] leading-4 text-slate-400">{item.description}</p>
-                </button>
-              ))}
-            </div>
-          </div>
-          <form onSubmit={submit} className="mt-8 space-y-4">
-            <Field label="اسم المستخدم" value={username} onChange={setUsername} placeholder="أدخل اسم المستخدم" />
-            <Field label="كلمة المرور" value={password} onChange={setPassword} placeholder="أدخل كلمة المرور" type="password" />
-            <button className="flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-[#a61d2d] text-sm font-bold text-white shadow-lg shadow-[#a61d2d]/20 hover:bg-[#8b1725]">دخول إلى البوابة <ChevronLeft className="h-4 w-4" /></button>
-          </form>
-          <p className="mt-5 rounded-xl bg-amber-50 p-3 text-center text-[11px] text-amber-700">بيانات التجربة: <b dir="ltr">{demo}</b></p>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function RoleShell({ session, onLogout, onManager }: { session: Session; onLogout: () => void; onManager: () => void }) {
+function RoleShell({ session, onLogout, onManager, onChangePassword }: {
+  session: Session;
+  onLogout: () => void;
+  onManager: () => void;
+  onChangePassword: () => void;
+}) {
   const [appointments, setAppointments] = useState<ClinicAppointment[]>(loadAppointments);
   const [requests, setRequests] = useState<VehicleRequest[]>(loadRequests);
-  const [fleetVehicles, setFleetVehicles] = useState<Vehicle[]>(() => loadState("fox_fleet", vehicles));
+  const [fleetVehicles, setFleetVehicles] = useState<Vehicle[]>(() => loadState("fox_fleet", DEFAULT_VEHICLES));
   const [audit, setAudit] = useState<string[]>(() => loadState("fox_audit", []));
   const [view, setView] = useState<ClinicView>("home");
   const [editingAppointment, setEditingAppointment] = useState<ClinicAppointment | null>(null);
@@ -242,7 +308,7 @@ function RoleShell({ session, onLogout, onManager }: { session: Session; onLogou
   useEffect(() => subscribeState((key) => {
     if (key === "fox_appointments") setAppointments(loadAppointments());
     else if (key === "fox_requests") setRequests(loadRequests());
-    else if (key === "fox_fleet") setFleetVehicles(loadState("fox_fleet", vehicles));
+    else if (key === "fox_fleet") setFleetVehicles(loadState("fox_fleet", DEFAULT_VEHICLES));
     else if (key === "fox_audit") setAudit(loadState("fox_audit", []));
   }), []);
 
@@ -250,9 +316,7 @@ function RoleShell({ session, onLogout, onManager }: { session: Session; onLogou
   function updateRequests(next: VehicleRequest[]) { setRequests(next); saveState("fox_requests", next); }
   function updateFleet(next: Vehicle[]) { setFleetVehicles(next); saveState("fox_fleet", next); }
   function logAudit(message: string) {
-    const next = [`${new Date().toLocaleString("ar-SA")} — ${message}`, ...audit].slice(0, 50);
-    setAudit(next);
-    saveState("fox_audit", next);
+    setAudit(appendAudit(message, session.name));
   }
 
   async function exportStats() {
@@ -267,6 +331,7 @@ function RoleShell({ session, onLogout, onManager }: { session: Session; onLogou
           "الوجهة": appointment.clinic,
           "رقم المبنى": appointment.buildingNumber,
           "رقم الشقة": appointment.apartmentNumber,
+          "تاريخ الموعد": appointment.appointmentDate,
           "وقت الموعد": appointment.appointmentAt,
           "نوع الرحلة": appointment.kind,
           "احتياجات المريض": appointment.assistance.join("، ") || "لا يحتاج",
@@ -278,7 +343,7 @@ function RoleShell({ session, onLogout, onManager }: { session: Session; onLogou
       const worksheet = XLSX.utils.json_to_sheet(rows);
       worksheet["!cols"] = [
         { wch: 16 }, { wch: 22 }, { wch: 16 }, { wch: 26 }, { wch: 12 }, { wch: 12 },
-        { wch: 12 }, { wch: 18 }, { wch: 24 }, { wch: 20 }, { wch: 34 },
+        { wch: 14 }, { wch: 12 }, { wch: 18 }, { wch: 24 }, { wch: 20 }, { wch: 34 },
       ];
       XLSX.utils.book_append_sheet(workbook, worksheet, "الإحصائيات");
       XLSX.writeFile(workbook, `medical-transport-statistics-${new Date().toISOString().slice(0, 10)}.xlsx`);
@@ -318,7 +383,7 @@ function RoleShell({ session, onLogout, onManager }: { session: Session; onLogou
     const next = editingAppointment
       ? appointments.map((item) => item.id === appointment.id ? appointment : item)
       : [...appointments, appointment];
-    updateAppointments(next.sort((a, b) => a.appointmentAt.localeCompare(b.appointmentAt)));
+    updateAppointments(next.sort(byAppointmentTime));
     logAudit(editingAppointment ? `تعديل الموعد ${appointment.id}` : `إضافة الموعد ${appointment.id}`);
     setEditingAppointment(null);
     setView("home");
@@ -346,6 +411,7 @@ function RoleShell({ session, onLogout, onManager }: { session: Session; onLogou
         <div className="flex items-center gap-2">
           <span className="hidden text-xs font-semibold text-slate-400 sm:inline">{session.name}</span>
           {isFleetSupervisor && <button onClick={onManager} className="hidden rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-600 hover:bg-slate-50 lg:inline">فتح لوحة السيارات</button>}
+          <button onClick={onChangePassword} aria-label="تغيير كلمة المرور" title="تغيير كلمة المرور" className="flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-500 hover:text-[#a61d2d]"><KeyRound className="h-4 w-4" /></button>
           <button aria-label="تسجيل الخروج" onClick={onLogout} className="flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-500 hover:text-red-600"><LogOut className="h-4 w-4" /></button>
         </div>
       </header>
@@ -358,7 +424,7 @@ function RoleShell({ session, onLogout, onManager }: { session: Session; onLogou
             onEdit={openEditAppointment}
             onDelete={deleteAppointment}
             onImport={(imported) => {
-              updateAppointments([...appointments, ...imported].sort((a, b) => a.appointmentAt.localeCompare(b.appointmentAt)));
+              updateAppointments([...appointments, ...imported].sort(byAppointmentTime));
               logAudit(`استيراد ${imported.length} موعد من Excel`);
             }}
           />
@@ -448,6 +514,8 @@ function ClinicHome({ appointments, onNew, onEdit, onDelete, onImport }: {
 }) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [importing, setImporting] = useState(false);
+  const hospitals = useHospitals();
+  const now = useNow();
 
   async function importExcel(file?: File) {
     if (!file) return;
@@ -458,7 +526,7 @@ function ClinicHome({ appointments, onNew, onEdit, onDelete, onImport }: {
       const firstSheet = workbook.SheetNames[0];
       if (!firstSheet) throw new Error("empty workbook");
       const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(workbook.Sheets[firstSheet], { defval: "" });
-      const result = parseImportedAppointments(rows, appointments);
+      const result = parseImportedAppointments(rows, appointments, Date.now(), localDateString(), hospitals);
       if (!result.appointments.length) {
         toast.error(result.errors[0] ?? "لم يتم العثور على مواعيد صالحة في الملف");
         return;
@@ -484,13 +552,14 @@ function ClinicHome({ appointments, onNew, onEdit, onDelete, onImport }: {
         "رقم المبنى": "12",
         "رقم الشقة": "4",
         "رقم الموبايل": "55123456",
+        "تاريخ الموعد": localDateString(),
         "وقت الموعد": "09:30",
         "نوع الرحلة": "عادي",
         "احتياجات المريض": "يحتاج مرافق، كرسي متحرك",
       }]);
       worksheet["!cols"] = [
         { wch: 22 }, { wch: 28 }, { wch: 14 }, { wch: 14 },
-        { wch: 16 }, { wch: 14 }, { wch: 18 }, { wch: 30 },
+        { wch: 16 }, { wch: 14 }, { wch: 14 }, { wch: 18 }, { wch: 30 },
       ];
       const workbook = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(workbook, worksheet, "المواعيد");
@@ -518,21 +587,21 @@ function ClinicHome({ appointments, onNew, onEdit, onDelete, onImport }: {
       />
 
       <div className="mb-6 grid gap-4 sm:grid-cols-3">
-        <InfoCard icon={CalendarDays} label="مواعيد اليوم" value={String(appointments.length)} tone="teal" />
+        <InfoCard icon={CalendarDays} label="مواعيد اليوم" value={String(appointments.filter((appointment) => appointment.appointmentDate === localDateString(now)).length)} tone="teal" />
         <InfoCard icon={Clock3} label="بانتظار السيارة" value={String(appointments.filter((appointment) => appointment.status === "بانتظار طلب السيارة").length)} tone="amber" />
         <InfoCard icon={CheckCircle2} label="مرتبطة بطلب سيارة" value={String(appointments.filter((appointment) => appointment.status !== "بانتظار طلب السيارة").length)} tone="blue" />
       </div>
 
       <div className="mb-6 flex items-start gap-3 rounded-2xl border border-blue-100 bg-blue-50 p-4 text-xs leading-6 text-blue-800">
         <FileSpreadsheet className="mt-0.5 h-5 w-5 shrink-0" />
-        <span><b>استيراد Excel:</b> استخدم القالب المعتمد. الأعمدة المطلوبة هي اسم المريض، المستشفى، رقم المبنى، رقم الشقة، رقم الموبايل، وقت الموعد، ونوع الرحلة. يمكن كتابة احتياجات المريض في عمود واحد.</span>
+        <span><b>استيراد Excel:</b> استخدم القالب المعتمد. الأعمدة المطلوبة هي اسم المريض، المستشفى، رقم المبنى، رقم الشقة، رقم الموبايل، وقت الموعد، ونوع الرحلة. عمود تاريخ الموعد اختياري (الافتراضي اليوم)، ويمكن كتابة احتياجات المريض في عمود واحد.</span>
       </div>
 
       <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
         <div className="border-b border-slate-100 p-5"><h3 className="font-bold">المواعيد المسجلة</h3><p className="mt-1 text-xs text-slate-400">التعديل والحذف متاحان قبل إنشاء طلب السيارة فقط.</p></div>
         <div className="divide-y divide-slate-100">
           {appointments.length
-            ? appointments.map((appointment) => <AppointmentCard key={appointment.id} appointment={appointment} onEdit={onEdit} onDelete={onDelete} />)
+            ? appointments.map((appointment) => <AppointmentCard key={appointment.id} appointment={appointment} now={now} onEdit={onEdit} onDelete={onDelete} />)
             : <EmptyState />}
         </div>
       </div>
@@ -549,11 +618,16 @@ function SupervisorHome({ appointments, requests, onRequest, onUpdateRequest, on
   onReturn: (appointment: ClinicAppointment, request: VehicleRequest) => void;
 }) {
   const [buildingFilter, setBuildingFilter] = useState("all");
+  const now = useNow();
   const pending = appointments.filter((appointment) => appointment.status !== "مكتملة");
   const buildingNumbers = Array.from(new Set(pending.map((appointment) => appointment.buildingNumber))).sort((first, second) => first.localeCompare(second, "ar", { numeric: true }));
-  const visibleAppointments = buildingFilter === "all"
+  // المواعيد التي انتهت مهلتها دون طلب تنزل لآخر القائمة
+  const isExpired = (appointment: ClinicAppointment) => appointment.status === "بانتظار طلب السيارة" && !requestWindow(appointment, now).open;
+  const visibleAppointments = (buildingFilter === "all"
     ? pending
-    : pending.filter((appointment) => appointment.buildingNumber === buildingFilter);
+    : pending.filter((appointment) => appointment.buildingNumber === buildingFilter))
+    .slice()
+    .sort((a, b) => Number(isExpired(a)) - Number(isExpired(b)) || byAppointmentTime(a, b));
 
   return (
     <>
@@ -576,7 +650,7 @@ function SupervisorHome({ appointments, requests, onRequest, onUpdateRequest, on
         {visibleAppointments.length
           ? visibleAppointments.map((appointment) => {
             const request = [...requests].reverse().find((item) => item.appointmentId === appointment.id);
-            return <SupervisorAppointment key={appointment.id} appointment={appointment} request={request} onRequest={onRequest} onUpdateRequest={onUpdateRequest} onCancel={onCancel} onReturn={onReturn} />;
+            return <SupervisorAppointment key={appointment.id} appointment={appointment} now={now} request={request} onRequest={onRequest} onUpdateRequest={onUpdateRequest} onCancel={onCancel} onReturn={onReturn} />;
           })
           : <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-10 text-center"><Building2 className="mx-auto h-8 w-8 text-slate-300" /><p className="mt-3 font-bold text-slate-600">لا توجد مواعيد مطابقة</p><p className="mt-1 text-sm text-slate-400">غيّر رقم المبنى من الفلتر لعرض مواعيد أخرى.</p></div>}
       </div>
@@ -584,8 +658,9 @@ function SupervisorHome({ appointments, requests, onRequest, onUpdateRequest, on
   );
 }
 
-function SupervisorAppointment({ appointment, request, onRequest, onUpdateRequest, onCancel, onReturn }: {
+function SupervisorAppointment({ appointment, now, request, onRequest, onUpdateRequest, onCancel, onReturn }: {
   appointment: ClinicAppointment;
+  now: Date;
   request?: VehicleRequest;
   onRequest: (request: VehicleRequest, appointmentId: string) => void;
   onUpdateRequest: (requestId: string, status: VehicleRequest["status"]) => void;
@@ -594,7 +669,14 @@ function SupervisorAppointment({ appointment, request, onRequest, onUpdateReques
 }) {
   const [method, setMethod] = useState<"whatsapp" | "call">("whatsapp");
 
+  const deadlineInfo = requestWindow(appointment, now);
+  const expired = !request && !deadlineInfo.open;
+
   function requestCar() {
+    if (!requestWindow(appointment).open) {
+      toast.error(`مضى أكثر من ${REQUEST_GRACE_MINUTES} دقيقة على الموعد. يجب أن تعدّل العيادة الموعد أولًا.`);
+      return;
+    }
     if (!canRequestVehicle(appointment, request)) {
       toast.error("لا يوجد موعد قابل للطلب");
       return;
@@ -625,7 +707,7 @@ function SupervisorAppointment({ appointment, request, onRequest, onUpdateReques
           <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-[#eef4f7] text-[#a61d2d]"><CalendarDays className="h-5 w-5" /></div>
           <div>
             <div className="flex flex-wrap items-center gap-2"><p className="font-bold">{appointment.patientName}</p><span className="rounded-full bg-slate-100 px-2 py-1 text-[10px] font-bold text-slate-500">{appointment.id}</span></div>
-            <p className="mt-1 text-xs text-slate-400">{appointment.appointmentAt} · {request?.direction === "عودة" ? appointment.clinic : pickup} إلى {request?.direction === "عودة" ? pickup : appointment.clinic} · {appointment.kind}</p>
+            <p className="mt-1 text-xs text-slate-400">{formatDay(appointment.appointmentDate, now)} {appointment.appointmentAt} · {request?.direction === "عودة" ? appointment.clinic : pickup} إلى {request?.direction === "عودة" ? pickup : appointment.clinic} · {appointment.kind}</p>
             <p className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-slate-400"><Phone className="h-3.5 w-3.5" /><span dir="ltr">{appointment.mobile}</span>{assistance && <><span>·</span><Accessibility className="h-3.5 w-3.5" /><span>{assistance}</span></>}</p>
           </div>
         </div>
@@ -638,8 +720,12 @@ function SupervisorAppointment({ appointment, request, onRequest, onUpdateReques
         )}
         <span className={`w-fit rounded-full px-3 py-1.5 text-xs font-bold ${request ? "bg-violet-50 text-violet-700" : "bg-amber-50 text-amber-700"}`}>{request?.status ?? "بانتظار الطلب"}</span>
 
-        {!request && (
-          <div className="flex items-center gap-2">
+        {expired && (
+          <div className="flex max-w-xs items-start gap-2 rounded-xl bg-red-50 px-3 py-2 text-xs font-bold leading-5 text-red-700"><XCircle className="mt-0.5 h-4 w-4 shrink-0" /> مضى أكثر من {REQUEST_GRACE_MINUTES} دقيقة على الموعد. لا يمكن طلب السيارة حتى تعدّل العيادة الموعد.</div>
+        )}
+        {!request && !expired && (
+          <div className="flex flex-wrap items-center gap-2">
+            <span className={`text-[11px] font-bold ${deadlineInfo.minutesLeft <= 15 ? "text-red-600" : "text-slate-400"}`}>آخر موعد للطلب {String(deadlineInfo.deadline.getHours()).padStart(2, "0")}:{String(deadlineInfo.deadline.getMinutes()).padStart(2, "0")}</span>
             <select value={method} onChange={(event) => setMethod(event.target.value as "whatsapp" | "call")} className="h-10 rounded-xl border border-slate-200 bg-white px-2 text-xs font-bold"><option value="whatsapp">واتساب</option><option value="call">اتصال</option></select>
             <button onClick={requestCar} className="flex min-h-10 items-center gap-2 rounded-xl bg-[#a61d2d] px-3 text-xs font-bold text-white hover:bg-[#8b1725]"><BellRing className="h-4 w-4" /> طلب السيارة</button>
           </div>
@@ -672,7 +758,10 @@ function FleetSupervisorNotice({ vehicles: currentVehicles, appointments, reques
   const pendingAppointments = pendingRequests
     .map((request) => appointments.find((appointment) => appointment.id === request.appointmentId))
     .filter((appointment): appointment is ClinicAppointment => Boolean(appointment));
-  const groupSuggestions = suggestTripGroups(pendingAppointments).slice(0, 4);
+  const hospitals = useHospitals();
+  const groupSuggestions = suggestTripGroups(pendingAppointments, hospitals).slice(0, 4);
+  const zoneOf = (appointment: ClinicAppointment) => (appointment.hospitalId && hospitals.find((hospital) => hospital.id === appointment.hospitalId)?.zone)
+    || matchHospital(appointment.clinic, hospitals)?.zone;
   const sentRequests = [...requests].filter((request) => request.status !== "بانتظار التوزيع").reverse().slice(0, 6);
 
   function dispatchRequest(request: VehicleRequest, appointment: ClinicAppointment) {
@@ -732,7 +821,7 @@ function FleetSupervisorNotice({ vehicles: currentVehicles, appointments, reques
               <div key={request.id} className="grid gap-4 p-5 lg:grid-cols-[1.4fr_.8fr_auto] lg:items-center">
                 <div>
                   <div className="flex flex-wrap items-center gap-2"><p className="font-bold">{appointment.patientName}</p><span className="rounded-full bg-slate-100 px-2 py-1 text-[10px] font-bold text-slate-500">{request.direction} · {request.id}</span></div>
-                  <p className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-500"><Clock3 className="h-4 w-4" />{appointment.appointmentAt}<MapPin className="mr-2 h-4 w-4" />{appointmentPickupLabel(appointment)} إلى {appointment.clinic}</p>
+                  <p className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-500"><Clock3 className="h-4 w-4" />{appointment.appointmentDate === localDateString() ? "" : `${appointment.appointmentDate} `}{appointment.appointmentAt}<MapPin className="mr-2 h-4 w-4" />{appointmentPickupLabel(appointment)} إلى {appointment.clinic}{zoneOf(appointment) && <span className="rounded-full bg-blue-50 px-2 py-0.5 text-[10px] font-bold text-blue-700">{zoneOf(appointment)}</span>}</p>
                   <p className="mt-2 text-[11px] text-slate-400">{appointment.kind} · الإشعار المطلوب: {request.notificationMethod === "whatsapp" ? "واتساب" : "اتصال تلقائي"}</p>
                 </div>
                 <label>
@@ -750,7 +839,7 @@ function FleetSupervisorNotice({ vehicles: currentVehicles, appointments, reques
       </section>
 
       <section className="mt-6 overflow-hidden rounded-2xl border border-blue-100 bg-white">
-        <div className="border-b border-blue-100 bg-blue-50/60 p-5"><h3 className="flex items-center gap-2 font-bold text-blue-900"><Sparkles className="h-5 w-5" /> اقتراحات جمع الرحلات</h3><p className="mt-1 text-xs leading-5 text-blue-700">المعادلة: 45 نقطة للقرب الزمني ناقص فرق الدقائق، +35 لنفس المبنى، +25 لنفس الوجهة، +10 لنفس نوع الرحلة. يظهر الاقتراح عند 55 نقطة فأكثر وخلال 45 دقيقة.</p></div>
+        <div className="border-b border-blue-100 bg-blue-50/60 p-5"><h3 className="flex items-center gap-2 font-bold text-blue-900"><Sparkles className="h-5 w-5" /> اقتراحات جمع الرحلات</h3><p className="mt-1 text-xs leading-5 text-blue-700">المعادلة: 45 نقطة للقرب الزمني ناقص فرق الدقائق، +35 لنفس المبنى، +25 لنفس المستشفى أو +20 لمستشفيات متجاورة (حتى 3 كم، مثل مباني مدينة حمد الطبية) أو +10 لنفس الاتجاه (حتى 8 كم)، +10 لنفس نوع الرحلة. يظهر الاقتراح عند 55 نقطة فأكثر وخلال 45 دقيقة.</p></div>
         <div className="grid gap-4 p-5 lg:grid-cols-2">
           {groupSuggestions.length ? groupSuggestions.map((suggestion) => {
             const groupedAppointments = suggestion.appointmentIds.map((id) => appointments.find((appointment) => appointment.id === id)).filter((appointment): appointment is ClinicAppointment => Boolean(appointment));
@@ -789,12 +878,14 @@ function FleetSupervisorNotice({ vehicles: currentVehicles, appointments, reques
 }
 
 function ClinicForm({ initial, onBack, onSave }: { initial: ClinicAppointment | null; onBack: () => void; onSave: (appointment: ClinicAppointment) => void }) {
+  const hospitals = useHospitals();
   const [form, setForm] = useState(() => ({
     patientName: initial?.patientName ?? "",
     clinic: initial?.clinic ?? "",
     buildingNumber: initial?.buildingNumber ?? "",
     apartmentNumber: initial?.apartmentNumber ?? "",
     mobile: initial?.mobile === "-" ? "" : initial?.mobile ?? "",
+    appointmentDate: initial?.appointmentDate ?? localDateString(),
     appointmentAt: initial?.appointmentAt ?? "09:00",
     kind: initial?.kind ?? "عادي" as AppointmentKind,
     assistance: initial?.assistance ?? [] as AssistanceNeed[],
@@ -811,7 +902,7 @@ function ClinicForm({ initial, onBack, onSave }: { initial: ClinicAppointment | 
 
   function submit(event: React.FormEvent) {
     event.preventDefault();
-    if (!form.patientName || !form.clinic || !form.buildingNumber || !form.apartmentNumber || !form.mobile || !form.appointmentAt) {
+    if (!form.patientName || !form.clinic || !form.buildingNumber || !form.apartmentNumber || !form.mobile || !form.appointmentDate || !form.appointmentAt) {
       toast.error("أكمل بيانات المريض والمبنى والشقة والموبايل والموعد");
       return;
     }
@@ -820,8 +911,15 @@ function ClinicForm({ initial, onBack, onSave }: { initial: ClinicAppointment | 
       toast.error("أدخل رقم موبايل صحيحًا من 8 إلى 15 رقمًا");
       return;
     }
+    if (!requestWindow(form).open) {
+      toast.error(`وقت الموعد مضى عليه أكثر من ${REQUEST_GRACE_MINUTES} دقيقة. أدخل التاريخ والوقت الصحيحين.`);
+      return;
+    }
+    const clinic = form.clinic.trim();
     onSave({
       ...form,
+      clinic,
+      hospitalId: matchHospital(clinic, hospitals)?.id,
       mobile: normalizedMobile,
       id: initial?.id ?? `APT-${Date.now().toString().slice(-6)}`,
       status: initial?.status ?? "بانتظار طلب السيارة",
@@ -838,10 +936,12 @@ function ClinicForm({ initial, onBack, onSave }: { initial: ClinicAppointment | 
         </div>
         <form onSubmit={submit} className="mt-7 grid gap-4 sm:grid-cols-2">
           <Field label="اسم المريض أو الرقم" value={form.patientName} onChange={(value) => setForm({ ...form, patientName: value })} placeholder="مريض 009" wide />
-          <Field label="اسم العيادة أو المستشفى" value={form.clinic} onChange={(value) => setForm({ ...form, clinic: value })} placeholder="مستشفى حمد العام" wide />
+          <Field label="اسم العيادة أو المستشفى" value={form.clinic} onChange={(value) => setForm({ ...form, clinic: value })} placeholder="اكتب أو اختر من القائمة" list="hospital-options" wide />
+          <datalist id="hospital-options">{hospitals.map((hospital) => <option key={hospital.id} value={hospital.name}>{hospital.zone}</option>)}</datalist>
           <Field label="رقم المبنى" value={form.buildingNumber} onChange={(value) => setForm({ ...form, buildingNumber: value })} placeholder="12" />
           <Field label="رقم الشقة" value={form.apartmentNumber} onChange={(value) => setForm({ ...form, apartmentNumber: value })} placeholder="4" />
           <Field label="رقم الموبايل" value={form.mobile} onChange={(value) => setForm({ ...form, mobile: value })} placeholder="55123456" type="tel" dir="ltr" />
+          <Field label="تاريخ الموعد" value={form.appointmentDate} onChange={(value) => setForm({ ...form, appointmentDate: value })} type="date" />
           <Field label="وقت الموعد" value={form.appointmentAt} onChange={(value) => setForm({ ...form, appointmentAt: value })} type="time" />
 
           <fieldset className="sm:col-span-2">
@@ -881,7 +981,7 @@ function ClinicForm({ initial, onBack, onSave }: { initial: ClinicAppointment | 
   );
 }
 
-function Field({ label, value, onChange, placeholder = "", type = "text", wide, dir }: {
+function Field({ label, value, onChange, placeholder = "", type = "text", wide, dir, list }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
@@ -889,36 +989,52 @@ function Field({ label, value, onChange, placeholder = "", type = "text", wide, 
   type?: string;
   wide?: boolean;
   dir?: "rtl" | "ltr";
+  list?: string;
 }) {
   return (
     <label className={`block ${wide ? "sm:col-span-2" : ""}`}>
       <span className="mb-1.5 block text-xs font-bold text-slate-600">{label}</span>
-      <input dir={dir} type={type} value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none focus:border-[#e6a1aa]" />
+      <input dir={dir} list={list} type={type} value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none focus:border-[#e6a1aa]" />
     </label>
   );
 }
 
-function AppointmentCard({ appointment, onEdit, onDelete }: {
+function AppointmentCard({ appointment, now, onEdit, onDelete }: {
   appointment: ClinicAppointment;
+  now: Date;
   onEdit: (appointment: ClinicAppointment) => void;
   onDelete: (appointment: ClinicAppointment) => void;
 }) {
   const editable = appointment.status === "بانتظار طلب السيارة";
+  const expired = editable && !requestWindow(appointment, now).open;
   return (
-    <div className="flex flex-col gap-4 p-5 lg:flex-row lg:items-center">
-      <div className="flex min-w-[95px] items-center gap-2 text-sm font-bold"><Clock3 className="h-4 w-4 text-slate-300" />{appointment.appointmentAt}</div>
+    <div className={`flex flex-col gap-4 p-5 lg:flex-row lg:items-center ${expired ? "bg-red-50/40" : ""}`}>
+      <div className="min-w-[95px] text-sm font-bold"><p className="flex items-center gap-2"><Clock3 className="h-4 w-4 text-slate-300" />{appointment.appointmentAt}</p><p className="mt-1 text-[11px] font-semibold text-slate-400">{formatDay(appointment.appointmentDate, now)}</p></div>
       <div className="flex-1">
         <div className="flex flex-wrap items-center gap-2"><p className="text-sm font-bold">{appointment.patientName}</p><span className="rounded-full bg-slate-100 px-2 py-1 text-[10px] font-bold text-slate-500">{appointment.id}</span></div>
         <p className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-400"><Building2 className="h-3.5 w-3.5" />{appointmentPickupLabel(appointment)}<span>·</span>{appointment.clinic}<span>·</span>{appointment.kind}</p>
         <p className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-slate-400"><Phone className="h-3.5 w-3.5" /><span dir="ltr">{appointment.mobile}</span>{appointment.assistance.length > 0 && <><span>·</span><Accessibility className="h-3.5 w-3.5" /><span>{appointment.assistance.join("، ")}</span></>}</p>
       </div>
-      <span className={`w-fit rounded-full px-3 py-1.5 text-xs font-bold ${appointment.status === "بانتظار طلب السيارة" ? "bg-amber-50 text-amber-700" : "bg-violet-50 text-violet-700"}`}>{appointment.status}</span>
+      {expired
+        ? <span className="w-fit rounded-full bg-red-100 px-3 py-1.5 text-xs font-bold text-red-700" title="لا يمكن لمشرف المبنى طلب سيارة حتى تعدّل الموعد">انتهت مهلة الطلب · عدّل الموعد</span>
+        : <span className={`w-fit rounded-full px-3 py-1.5 text-xs font-bold ${appointment.status === "بانتظار طلب السيارة" ? "bg-amber-50 text-amber-700" : "bg-violet-50 text-violet-700"}`}>{appointment.status}</span>}
       <div className="flex items-center gap-2">
         <button disabled={!editable} title={editable ? "تعديل الموعد" : "لا يمكن التعديل بعد طلب السيارة"} onClick={() => onEdit(appointment)} className="flex min-h-10 items-center gap-1 rounded-xl border border-slate-200 px-3 text-xs font-bold text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"><Pencil className="h-3.5 w-3.5" /> تعديل</button>
         <button disabled={!editable} title={editable ? "حذف الموعد" : "لا يمكن الحذف بعد طلب السيارة"} onClick={() => onDelete(appointment)} className="flex min-h-10 items-center gap-1 rounded-xl border border-red-100 px-3 text-xs font-bold text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-40"><Trash2 className="h-3.5 w-3.5" /> حذف</button>
       </div>
     </div>
   );
+}
+
+/** "اليوم" / "غدًا" / التاريخ */
+function formatDay(date: string, now: Date) {
+  const today = localDateString(now);
+  const tomorrow = localDateString(new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1));
+  const yesterday = localDateString(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1));
+  if (date === today) return "اليوم";
+  if (date === tomorrow) return "غدًا";
+  if (date === yesterday) return "أمس";
+  return date;
 }
 
 function InfoCard({ icon: Icon, label, value, tone }: { icon: typeof CalendarDays; label: string; value: string; tone: "teal" | "amber" | "blue" }) {

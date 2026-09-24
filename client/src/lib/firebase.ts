@@ -1,9 +1,9 @@
 import { initializeApp } from "firebase/app";
-import { getAuth, signInAnonymously } from "firebase/auth";
-import { getFirestore } from "firebase/firestore";
+import { browserSessionPersistence, connectAuthEmulator, getAuth, setPersistence, type Auth } from "firebase/auth";
+import { connectFirestoreEmulator, getFirestore } from "firebase/firestore";
 
 // إعدادات تطبيق الويب في Firebase (مشروع althumama-complex-car).
-// هذه القيم ليست سرية بطبيعتها؛ الحماية الفعلية تتم عبر قواعد Firestore (firestore.rules).
+// هذه القيم ليست سرية بطبيعتها؛ الحماية الفعلية تتم عبر تسجيل الدخول وقواعد Firestore (firestore.rules).
 // يمكن تجاوزها بمتغيرات VITE_FIREBASE_* في ملف .env عند الحاجة.
 const env = import.meta.env;
 export const firebaseConfig = {
@@ -17,10 +17,19 @@ export const firebaseConfig = {
 
 export const firebaseApp = initializeApp(firebaseConfig);
 export const firestore = getFirestore(firebaseApp);
+export const auth = getAuth(firebaseApp);
 
-/** تسجيل دخول مجهول حتى تسمح قواعد Firestore بالقراءة والكتابة. */
-export async function connectFirebase() {
-  const auth = getAuth(firebaseApp);
-  if (!auth.currentUser) await signInAnonymously(auth);
-  return firestore;
+// للتجربة المحلية فقط: `firebase emulators:start` ثم VITE_USE_FIREBASE_EMULATORS=true
+const usingEmulators = env.DEV && env.VITE_USE_FIREBASE_EMULATORS === "true";
+
+export function connectAuthToEmulator(target: Auth) {
+  if (usingEmulators) connectAuthEmulator(target, "http://127.0.0.1:9099", { disableWarnings: true });
 }
+
+connectAuthToEmulator(auth);
+if (usingEmulators) connectFirestoreEmulator(firestore, "127.0.0.1", 8080);
+
+// تنتهي الجلسة بإغلاق المتصفح حتى لا يبقى الحساب مفتوحًا على الأجهزة المشتركة.
+export const authReady = setPersistence(auth, browserSessionPersistence).catch((error) => {
+  console.error("[Firebase] تعذر ضبط مدة الجلسة", error);
+});
