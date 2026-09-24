@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import { onAuthStateChanged } from "firebase/auth";
 import {
   Accessibility,
   ArrowLeft,
@@ -7,13 +8,13 @@ import {
   Building2,
   CalendarDays,
   CheckCircle2,
-  ChevronLeft,
   ClipboardPlus,
   Clock3,
   Download,
   FileSpreadsheet,
   Hospital,
-  LockKeyhole,
+  KeyRound,
+  Loader2,
   LogOut,
   MapPin,
   Pencil,
@@ -31,8 +32,8 @@ import {
   XCircle,
 } from "lucide-react";
 import {
+  DEFAULT_VEHICLES,
   appointmentPickupLabel,
-  assignVehicle,
   assignVehicleForTrips,
   canRequestVehicle,
   migrateAppointment,
@@ -45,84 +46,32 @@ import {
   type Vehicle,
   type VehicleRequest,
 } from "@shared/transport";
+import type { UserProfile } from "@shared/users";
 import Home from "./Home";
-import { loadState, removeState, saveState, subscribeState } from "@/lib/appStore";
+import Login from "./Login";
+import AdminPanel from "./AdminPanel";
+import ChangePasswordForm from "@/components/ChangePasswordForm";
+import { SHARED_KEYS, clearSharedBackend, loadState, removeState, saveState, setSharedBackend, subscribeState } from "@/lib/appStore";
+import { appendAudit } from "@/lib/audit";
+import { auth, authReady, firestore } from "@/lib/firebase";
+import { createFirestoreBackend } from "@/lib/firestoreBackend";
+import { isLoginInProgress, logout, watchProfile } from "@/lib/auth";
 
 type Role = "clinic" | "buildingSupervisor" | "fleetSupervisor";
 type Session = { role: Role; name: string };
 type ClinicView = "home" | "form";
 
-const vehicles: Vehicle[] = [
-  { plate: "943438", driver: "خرم", phone: "77712995", kind: "سيدان", available: true },
-  { plate: "956479", driver: "كمال", phone: "55339592", kind: "سيدان", available: true },
-  { plate: "108443", driver: "جودي عبد الرحمن", phone: "70734689", kind: "احتياجات خاصة", available: true },
-  { plate: "157724", driver: "محمد سراج", phone: "70922766", kind: "احتياجات خاصة", available: true },
-  { plate: "329538", driver: "عادل", phone: "55226916", kind: "باص", available: true },
-];
-
-const seedAppointments: ClinicAppointment[] = [
-  {
-    id: "APT-1001",
-    patientName: "مريض 001",
-    clinic: "مركز الثمامة الصحي",
-    buildingNumber: "12",
-    apartmentNumber: "4",
-    mobile: "55123456",
-    appointmentAt: "07:30",
-    kind: "عادي",
-    assistance: [],
-    status: "بانتظار طلب السيارة",
-  },
-  {
-    id: "APT-1002",
-    patientName: "مريض 002",
-    clinic: "مستشفى الوكرة",
-    buildingNumber: "28",
-    apartmentNumber: "7",
-    mobile: "55234567",
-    appointmentAt: "08:00",
-    kind: "احتياجات خاصة",
-    assistance: ["يحتاج مرافق", "كرسي متحرك"],
-    status: "بانتظار طلب السيارة",
-  },
-  {
-    id: "APT-1003",
-    patientName: "مريض 003",
-    clinic: "مستشفى سدرة",
-    buildingNumber: "31",
-    apartmentNumber: "2",
-    mobile: "55345678",
-    appointmentAt: "08:15",
-    kind: "عادي",
-    assistance: [],
-    status: "تم طلب السيارة",
-  },
-];
-
-const seedRequests: VehicleRequest[] = [
-  {
-    id: "REQ-2001",
-    appointmentId: "APT-1003",
-    vehiclePlate: "956479",
-    driver: "كمال",
-    direction: "ذهاب",
-    status: "تم إرسال السيارة",
-    notificationMethod: "whatsapp",
-    createdAt: "08:02",
-  },
-];
-
+/** تسجيل خروج تلقائي بعد هذه المدة من دون أي نشاط على الصفحة. */
+const IDLE_LOGOUT_MS = 60 * 60 * 1000;
 
 function loadAppointments() {
-  const stored = loadState<unknown[]>("fox_appointments", seedAppointments);
-  const migrated = stored
+  return loadState<unknown[]>("fox_appointments", [])
     .map((appointment, index) => migrateAppointment(appointment, index))
     .filter((appointment): appointment is ClinicAppointment => Boolean(appointment));
-  return migrated.length ? migrated : seedAppointments;
 }
 
 function loadRequests() {
-  return loadState<unknown[]>("fox_requests", seedRequests)
+  return loadState<unknown[]>("fox_requests", [])
     .map(migrateRequest)
     .filter((request): request is VehicleRequest => Boolean(request));
 }
@@ -133,11 +82,161 @@ function RoleIcon({ role }: { role: Role }) {
   return <Truck className="h-5 w-5" />;
 }
 
-export default function RolePortal() {
-  const [session, setSession] = useState<Session | null>(() => loadState<Session | null>("fox_session", null));
-  const [showManager, setShowManager] = useState(false);
+type Gate =
+  | { status: "loading" }
+  | { status: "signedOut" }
+  | { status: "profile"; profile: UserProfile }
+  | { status: "ready"; profile: UserProfile }
+  | { status: "error"; message: string };
 
-  if (showManager) {
+/**
+ * بوابة الدخول: لا تُحمَّل أي بيانات قبل تسجيل الدخول بحساب مفعّل،
+ * ثم تُفتح صفحة الدور المسجل في ملف المستخدم (وليس دورًا يختاره المستخدم).
+ */
+export default function RolePortal() {
+  const [gate, setGate] = useState<Gate>({ status: "loading" });
+  const [changingPassword, setChangingPassword] = useState(false);
+  const [showManager, setShowManager] = useState(false);
+  // المستخدم الذي حُمّلت (أو يجري تحميل) بياناته المشتركة
+  const dataUid = useRef<string | null>(null);
+  const dataLoaded = useRef(false);
+
+  const signOutNow = useCallback(async (message?: string) => {
+    clearSharedBackend();
+    dataUid.current = null;
+    dataLoaded.current = false;
+    setShowManager(false);
+    setChangingPassword(false);
+    await logout().catch(() => {});
+    if (message) toast.error(message);
+  }, []);
+
+  useEffect(() => {
+    // مسح بقايا الإصدارات السابقة التي كانت تحفظ الجلسة وبيانات المرضى على الجهاز.
+    ["fox_session", ...SHARED_KEYS].forEach(removeState);
+
+    let stopProfile: (() => void) | null = null;
+    let stopAuth: (() => void) | null = null;
+    let cancelled = false;
+    authReady.then(() => {
+      if (cancelled) return;
+      stopAuth = onAuthStateChanged(auth, (user) => {
+        stopProfile?.();
+        stopProfile = null;
+        if (!user || user.isAnonymous) {
+          if (user) logout().catch(() => {});
+          clearSharedBackend();
+          dataUid.current = null;
+          dataLoaded.current = false;
+          setGate({ status: "signedOut" });
+          return;
+        }
+        // أثناء تسجيل الدخول تبقى شاشة الدخول ظاهرة حتى تظهر رسالة الخطأ إن كان الحساب موقوفًا
+        if (!isLoginInProgress()) setGate({ status: "loading" });
+        stopProfile = watchProfile(user.uid, (profile) => {
+          if (!profile || !profile.active) {
+            if (isLoginInProgress()) return;
+            signOutNow(profile ? "تم إيقاف حسابك. تواصل مع مدير النظام." : "انتهت صلاحية هذا الحساب. سجّل الدخول مرة أخرى.");
+            return;
+          }
+          setGate((current) => current.status === "ready" && dataLoaded.current && dataUid.current === profile.uid
+            ? { status: "ready", profile }
+            : { status: "profile", profile });
+        }, (error) => {
+          console.error("[auth] profile", error);
+          if (!isLoginInProgress()) signOutNow("تعذر التحقق من صلاحيات الحساب. سجّل الدخول مرة أخرى.");
+        });
+      });
+    });
+    return () => {
+      cancelled = true;
+      stopProfile?.();
+      stopAuth?.();
+    };
+  }, [signOutNow]);
+
+  // تحميل البيانات المشتركة بعد التحقق من الحساب وتغيير كلمة المرور المؤقتة.
+  useEffect(() => {
+    if (gate.status !== "profile" || gate.profile.mustChangePassword) return;
+    const profile = gate.profile;
+    if (dataUid.current === profile.uid) {
+      if (dataLoaded.current) setGate({ status: "ready", profile });
+      return;
+    }
+    dataUid.current = profile.uid;
+    dataLoaded.current = false;
+    setSharedBackend(createFirestoreBackend(firestore), (error) => {
+      console.error("[firestore]", error);
+      toast.error("تعذر حفظ التغيير في قاعدة البيانات. تحقق من الاتصال وحاول مرة أخرى.");
+    })
+      .then(() => {
+        if (dataUid.current !== profile.uid) return;
+        dataLoaded.current = true;
+        setGate((current) => current.status === "profile" && current.profile.uid === profile.uid ? { status: "ready", profile: current.profile } : current);
+      })
+      .catch((error) => {
+        console.error("[firestore] init", error);
+        if (dataUid.current !== profile.uid) return;
+        dataUid.current = null;
+        setGate({ status: "error", message: "تعذر تحميل البيانات. تحقق من الاتصال ثم أعد تحميل الصفحة." });
+      });
+  }, [gate]);
+
+  // تسجيل خروج تلقائي عند عدم النشاط
+  const signedIn = gate.status === "profile" || gate.status === "ready";
+  useEffect(() => {
+    if (!signedIn) return;
+    let last = Date.now();
+    const touch = () => { last = Date.now(); };
+    const events = ["pointerdown", "keydown", "scroll", "touchstart"] as const;
+    events.forEach((name) => window.addEventListener(name, touch, { passive: true }));
+    const timer = window.setInterval(() => {
+      if (Date.now() - last > IDLE_LOGOUT_MS) signOutNow("تم تسجيل الخروج تلقائيًا بسبب عدم النشاط.");
+    }, 60 * 1000);
+    return () => {
+      events.forEach((name) => window.removeEventListener(name, touch));
+      window.clearInterval(timer);
+    };
+  }, [signedIn, signOutNow]);
+
+  if (gate.status === "loading" || (gate.status === "profile" && !gate.profile.mustChangePassword)) {
+    return <div className="flex min-h-screen items-center justify-center bg-[#f5f7fb] text-slate-400" dir="rtl"><Loader2 className="h-6 w-6 animate-spin" /><span className="sr-only">جارٍ التحميل</span></div>;
+  }
+  if (gate.status === "signedOut") return <Login />;
+  if (gate.status === "error") {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-[#f5f7fb] p-4" dir="rtl">
+        <div className="max-w-md rounded-2xl border border-slate-200 bg-white p-8 text-center">
+          <p className="font-bold text-slate-700">{gate.message}</p>
+          <div className="mt-5 flex justify-center gap-3">
+            <button onClick={() => window.location.reload()} className="rounded-xl bg-[#a61d2d] px-4 py-2 text-sm font-bold text-white">إعادة المحاولة</button>
+            <button onClick={() => signOutNow()} className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-bold text-slate-600">تسجيل الخروج</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const profile = gate.profile;
+  if (profile.mustChangePassword || changingPassword) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-[#f5f7fb] p-4">
+        <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 shadow-[0_24px_70px_rgba(16,35,63,.08)] sm:p-8">
+          <ChangePasswordForm
+            required={profile.mustChangePassword}
+            onDone={() => setChangingPassword(false)}
+            onCancel={profile.mustChangePassword ? () => signOutNow() : () => setChangingPassword(false)}
+          />
+        </div>
+      </div>
+    );
+  }
+
+  if (profile.role === "admin") {
+    return <AdminPanel profile={profile} onLogout={() => signOutNow()} onChangePassword={() => setChangingPassword(true)} />;
+  }
+
+  if (showManager && profile.role === "fleetSupervisor") {
     return (
       <div>
         <button onClick={() => setShowManager(false)} className="fixed left-5 top-5 z-50 rounded-xl bg-white px-4 py-2 text-sm font-bold text-slate-700 shadow-lg">
@@ -148,88 +247,26 @@ export default function RolePortal() {
     );
   }
 
-  if (!session) {
-    return <Login onLogin={(next) => { setSession(next); saveState("fox_session", next); }} />;
-  }
-
   return (
     <RoleShell
-      session={session}
-      onLogout={() => { setSession(null); removeState("fox_session"); }}
+      key={profile.uid + profile.role}
+      session={{ role: profile.role, name: profile.displayName }}
+      onLogout={() => signOutNow()}
       onManager={() => setShowManager(true)}
+      onChangePassword={() => setChangingPassword(true)}
     />
   );
 }
 
-function Login({ onLogin }: { onLogin: (session: Session) => void }) {
-  const [role, setRole] = useState<Role>("buildingSupervisor");
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
-  const roles: { id: Role; title: string; description: string }[] = [
-    { id: "clinic", title: "العيادة", description: "إضافة مواعيد المرضى فقط" },
-    { id: "buildingSupervisor", title: "مشرف المبنى", description: "طلب السيارة وتأكيد الحضور والاستلام" },
-    { id: "fleetSupervisor", title: "مشرف السيارات", description: "إدارة السيارات والسائقين" },
-  ];
-  const demo = role === "clinic" ? "clinic / clinic123" : role === "buildingSupervisor" ? "building / building123" : "fleet / fleet123";
-
-  function submit(event: React.FormEvent) {
-    event.preventDefault();
-    const expected = role === "clinic" ? ["clinic", "clinic123"] : role === "buildingSupervisor" ? ["building", "building123"] : ["fleet", "fleet123"];
-    if (username !== expected[0] || password !== expected[1]) {
-      toast.error("اسم المستخدم أو كلمة المرور غير صحيحة");
-      return;
-    }
-    onLogin({ role, name: role === "clinic" ? "موظف العيادة" : role === "buildingSupervisor" ? "مشرف المبنى" : "مشرف السيارات" });
-  }
-
-  return (
-    <div className="flex min-h-screen items-center justify-center bg-[#f5f7fb] p-4" dir="rtl">
-      <div className="grid w-full max-w-5xl overflow-hidden rounded-[28px] border border-slate-200 bg-white shadow-[0_24px_70px_rgba(16,35,63,.12)] lg:grid-cols-[.9fr_1.1fr]">
-        <div className="hidden bg-[#10233f] p-10 text-white lg:block">
-          <div className="flex items-center gap-3">
-            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[#e43846] text-[#10233f]"><Truck className="h-6 w-6" /></div>
-            <div className="flex items-center gap-2">
-              <img src="/manus-storage/qrc-logo_b418c07b.png" alt="الهلال الأحمر القطري" className="h-10 w-28 rounded-lg bg-white p-1 object-contain" />
-              <div><p className="font-bold">الهلال الأحمر القطري</p><p className="text-xs text-slate-300">سيارات مجمع الثمامة</p></div>
-            </div>
-          </div>
-          <div className="mt-24">
-            <p className="text-sm font-bold text-[#ff9ba3]">دخول آمن حسب الدور</p>
-            <h1 className="mt-3 text-4xl font-bold leading-[1.25]">الموعد أولًا،<br />والسيارة في وقتها.</h1>
-            <p className="mt-5 max-w-sm text-sm leading-7 text-slate-300">لا يمكن إنشاء طلب سيارة من دون موعد طبي مسجل. كل دور يرى ما يحتاجه فقط.</p>
-          </div>
-          <div className="mt-24 flex items-center gap-2 text-xs text-slate-400"><LockKeyhole className="h-4 w-4 text-[#e43846]" /> صلاحيات منفصلة للعيادة ومشرف المبنى ومشرف السيارات</div>
-        </div>
-        <div className="p-6 sm:p-10">
-          <div className="lg:hidden"><img src="/manus-storage/qrc-logo_b418c07b.png" alt="الهلال الأحمر القطري" className="h-14 w-40 object-contain" /><h1 className="mt-2 text-2xl font-bold">سيارات مجمع الثمامة</h1></div>
-          <div className="mt-6">
-            <p className="text-sm font-bold text-[#a61d2d]">اختر نوع الدخول</p>
-            <div className="mt-4 grid gap-2 sm:grid-cols-3">
-              {roles.map((item) => (
-                <button key={item.id} onClick={() => setRole(item.id)} className={`min-h-[92px] rounded-2xl border p-3 text-right transition ${role === item.id ? "border-[#e6a1aa] bg-[#fff1f2] text-[#861b2a]" : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50"}`}>
-                  <div className="flex items-center justify-between"><RoleIcon role={item.id} /><span className={`h-2.5 w-2.5 rounded-full ${role === item.id ? "bg-[#1f9d88]" : "bg-slate-200"}`} /></div>
-                  <p className="mt-4 text-sm font-bold">{item.title}</p>
-                  <p className="mt-1 text-[10px] leading-4 text-slate-400">{item.description}</p>
-                </button>
-              ))}
-            </div>
-          </div>
-          <form onSubmit={submit} className="mt-8 space-y-4">
-            <Field label="اسم المستخدم" value={username} onChange={setUsername} placeholder="أدخل اسم المستخدم" />
-            <Field label="كلمة المرور" value={password} onChange={setPassword} placeholder="أدخل كلمة المرور" type="password" />
-            <button className="flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-[#a61d2d] text-sm font-bold text-white shadow-lg shadow-[#a61d2d]/20 hover:bg-[#8b1725]">دخول إلى البوابة <ChevronLeft className="h-4 w-4" /></button>
-          </form>
-          <p className="mt-5 rounded-xl bg-amber-50 p-3 text-center text-[11px] text-amber-700">بيانات التجربة: <b dir="ltr">{demo}</b></p>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function RoleShell({ session, onLogout, onManager }: { session: Session; onLogout: () => void; onManager: () => void }) {
+function RoleShell({ session, onLogout, onManager, onChangePassword }: {
+  session: Session;
+  onLogout: () => void;
+  onManager: () => void;
+  onChangePassword: () => void;
+}) {
   const [appointments, setAppointments] = useState<ClinicAppointment[]>(loadAppointments);
   const [requests, setRequests] = useState<VehicleRequest[]>(loadRequests);
-  const [fleetVehicles, setFleetVehicles] = useState<Vehicle[]>(() => loadState("fox_fleet", vehicles));
+  const [fleetVehicles, setFleetVehicles] = useState<Vehicle[]>(() => loadState("fox_fleet", DEFAULT_VEHICLES));
   const [audit, setAudit] = useState<string[]>(() => loadState("fox_audit", []));
   const [view, setView] = useState<ClinicView>("home");
   const [editingAppointment, setEditingAppointment] = useState<ClinicAppointment | null>(null);
@@ -242,7 +279,7 @@ function RoleShell({ session, onLogout, onManager }: { session: Session; onLogou
   useEffect(() => subscribeState((key) => {
     if (key === "fox_appointments") setAppointments(loadAppointments());
     else if (key === "fox_requests") setRequests(loadRequests());
-    else if (key === "fox_fleet") setFleetVehicles(loadState("fox_fleet", vehicles));
+    else if (key === "fox_fleet") setFleetVehicles(loadState("fox_fleet", DEFAULT_VEHICLES));
     else if (key === "fox_audit") setAudit(loadState("fox_audit", []));
   }), []);
 
@@ -250,9 +287,7 @@ function RoleShell({ session, onLogout, onManager }: { session: Session; onLogou
   function updateRequests(next: VehicleRequest[]) { setRequests(next); saveState("fox_requests", next); }
   function updateFleet(next: Vehicle[]) { setFleetVehicles(next); saveState("fox_fleet", next); }
   function logAudit(message: string) {
-    const next = [`${new Date().toLocaleString("ar-SA")} — ${message}`, ...audit].slice(0, 50);
-    setAudit(next);
-    saveState("fox_audit", next);
+    setAudit(appendAudit(message, session.name));
   }
 
   async function exportStats() {
@@ -346,6 +381,7 @@ function RoleShell({ session, onLogout, onManager }: { session: Session; onLogou
         <div className="flex items-center gap-2">
           <span className="hidden text-xs font-semibold text-slate-400 sm:inline">{session.name}</span>
           {isFleetSupervisor && <button onClick={onManager} className="hidden rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-600 hover:bg-slate-50 lg:inline">فتح لوحة السيارات</button>}
+          <button onClick={onChangePassword} aria-label="تغيير كلمة المرور" title="تغيير كلمة المرور" className="flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-500 hover:text-[#a61d2d]"><KeyRound className="h-4 w-4" /></button>
           <button aria-label="تسجيل الخروج" onClick={onLogout} className="flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-500 hover:text-red-600"><LogOut className="h-4 w-4" /></button>
         </div>
       </header>

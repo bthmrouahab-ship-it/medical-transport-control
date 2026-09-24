@@ -7,10 +7,6 @@ import superjson from "superjson";
 import App from "./App";
 import { startLogin } from "./const";
 import "./index.css";
-import { toast } from "sonner";
-import { setSharedBackend } from "./lib/appStore";
-import { connectFirebase } from "./lib/firebase";
-import { createFirestoreBackend } from "./lib/firestoreBackend";
 
 const queryClient = new QueryClient();
 
@@ -86,19 +82,5 @@ function render() {
   );
 }
 
-// ربط البيانات المشتركة بقاعدة Firestore قبل عرض الواجهة.
-// عند تعذر الاتصال يعمل التطبيق بالحفظ المحلي على الجهاز (كما كان سابقًا) مع تنبيه.
-async function bootstrap() {
-  try {
-    const db = await connectFirebase();
-    await setSharedBackend(createFirestoreBackend(db), () => {
-      toast.error("تعذر حفظ التغيير في قاعدة البيانات. تحقق من الاتصال وحاول مرة أخرى.");
-    });
-  } catch (error) {
-    console.error("[Firebase] تعذر الاتصال، سيتم الحفظ محليًا", error);
-    setTimeout(() => toast.error("تعذر الاتصال بقاعدة البيانات، التغييرات تُحفظ على هذا الجهاز فقط."), 500);
-  }
-  render();
-}
-
-bootstrap();
+// تسجيل الدخول وتحميل البيانات المشتركة يتمان داخل بوابة الدخول (RolePortal).
+render();

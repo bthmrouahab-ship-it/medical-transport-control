@@ -1,20 +1,137 @@
 rules_version = '2';
 
-// قواعد مرحلة التجربة:
-// - القراءة والكتابة فقط لمن فتح الموقع (تسجيل دخول مجهول تلقائي من التطبيق).
-// - مسموح فقط بالمجموعات التي يستخدمها التطبيق، وبحجم معقول لكل مستند.
-// تنبيه: هذا لا يمنع شخصًا يعرف الرابط من الوصول للبيانات. قبل استخدام بيانات مرضى
-// حقيقية يجب إضافة تسجيل دخول حقيقي لكل مستخدم وتقييد القواعد حسب الدور.
+// قواعد الوصول حسب الدور:
+// - لا يُقرأ أو يُكتب أي شيء إلا بحساب مسجل له ملف في users بحالة active.
+// - الدور يُقرأ من ملف المستخدم في قاعدة البيانات، ولا يستطيع المستخدم تغييره بنفسه.
+// - المدير (admin) وحده يدير المستخدمين وبيانات السيارات.
+// - حساب المدير الأول يُنشأ مرة واحدة فقط (مستند meta/setup يمنع تكرار ذلك).
 service cloud.firestore {
   match /databases/{database}/documents {
-    match /{col}/{docId} {
-      allow read: if request.auth != null
-        && col in ['appointments', 'requests', 'fleet', 'meta'];
-      allow delete: if request.auth != null
-        && col in ['appointments', 'requests', 'fleet', 'meta'];
-      allow create, update: if request.auth != null
-        && col in ['appointments', 'requests', 'fleet', 'meta']
-        && request.resource.data.size() <= 40;
+
+    function signedIn() { return request.auth != null; }
+    function profile() { return get(/databases/$(database)/documents/users/$(request.auth.uid)).data; }
+    function isStaff() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && profile().active == true;
+    }
+    function hasRole(roles) { return isStaff() && profile().role in roles; }
+    function isAdmin() { return hasRole(['admin']); }
+
+    function setupDone() { return exists(/databases/$(database)/documents/meta/setup); }
+    function setupDoneAfter() { return existsAfter(/databases/$(database)/documents/meta/setup); }
+
+    // حد أقصى لعدد حقول مستندات البيانات التشغيلية
+    function reasonableSize() { return request.resource.data.size() <= 40; }
+
+    function validUsername(name) {
+      return name is string && name.matches('^[a-z0-9][a-z0-9._-]{2,31}$');
+    }
+    function validProfile(data, uid) {
+      return data.keys().hasOnly(['username', 'displayName', 'role', 'active', 'mustChangePassword', 'createdAt', 'createdBy'])
+        && data.keys().hasAll(['username', 'displayName', 'role', 'active', 'mustChangePassword'])
+        && validUsername(data.username)
+        && data.displayName is string && data.displayName.size() >= 2 && data.displayName.size() <= 60
+        && data.role in ['admin', 'clinic', 'buildingSupervisor', 'fleetSupervisor']
+        && data.active is bool
+        && data.mustChangePassword is bool
+        // اسم المستخدم يجب أن يشير إلى هذا الحساب نفسه
+        && getAfter(/databases/$(database)/documents/usernames/$(data.username)).data.uid == uid;
+    }
+
+    // ملفات المستخدمين والأدوار
+    match /users/{uid} {
+      allow get: if signedIn() && (request.auth.uid == uid || isAdmin());
+      allow list: if isAdmin();
+
+      allow create: if validProfile(request.resource.data, uid) && (
+        isAdmin()
+        // إنشاء المدير الأول مرة واحدة فقط
+        || (signedIn() && request.auth.uid == uid
+            && !setupDone() && setupDoneAfter()
+            && request.resource.data.role == 'admin'
+            && request.resource.data.active == true
+            && request.resource.data.username == 'admin')
+      );
+
+      // المدير يعدّل الآخرين؛ ولا يستطيع إيقاف نفسه أو سحب صلاحية المدير من نفسه
+      allow update: if (isAdmin()
+          && validProfile(request.resource.data, uid)
+          && request.resource.data.username == resource.data.username
+          && (uid != request.auth.uid
+              || (request.resource.data.role == 'admin' && request.resource.data.active == true)))
+        // المستخدم نفسه يستطيع فقط إلغاء علامة "يجب تغيير كلمة المرور" بعد تغييرها
+        || (signedIn() && request.auth.uid == uid
+            && resource.data.active == true
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['mustChangePassword'])
+            && request.resource.data.mustChangePassword == false);
+
+      allow delete: if isAdmin() && uid != request.auth.uid;
+    }
+
+    // ربط اسم المستخدم بحساب الدخول؛ يُقرأ مستند واحد بالاسم عند تسجيل الدخول ولا يمكن سرد القائمة
+    match /usernames/{name} {
+      allow get: if true;
+      allow list: if isAdmin();
+      allow create, update: if validUsername(name)
+        && request.resource.data.keys().hasOnly(['uid', 'email'])
+        && request.resource.data.uid is string
+        && request.resource.data.email is string
+        && getAfter(/databases/$(database)/documents/users/$(request.resource.data.uid)).data.username == name
+        && (isAdmin()
+            || (request.method == 'create' && name == 'admin'
+                && signedIn() && request.resource.data.uid == request.auth.uid
+                && !setupDone() && setupDoneAfter()));
+      allow delete: if false;
+    }
+
+    // مستند يثبت أن الإعداد الأول تم؛ يُقرأ قبل الدخول لمعرفة إن كان حساب المدير موجودًا
+    match /meta/setup {
+      allow get: if true;
+      allow create: if signedIn() && !setupDone()
+        && request.resource.data.keys().hasOnly(['adminUid', 'at'])
+        && request.resource.data.adminUid == request.auth.uid
+        && getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'
+        && getAfter(/databases/$(database)/documents/usernames/admin).data.uid == request.auth.uid;
+      allow update, delete: if false;
+    }
+
+    // سجل العمليات المشترك
+    match /meta/audit {
+      allow read: if isStaff();
+      allow write: if isStaff()
+        && request.resource.data.keys().hasOnly(['items'])
+        && request.resource.data.items is list
+        && request.resource.data.items.size() <= 50;
+    }
+
+    // المواعيد: تضيفها العيادة، ويحدّث مشرف المبنى حالتها
+    match /appointments/{id} {
+      allow read: if isStaff();
+      allow create: if hasRole(['admin', 'clinic']) && reasonableSize();
+      allow update: if hasRole(['admin', 'clinic', 'buildingSupervisor']) && reasonableSize();
+      allow delete: if hasRole(['admin', 'clinic']);
+    }
+
+    // طلبات السيارات: ينشئها مشرف المبنى، ويوزعها مشرف السيارات
+    match /requests/{id} {
+      allow read: if isStaff();
+      allow create: if hasRole(['admin', 'buildingSupervisor']) && reasonableSize();
+      allow update: if hasRole(['admin', 'buildingSupervisor', 'fleetSupervisor']) && reasonableSize();
+      allow delete: if hasRole(['admin', 'buildingSupervisor']);
+    }
+
+    // السيارات: المدير يعدّل كل البيانات، ومشرف السيارات يغيّر حالة الإتاحة فقط
+    match /fleet/{plate} {
+      allow read: if isStaff();
+      allow create, update: if isAdmin()
+        && request.resource.data.keys().hasOnly(['plate', 'driver', 'phone', 'kind', 'available', '_o'])
+        && request.resource.data.plate == plate
+        && request.resource.data.kind in ['سيدان', 'احتياجات خاصة', 'باص'];
+      allow update: if hasRole(['fleetSupervisor'])
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['available'])
+        && request.resource.data.available is bool;
+      allow delete: if isAdmin();
     }
   }
 }

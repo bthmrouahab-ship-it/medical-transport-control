@@ -24,6 +24,7 @@ type Listener = (key: string) => void;
 const cache = new Map<string, unknown>();
 const listeners = new Set<Listener>();
 let backend: SharedBackend | null = null;
+let stopWatching: (() => void) | null = null;
 let onError: ((error: unknown) => void) | null = null;
 
 function isShared(key: string): key is SharedKey {
@@ -49,18 +50,33 @@ function writeLocal(key: string, value: unknown) {
 
 /** يفعّل قاعدة بيانات مشتركة بدل التخزين المحلي، ويحمّل بياناتها قبل عرض الواجهة. */
 export async function setSharedBackend(next: SharedBackend, handleError?: (error: unknown) => void) {
+  clearSharedBackend();
   const initial = await next.init();
   for (const key of SHARED_KEYS) {
     if (initial[key] !== undefined) cache.set(key, initial[key]);
   }
   backend = next;
   onError = handleError ?? null;
-  next.watch((key, value) => {
+  stopWatching = next.watch((key, value) => {
     if (JSON.stringify(cache.get(key)) === JSON.stringify(value)) return;
     if (value === undefined) cache.delete(key);
     else cache.set(key, value);
     listeners.forEach((listener) => listener(key));
   });
+}
+
+/** يوقف المزامنة ويمسح البيانات من الذاكرة (عند تسجيل الخروج). */
+export function clearSharedBackend() {
+  stopWatching?.();
+  stopWatching = null;
+  backend = null;
+  onError = null;
+  cache.clear();
+}
+
+/** هل توجد قيمة محفوظة لهذا المفتاح المشترك في قاعدة البيانات؟ */
+export function hasSharedState(key: SharedKey) {
+  return cache.has(key);
 }
 
 export function isUsingSharedBackend() {

@@ -99,7 +99,7 @@ export function createFirestoreBackend(db: Firestore): SharedBackend {
           const body = clean({ ...item, _o: order.get(path) });
           ops.push(chain(path, () => setDoc(doc(db, cfg.col, id), body)));
         });
-        for (const id of before.keys()) {
+        for (const id of Array.from(before.keys())) {
           if (seen.has(id)) continue;
           const path = `${cfg.col}/${id}`;
           ops.push(chain(path, () => deleteDoc(doc(db, cfg.col, id))));

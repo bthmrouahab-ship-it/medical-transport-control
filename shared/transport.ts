@@ -323,3 +323,39 @@ export function suggestTripGroups(appointments: ClinicAppointment[]) {
 export function buildDriverMessage(appointment: ClinicAppointment, request: VehicleRequest) {
   return `رحلة جديدة: ${appointment.patientName} من ${appointmentPickupLabel(appointment)} إلى ${appointment.clinic} الساعة ${appointment.appointmentAt}. رقم الموبايل ${appointment.mobile}. السيارة ${request.vehiclePlate ?? "بانتظار التحديد"}.`;
 }
+
+export const VEHICLE_KINDS: VehicleKind[] = ["سيدان", "احتياجات خاصة", "باص"];
+
+/** يتحقق من بيانات سيارة قبل الحفظ ويعيدها بصيغة موحدة، أو يعيد رسالة الخطأ. */
+export function validateVehicle(
+  input: Pick<Vehicle, "plate" | "driver" | "phone" | "kind">,
+  vehicles: Vehicle[],
+  originalPlate?: string,
+): { vehicle: Pick<Vehicle, "plate" | "driver" | "phone" | "kind"> } | { error: string } {
+  const plate = toWesternDigits(toText(input.plate)).replace(/\s+/g, "");
+  const driver = toText(input.driver).replace(/\s+/g, " ");
+  const phone = normalizeMobile(input.phone);
+  if (!/^[0-9A-Za-z-]{2,12}$/.test(plate)) return { error: "رقم السيارة يجب أن يكون من 2 إلى 12 رقمًا أو حرفًا" };
+  if (driver.length < 2 || driver.length > 60) return { error: "اسم السائق يجب أن يكون من 2 إلى 60 حرفًا" };
+  if (!/^\+?\d{8,15}$/.test(phone)) return { error: "رقم هاتف السائق يجب أن يكون من 8 إلى 15 رقمًا" };
+  if (!VEHICLE_KINDS.includes(input.kind)) return { error: "اختر نوع سيارة صحيحًا" };
+  if (plate !== originalPlate && vehicles.some((vehicle) => vehicle.plate === plate)) {
+    return { error: `رقم السيارة ${plate} مسجل مسبقًا` };
+  }
+  return { vehicle: { plate, driver, phone, kind: input.kind } };
+}
+
+/** السيارات المرتبطة برحلة جارية لا يُسمح بتغيير رقمها أو حذفها. */
+export function vehicleHasActiveTrip(plate: string, requests: VehicleRequest[]) {
+  return requests.some((request) => request.vehiclePlate === plate
+    && (request.status === "تم إرسال السيارة" || request.status === "وصلت السيارة"));
+}
+
+/** قائمة السيارات الأولية؛ تُحفظ في قاعدة البيانات عند أول دخول للمدير ثم يعدّلها من لوحته. */
+export const DEFAULT_VEHICLES: Vehicle[] = [
+  { plate: "943438", driver: "خرم", phone: "77712995", kind: "سيدان", available: true },
+  { plate: "956479", driver: "كمال", phone: "55339592", kind: "سيدان", available: true },
+  { plate: "108443", driver: "جودي عبد الرحمن", phone: "70734689", kind: "احتياجات خاصة", available: true },
+  { plate: "157724", driver: "محمد سراج", phone: "70922766", kind: "احتياجات خاصة", available: true },
+  { plate: "329538", driver: "عادل", phone: "55226916", kind: "باص", available: true },
+];
