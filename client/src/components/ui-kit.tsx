@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import type { CalendarDays } from "lucide-react";
 import { localDateString, type ClinicAppointment } from "@shared/transport";
 
@@ -77,3 +77,33 @@ export function stamp(date = new Date()) {
 }
 
 export const timeLabel = (date: Date) => `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+
+export function addDays(date: string, days: number) {
+  const [year, month, day] = date.split("-").map(Number);
+  return localDateString(new Date(year, month - 1, day + days));
+}
+
+/** اختيار التاريخ: اليوم، غدًا، أو تاريخ آخر من التقويم. */
+export function DateChooser({ value, onChange, labels = { today: "اليوم", tomorrow: "غدًا", other: "تاريخ آخر" }, label }: {
+  value: string;
+  onChange: (date: string) => void;
+  labels?: { today: string; tomorrow: string; other: string };
+  label?: string;
+}) {
+  const today = localDateString();
+  const tomorrow = addDays(today, 1);
+  const [picking, setPicking] = useState(value !== today && value !== tomorrow);
+  const mode = picking ? "other" : value === today ? "today" : value === tomorrow ? "tomorrow" : "other";
+  const chip = (active: boolean) => `h-10 rounded-xl px-4 text-sm font-bold transition ${active ? "bg-[#10233f] text-white" : "border border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`;
+  return (
+    <div>
+      {label && <span className="mb-1.5 block text-xs font-bold text-slate-600">{label}</span>}
+      <div className="flex flex-wrap items-center gap-2" role="group" aria-label={label ?? "التاريخ"}>
+        <button type="button" aria-pressed={mode === "today"} onClick={() => { setPicking(false); onChange(today); }} className={chip(mode === "today")}>{labels.today}</button>
+        <button type="button" aria-pressed={mode === "tomorrow"} onClick={() => { setPicking(false); onChange(tomorrow); }} className={chip(mode === "tomorrow")}>{labels.tomorrow}</button>
+        <button type="button" aria-pressed={mode === "other"} onClick={() => setPicking(true)} className={chip(mode === "other")}>{labels.other}</button>
+        {mode === "other" && <input type="date" aria-label={labels.other} value={value} onChange={(event) => event.target.value && onChange(event.target.value)} className="h-10 rounded-xl border border-slate-200 bg-white px-3 text-sm font-bold outline-none focus:border-[#e6a1aa]" />}
+      </div>
+    </div>
+  );
+}

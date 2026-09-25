@@ -17,17 +17,19 @@ import {
   type VehicleRequest,
 } from "@shared/transport";
 import type { Hospital } from "@shared/hospitals";
-import { InfoCard, PageHeading, SectionCard } from "@/components/ui-kit";
+import { DateChooser, InfoCard, PageHeading, SectionCard } from "@/components/ui-kit";
 import NonMedicalTripForm from "./NonMedicalTripForm";
 import { useHospitals, useNow } from "@/lib/useShared";
 
 type Trip = { request: VehicleRequest; appointment: ClinicAppointment };
 
-export function FleetSupervisorPage({ vehicles, appointments, requests, audit, onManager, onUpdate, onDispatch, onExport, onAddTrip }: {
+export function FleetSupervisorPage({ vehicles, appointments, requests, audit, date, onDateChange, onManager, onUpdate, onDispatch, onExport, onAddTrip }: {
   vehicles: Vehicle[];
   appointments: ClinicAppointment[];
   requests: VehicleRequest[];
   audit: string[];
+  date: string;
+  onDateChange: (date: string) => void;
   onManager: () => void;
   onUpdate: (vehicles: Vehicle[]) => void;
   onDispatch: (requestIds: string[], vehicle: Vehicle, joinRequestIds?: string[]) => void;
@@ -42,15 +44,18 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, audit, o
     const appointment = appointments.find((item) => item.id === request.appointmentId);
     return appointment ? { request, appointment } : null;
   };
-  const pending = requests.filter((request) => request.status === "بانتظار التوزيع").map(withAppointment).filter((trip): trip is Trip => Boolean(trip));
-  const onTheWay = requests.filter((request) => request.status === "تم إرسال السيارة" || request.status === "وصلت السيارة").map(withAppointment).filter((trip): trip is Trip => Boolean(trip));
-  const busyPlates = new Set(onTheWay.map((trip) => trip.request.vehiclePlate).filter(Boolean));
+  const onDate = (trip: Trip) => trip.appointment.appointmentDate === date;
+  const pending = requests.filter((request) => request.status === "بانتظار التوزيع").map(withAppointment).filter((trip): trip is Trip => Boolean(trip) && onDate(trip!));
+  const allOnTheWay = requests.filter((request) => request.status === "تم إرسال السيارة" || request.status === "وصلت السيارة").map(withAppointment).filter((trip): trip is Trip => Boolean(trip));
+  // السيارة المشغولة برحلة جارية لا تُرسل مرة أخرى مهما كان تاريخ الرحلة
+  const busyPlates = new Set(allOnTheWay.map((trip) => trip.request.vehiclePlate).filter(Boolean));
+  const onTheWay = allOnTheWay.filter(onDate);
   const dispatchable = vehicles.filter((vehicle) => vehicle.available && !busyPlates.has(vehicle.plate));
 
   const groups = buildTripGroups(pending.map((trip) => ({ appointment: trip.appointment, direction: trip.request.direction })), hospitals);
   const groupedIds = new Set(groups.flatMap((group) => group.appointmentIds));
   const joins = suggestJoinDispatched(pending.filter((trip) => !groupedIds.has(trip.appointment.id)), onTheWay, hospitals);
-  const unrequested = findUnrequestedMatches(appointments, requests, hospitals, now);
+  const unrequested = findUnrequestedMatches(appointments, requests, hospitals, now).filter((match) => match.appointment.appointmentDate === date);
 
   function dispatchSingle(trip: Trip) {
     const suggested = assignVehicleForTrips(dispatchable, [trip.appointment]);
@@ -100,7 +105,9 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, audit, o
         )}
       />
 
-      {addingTrip && <NonMedicalTripForm onCancel={() => setAddingTrip(false)} onSave={(appointment, request) => { onAddTrip(appointment, request); setAddingTrip(false); }} />}
+      <div className="mb-5"><DateChooser value={date} onChange={onDateChange} /></div>
+
+      {addingTrip && <NonMedicalTripForm defaultDate={date} onCancel={() => setAddingTrip(false)} onSave={(appointment, request) => { onAddTrip(appointment, request); setAddingTrip(false); }} />}
 
       <div className="mb-6 grid gap-4 sm:grid-cols-3">
         <InfoCard icon={BellRing} label="بانتظار التوزيع" value={String(pending.length)} tone="amber" />
@@ -146,7 +153,10 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, audit, o
             {pending.length ? pending.map((trip) => {
               const suggested = assignVehicleForTrips(dispatchable, [trip.appointment]);
               const selectedPlate = selectedVehicles[trip.request.id] || suggested?.plate || "none";
-              const compatible = dispatchable.filter((vehicle) => trip.appointment.kind === "احتياجات خاصة" ? vehicle.kind === "احتياجات خاصة" : vehicle.kind !== "احتياجات خاصة");
+              // الرحلة العادية تقبل أي سيارة (سيدان وباص أولًا)، واحتياجات خاصة تحتاج سيارة مجهزة
+              const compatible = trip.appointment.kind === "احتياجات خاصة"
+                ? dispatchable.filter((vehicle) => vehicle.kind === "احتياجات خاصة")
+                : [...dispatchable].sort((a, b) => Number(a.kind === "احتياجات خاصة") - Number(b.kind === "احتياجات خاصة"));
               const zone = matchHospitalZone(trip.appointment, hospitals);
               return (
                 <div key={trip.request.id} className="grid gap-4 p-5 lg:grid-cols-[1.4fr_.8fr_auto] lg:items-center">

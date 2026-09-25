@@ -6,6 +6,7 @@ import {
   DEFAULT_VEHICLES,
   buildDriverMessage,
   isNonMedical,
+  localDateString,
   migrateAppointment,
   migrateRequest,
   whatsappLink,
@@ -266,6 +267,7 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
   const [view, setView] = useState<ClinicView>("home");
   const [editingAppointment, setEditingAppointment] = useState<ClinicAppointment | null>(null);
   const [lang, setLang] = useLang();
+  const [selectedDate, setSelectedDate] = useState(() => localDateString());
   const hospitals = useHospitals();
   const isClinic = session.role === "clinic";
   const t = CLINIC_TEXT[isClinic ? lang : "ar"];
@@ -344,6 +346,7 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
     updateAppointments(next.sort(byAppointmentTime));
     logAudit(editingAppointment ? `تعديل الموعد ${appointment.id}` : `إضافة الموعد ${appointment.id}`);
     setEditingAppointment(null);
+    setSelectedDate(appointment.appointmentDate);
     setView("home");
     toast.success(editingAppointment ? t.updated : t.saved);
   }
@@ -404,6 +407,8 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
           <ClinicHome
             t={t}
             appointments={appointments.filter((appointment) => !isNonMedical(appointment))}
+            date={selectedDate}
+            onDateChange={setSelectedDate}
             onNew={() => { setEditingAppointment(null); setView("form"); }}
             onEdit={openEditAppointment}
             onDelete={deleteAppointment}
@@ -417,6 +422,7 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
           <ClinicForm
             t={t}
             lang={lang}
+            defaultDate={selectedDate}
             initial={editingAppointment}
             onBack={() => { setEditingAppointment(null); setView("home"); }}
             onSave={saveAppointment}
@@ -467,11 +473,14 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
             onUpdate={(next) => { updateFleet(next); logAudit("تغيير حالة سيارة"); }}
             onDispatch={dispatch}
             onExport={exportStats}
+            date={selectedDate}
+            onDateChange={setSelectedDate}
             onAddTrip={(appointment, request) => {
               updateAppointments([...appointments, appointment].sort(byAppointmentTime));
               updateRequests([...requests, request]);
               logAudit(`إضافة رحلة غير طبية ${appointment.id} إلى ${appointment.clinic}`);
               toast.success("تمت إضافة الرحلة إلى الطلبات");
+              setSelectedDate(appointment.appointmentDate);
             }}
           />
         )}

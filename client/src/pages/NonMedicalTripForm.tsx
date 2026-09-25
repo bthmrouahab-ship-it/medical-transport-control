@@ -2,7 +2,6 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { Accessibility, CheckCircle2, MapPin, Truck } from "lucide-react";
 import {
-  localDateString,
   NON_MEDICAL_DESTINATIONS,
   REQUEST_GRACE_MINUTES,
   requestWindow,
@@ -11,12 +10,13 @@ import {
   type ClinicAppointment,
   type VehicleRequest,
 } from "@shared/transport";
-import { Field, timeLabel } from "@/components/ui-kit";
+import { DateChooser, Field, timeLabel } from "@/components/ui-kit";
 
 const OTHER = "أخرى";
 
 /** رحلة غير طبية يضيفها مشرف السيارات: تُنشأ مباشرة كطلب بانتظار التوزيع. */
-export default function NonMedicalTripForm({ onSave, onCancel }: {
+export default function NonMedicalTripForm({ defaultDate, onSave, onCancel }: {
+  defaultDate: string;
   onSave: (appointment: ClinicAppointment, request: VehicleRequest) => void;
   onCancel: () => void;
 }) {
@@ -27,7 +27,7 @@ export default function NonMedicalTripForm({ onSave, onCancel }: {
     buildingNumber: "",
     apartmentNumber: "",
     mobile: "",
-    appointmentDate: localDateString(),
+    appointmentDate: defaultDate,
     appointmentAt: timeLabel(new Date(Date.now() + 30 * 60000)),
     kind: "عادي" as AppointmentKind,
     assistance: [] as AssistanceNeed[],
@@ -96,7 +96,7 @@ export default function NonMedicalTripForm({ onSave, onCancel }: {
       <Field label="رقم المبنى" value={form.buildingNumber} onChange={(value) => setForm({ ...form, buildingNumber: value })} dir="ltr" />
       <Field label="رقم الشقة" value={form.apartmentNumber} onChange={(value) => setForm({ ...form, apartmentNumber: value })} dir="ltr" />
       <Field label="رقم الموبايل" value={form.mobile} onChange={(value) => setForm({ ...form, mobile: value })} type="tel" dir="ltr" wide />
-      <Field label="التاريخ" value={form.appointmentDate} onChange={(value) => setForm({ ...form, appointmentDate: value })} type="date" />
+      <div className="sm:col-span-2"><DateChooser label="التاريخ" value={form.appointmentDate} onChange={(value) => setForm({ ...form, appointmentDate: value })} /></div>
       <Field label="الوقت" value={form.appointmentAt} onChange={(value) => setForm({ ...form, appointmentAt: value })} type="time" />
 
       <fieldset className="sm:col-span-2">

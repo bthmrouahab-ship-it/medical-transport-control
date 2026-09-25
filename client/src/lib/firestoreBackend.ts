@@ -32,6 +32,15 @@ const SINGLE_DOCS: Partial<Record<SharedKey, { col: string; id: string; field: s
   fox_history: { col: "meta", id: "history", field: "data" },
 };
 
+/** مقارنة المحتوى بغض النظر عن ترتيب الحقول (القيم undefined تُهمل كما في Firestore). */
+export function stableStringify(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.keys(value as Rec).filter((key) => (value as Rec)[key] !== undefined).sort().map((key) => `${JSON.stringify(key)}:${stableStringify((value as Rec)[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
+
 const docId = (value: unknown) => String(value ?? "").replace(/\//g, "_") || "_";
 const strip = ({ _o, ...rest }: Rec) => rest;
 /** Firestore لا يقبل القيم undefined. */
@@ -94,7 +103,7 @@ export function createFirestoreBackend(db: Firestore): SharedBackend {
         const cfg = COLLECTIONS[key]!;
         const before = new Map<string, string>();
         for (const item of (Array.isArray(previous) ? previous : []) as Rec[]) {
-          before.set(docId(item[cfg.idField]), JSON.stringify(item));
+          before.set(docId(item[cfg.idField]), stableStringify(item));
         }
         const ops: Promise<void>[] = [];
         const seen = new Set<string>();
@@ -102,7 +111,7 @@ export function createFirestoreBackend(db: Firestore): SharedBackend {
         ((Array.isArray(next) ? next : []) as Rec[]).forEach((item, index) => {
           const id = docId(item[cfg.idField]);
           seen.add(id);
-          if (before.get(id) === JSON.stringify(item)) return; // لم يتغير
+          if (before.get(id) === stableStringify(item)) return; // لم يتغير
           const path = `${cfg.col}/${id}`;
           if (!order.has(path)) order.set(path, base + index / 1000);
           const body = clean({ ...item, _o: order.get(path) });
