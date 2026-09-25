@@ -83,7 +83,7 @@ export default function NonMedicalTripForm({ onSave, onCancel }: {
 
       <fieldset className="sm:col-span-2">
         <legend className="mb-2 block text-xs font-bold text-slate-600">الوجهة</legend>
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
           {[...NON_MEDICAL_DESTINATIONS.map((item) => item.ar), OTHER].map((destination) => (
             <button key={destination} type="button" aria-pressed={form.destination === destination} onClick={() => setForm({ ...form, destination })} className={chip(form.destination === destination)}>{destination}</button>
           ))}
