@@ -7,6 +7,7 @@ import {
   canRequestVehicle,
   findUnrequestedMatches,
   isNonMedical,
+  localDateString,
   REQUEST_GRACE_MINUTES,
   requestWindow,
   type ClinicAppointment,
@@ -39,17 +40,22 @@ export function SupervisorHome({ appointments, requests, onRequest, onUpdateRequ
   const [buildingFilter, setBuildingFilter] = useState("all");
   const now = useNow();
   const hospitals = useHospitals();
-  const pending = appointments.filter((appointment) => appointment.status !== "مكتملة");
+  // مواعيد اليوم فقط، مع أي رحلة من يوم سابق ما زالت جارية (مثل عودة بعد منتصف الليل)
+  const today = localDateString(now);
+  const activeIds = new Set(requests.filter((request) => request.status !== "تم استلام المريض").map((request) => request.appointmentId));
+  const todays = appointments.filter((appointment) => appointment.appointmentDate === today
+    || (appointment.appointmentDate < today && activeIds.has(appointment.id)));
+  const pending = todays.filter((appointment) => appointment.status !== "مكتملة");
   const buildingNumbers = Array.from(new Set(pending.map((appointment) => appointment.buildingNumber))).sort((first, second) => first.localeCompare(second, "ar", { numeric: true }));
   const inFilter = (appointment: ClinicAppointment) => buildingFilter === "all" || appointment.buildingNumber === buildingFilter;
   const isExpired = (appointment: ClinicAppointment) => appointment.status === WAITING && !requestWindow(appointment, now).open;
   const visibleAppointments = pending.filter(inFilter).sort((a, b) => Number(isExpired(a)) - Number(isExpired(b)) || byAppointmentTime(a, b));
 
   // مواعيد بلا طلب ولها رحلة قائمة لنفس الوجهة في نفس التوقيت
-  const matches = findUnrequestedMatches(appointments, requests, hospitals, now).filter((match) => inFilter(match.appointment));
+  const matches = findUnrequestedMatches(todays, requests, hospitals, now).filter((match) => inFilter(match.appointment));
   // مواعيد بلا طلب يمكن طلبها معًا (نفس الوجهة أو وجهة مجاورة خلال 30 دقيقة)
   const requested = new Set(requests.map((request) => request.appointmentId));
-  const openUnrequested = appointments.filter((appointment) => appointment.status === WAITING && !requested.has(appointment.id) && requestWindow(appointment, now).open);
+  const openUnrequested = todays.filter((appointment) => appointment.status === WAITING && !requested.has(appointment.id) && requestWindow(appointment, now).open);
   const partnerOf = (appointment: ClinicAppointment) => openUnrequested.find((other) => {
     if (other.id === appointment.id) return false;
     const details = calculateTripGroupingScore(appointment, other, hospitals);
@@ -59,7 +65,7 @@ export function SupervisorHome({ appointments, requests, onRequest, onUpdateRequ
   return (
     <>
       <PageHeading
-        title="طلبات السيارات"
+        title="طلبات السيارات · اليوم"
         action={(
           <select aria-label="رقم المبنى" value={buildingFilter} onChange={(event) => setBuildingFilter(event.target.value)} className="h-11 min-w-48 rounded-xl border border-slate-200 bg-white px-3 text-sm font-bold text-slate-700 outline-none focus:border-[#d88994]">
             <option value="all">كل المباني ({pending.length})</option>

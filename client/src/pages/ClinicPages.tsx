@@ -27,15 +27,17 @@ import {
   type ClinicAppointment,
 } from "@shared/transport";
 import { matchHospital } from "@shared/hospitals";
-import { Field, formatDay, InfoCard, PageHeading } from "@/components/ui-kit";
+import { DateChooser, Field, formatDay, InfoCard, PageHeading } from "@/components/ui-kit";
 import type { ClinicText, Lang } from "@/lib/i18n";
 import { useHospitals, useNow } from "@/lib/useShared";
 
 const WAITING = "بانتظار طلب السيارة";
 
-export function ClinicHome({ t, appointments, onNew, onEdit, onDelete, onImport }: {
+export function ClinicHome({ t, appointments, date, onDateChange, onNew, onEdit, onDelete, onImport }: {
   t: ClinicText;
   appointments: ClinicAppointment[];
+  date: string;
+  onDateChange: (date: string) => void;
   onNew: () => void;
   onEdit: (appointment: ClinicAppointment) => void;
   onDelete: (appointment: ClinicAppointment) => void;
@@ -97,6 +99,7 @@ export function ClinicHome({ t, appointments, onNew, onEdit, onDelete, onImport 
   }
 
   const today = localDateString(now);
+  const dayAppointments = appointments.filter((appointment) => appointment.appointmentDate === date);
   return (
     <>
       <PageHeading
@@ -111,17 +114,19 @@ export function ClinicHome({ t, appointments, onNew, onEdit, onDelete, onImport 
         )}
       />
 
+      <div className="mb-5"><DateChooser value={date} onChange={onDateChange} labels={t.dateChoice} /></div>
+
       <div className="mb-6 grid gap-4 sm:grid-cols-3">
-        <InfoCard icon={CalendarDays} label={t.statToday} value={String(appointments.filter((appointment) => appointment.appointmentDate === today).length)} tone="teal" />
-        <InfoCard icon={Clock3} label={t.statWaiting} value={String(appointments.filter((appointment) => appointment.status === WAITING).length)} tone="amber" />
-        <InfoCard icon={CheckCircle2} label={t.statLinked} value={String(appointments.filter((appointment) => appointment.status !== WAITING).length)} tone="blue" />
+        <InfoCard icon={CalendarDays} label={date === today ? t.statToday : t.statDate} value={String(dayAppointments.length)} tone="teal" />
+        <InfoCard icon={Clock3} label={t.statWaiting} value={String(dayAppointments.filter((appointment) => appointment.status === WAITING).length)} tone="amber" />
+        <InfoCard icon={CheckCircle2} label={t.statLinked} value={String(dayAppointments.filter((appointment) => appointment.status !== WAITING).length)} tone="blue" />
       </div>
 
       <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
-        <h3 className="border-b border-slate-100 px-5 py-4 font-bold">{t.list}</h3>
+        <h3 className="border-b border-slate-100 px-5 py-4 font-bold">{t.list} <span className="mx-1 text-slate-300">|</span><span className="font-semibold text-slate-400" dir="ltr">{date}</span></h3>
         <div className="divide-y divide-slate-100">
-          {appointments.length
-            ? appointments.map((appointment) => <AppointmentCard key={appointment.id} t={t} appointment={appointment} now={now} onEdit={onEdit} onDelete={onDelete} />)
+          {dayAppointments.length
+            ? dayAppointments.map((appointment) => <AppointmentCard key={appointment.id} t={t} appointment={appointment} now={now} onEdit={onEdit} onDelete={onDelete} />)
             : <div className="p-12 text-center"><UsersRound className="mx-auto h-8 w-8 text-slate-300" /><p className="mt-3 font-bold text-slate-500">{t.empty}</p></div>}
         </div>
       </section>
@@ -160,9 +165,10 @@ function AppointmentCard({ t, appointment, now, onEdit, onDelete }: {
   );
 }
 
-export function ClinicForm({ t, lang, initial, onBack, onSave }: {
+export function ClinicForm({ t, lang, initial, defaultDate, onBack, onSave }: {
   t: ClinicText;
   lang: Lang;
+  defaultDate: string;
   initial: ClinicAppointment | null;
   onBack: () => void;
   onSave: (appointment: ClinicAppointment) => void;
@@ -174,7 +180,7 @@ export function ClinicForm({ t, lang, initial, onBack, onSave }: {
     buildingNumber: initial?.buildingNumber ?? "",
     apartmentNumber: initial?.apartmentNumber ?? "",
     mobile: initial?.mobile === "-" ? "" : initial?.mobile ?? "",
-    appointmentDate: initial?.appointmentDate ?? localDateString(),
+    appointmentDate: initial?.appointmentDate ?? defaultDate,
     appointmentAt: initial?.appointmentAt ?? "09:00",
     kind: initial?.kind ?? "عادي" as AppointmentKind,
     assistance: initial?.assistance ?? [] as AssistanceNeed[],
@@ -229,7 +235,7 @@ export function ClinicForm({ t, lang, initial, onBack, onSave }: {
           <Field label={t.building} value={form.buildingNumber} onChange={(value) => setForm({ ...form, buildingNumber: value })} dir="ltr" />
           <Field label={t.apartment} value={form.apartmentNumber} onChange={(value) => setForm({ ...form, apartmentNumber: value })} dir="ltr" />
           <Field label={t.mobile} value={form.mobile} onChange={(value) => setForm({ ...form, mobile: value })} type="tel" dir="ltr" wide />
-          <Field label={t.date} value={form.appointmentDate} onChange={(value) => setForm({ ...form, appointmentDate: value })} type="date" />
+          <div className="sm:col-span-2"><DateChooser label={t.date} value={form.appointmentDate} onChange={(value) => setForm({ ...form, appointmentDate: value })} labels={t.dateChoice} /></div>
           <Field label={t.time} value={form.appointmentAt} onChange={(value) => setForm({ ...form, appointmentAt: value })} type="time" />
 
           <fieldset className="sm:col-span-2">
