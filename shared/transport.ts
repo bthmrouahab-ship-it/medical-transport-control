@@ -622,8 +622,7 @@ const NEED_EN: Record<AssistanceNeed, string> = { "يحتاج مرافق": "Need
 export const NON_MEDICAL_DESTINATIONS: { ar: string; en: string }[] = [
   { ar: "الجامعة", en: "University" },
   { ar: "المدرسة", en: "School" },
-  { ar: "أنصار جاليري", en: "Ansar Gallery" },
-  { ar: "المطار القديم", en: "Old Airport" },
+  { ar: "أنصار جاليري المطار القديم", en: "Ansar Gallery, Old Airport" },
 ];
 
 export const isNonMedical = (appointment: Pick<ClinicAppointment, "category">) => appointment.category === "غير طبية";
