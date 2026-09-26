@@ -1,10 +1,11 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { toast } from "sonner";
 import {
   CheckCircle2,
   ClipboardList,
   Copy,
   KeyRound,
+  Loader2,
   Map as MapIcon,
   Pencil,
   Plus,
@@ -34,11 +35,13 @@ import {
 } from "@shared/users";
 import { hasSharedState, loadState, saveState, subscribeState } from "@/lib/appStore";
 import { appendAudit } from "@/lib/audit";
-import FleetDashboard from "@/components/FleetDashboard";
 import AppHeader from "@/components/AppHeader";
-import { HISTORY_SEED } from "@shared/seedData";
+import { HISTORY_SEED } from "@shared/historySeed";
 import { syncHospitals, type Hospital } from "@shared/hospitals";
 import { authErrorMessage, createUser, resetUserPassword, updateUser, watchUsers } from "@/lib/auth";
+
+// الخريطة والإحصائيات تُحمَّل عند فتح تبويبها فقط
+const FleetDashboard = lazy(() => import("@/components/FleetDashboard"));
 
 type Tab = "dashboard" | "users" | "vehicles" | "audit";
 
@@ -105,7 +108,7 @@ export default function AdminPanel({ profile, onLogout, onChangePassword }: {
             </button>
           ))}
         </nav>
-        {tab === "dashboard" && <FleetDashboard canEdit actor={profile.displayName} />}
+        {tab === "dashboard" && <Suspense fallback={<div className="flex min-h-64 items-center justify-center text-slate-400"><Loader2 className="h-6 w-6 animate-spin" /><span className="sr-only">جارٍ التحميل</span></div>}><FleetDashboard canEdit actor={profile.displayName} /></Suspense>}
         {tab === "users" && <UsersTab profile={profile} vehicles={vehicles} onLog={log} />}
         {tab === "vehicles" && <VehiclesTab vehicles={vehicles} requests={requests} onChange={updateVehicles} />}
         {tab === "audit" && (

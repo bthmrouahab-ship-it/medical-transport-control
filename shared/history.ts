@@ -1,38 +1,20 @@
-import { DEFAULT_HOSPITALS, matchHospital, normalizePlaceName, stripReturnLeg, type Hospital } from "./hospitals";
+import { DEFAULT_HOSPITALS, matchHospital, stripReturnLeg, type Hospital } from "./hospitals";
+import { NON_MEDICAL_DESTINATIONS } from "./transport";
+import { TRIP_KINDS, summarizeTrips, type StatsSummary, type TripKind, type TripStat } from "./stats";
 
 /**
- * تحويل ملف "حركة السيارات اليومية" (ورقة المواعيد) إلى إحصائيات مجمّعة.
- * لا يُحفظ اسم المريض أو رقمه أو رقم الشقة: الناتج أرقام وإجماليات فقط.
+ * قراءة ملف "حركة السيارات اليومية" (ورقة المواعيد) إلى سجلات رحلات للإحصائيات.
+ * لا يُحفظ اسم المريض أو رقمه أو رقم الشقة.
  */
 
-export type TripKind = "سيدان" | "احتياجات خاصة" | "باص";
+export type { DailyStat, DestinationStat, TripKind } from "./stats";
 
-export type DailyStat = { date: string; weekday: string; total: number; completed: number; sedan: number; special: number; bus: number };
-export type DestinationStat = { key: string; name: string; hospitalId: string | null; zone: string | null; trips: number; avgMinutes: number | null };
-
-export type HistorySummary = {
+/** الملخص القديم المحفوظ في meta/history (إجماليات فقط). */
+export type HistorySummary = StatsSummary & {
   source: string;
   importedAt: string;
-  from: string;
-  to: string;
-  totalTrips: number;
-  completedTrips: number;
-  activeDays: number;
-  avgTripMinutes: number | null;
-  daily: DailyStat[];
-  byWeekday: { weekday: string; trips: number; days: number }[];
-  byHour: { hour: number; trips: number }[];
-  byKind: { kind: TripKind; trips: number }[];
-  destinations: DestinationStat[];
-  zones: { zone: string; trips: number }[];
-  vehicles: { plate: string; driver: string; trips: number }[];
-  buildings: { building: string; trips: number }[];
-  requesters: { type: string; trips: number }[];
-  unmatchedDestinations: number;
+  requesters?: { type: string; trips: number }[];
 };
-
-const WEEKDAYS = ["الأحد", "الإثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت"];
-const KINDS: TripKind[] = ["سيدان", "احتياجات خاصة", "باص"];
 
 const HEADERS = {
   date: ["التاريخ"],
@@ -43,7 +25,6 @@ const HEADERS = {
   in: ["دخول السيارة"],
   destination: ["الوجهة"],
   building: ["المبنى"],
-  requester: ["الجهة الطالبة"],
 } as const;
 
 type Column = keyof typeof HEADERS;
@@ -95,137 +76,48 @@ export function excelMinutes(value: unknown): number | null {
   return minutes < 24 * 60 ? minutes : null;
 }
 
-function weekdayOf(date: string) {
-  const [year, month, day] = date.split("-").map(Number);
-  return WEEKDAYS[new Date(Date.UTC(year, month - 1, day)).getUTCDay()];
-}
+const NON_MEDICAL_NAMES = NON_MEDICAL_DESTINATIONS.flatMap((item) => [item.ar, item.en]).map((name) => name.toLowerCase());
 
-function increment(map: Map<string, number>, key: string, by = 1) {
-  map.set(key, (map.get(key) ?? 0) + by);
-}
-
-const sortDesc = <T extends { trips: number }>(items: T[]) => items.sort((a, b) => b.trips - a.trips);
-
-export function summarizeHistory(rows: unknown[][], source: string, hospitals: Hospital[] = DEFAULT_HOSPITALS, now = new Date()): HistorySummary {
+/** يحوّل ورقة المواعيد إلى رحلات (رحلة لكل صف له تاريخ صحيح). */
+export function parseTripRows(rows: unknown[][], hospitals: Hospital[] = DEFAULT_HOSPITALS): TripStat[] {
   const header = findHeader(rows);
   if (!header) throw new Error("لم يتم العثور على ورقة المواعيد (أعمدة التاريخ والوجهة)");
   const { columns } = header;
   const cell = (row: unknown[], column: Column) => (columns[column] >= 0 ? row[columns[column]] : undefined);
-
-  const daily = new Map<string, DailyStat>();
-  const hours = new Map<string, number>();
-  const kinds = new Map<string, number>();
-  const zones = new Map<string, number>();
-  const vehicles = new Map<string, { plate: string; drivers: Map<string, number>; trips: number }>();
-  const buildings = new Map<string, number>();
-  const requesters = new Map<string, number>();
-  const destinations = new Map<string, DestinationStat & { minutesTotal: number; minutesCount: number }>();
-  let totalTrips = 0;
-  let completedTrips = 0;
-  let unmatched = 0;
-  let durationTotal = 0;
-  let durationCount = 0;
+  const trips: TripStat[] = [];
 
   for (const row of rows.slice(header.index + 1)) {
     const date = excelDate(cell(row, "date"));
     if (!date) continue;
-    totalTrips += 1;
-    const day = daily.get(date) ?? { date, weekday: weekdayOf(date), total: 0, completed: 0, sedan: 0, special: 0, bus: 0 };
-    daily.set(date, day);
-    day.total += 1;
-
     // نوع المركبة "0" أو فارغ يعني أن الرحلة لم تخرج (نفس تعريف ورقة الإحصائيات)
-    const kind = KINDS.find((item) => item === clean(cell(row, "kind")));
-    if (!kind) continue;
-    completedTrips += 1;
-    day.completed += 1;
-    if (kind === "سيدان") day.sedan += 1;
-    else if (kind === "احتياجات خاصة") day.special += 1;
-    else day.bus += 1;
-    increment(kinds, kind);
-
-    const out = excelMinutes(cell(row, "out"));
-    const back = excelMinutes(cell(row, "in"));
-    if (out !== null) increment(hours, String(Math.floor(out / 60)));
-    const duration = out !== null && back !== null && back > out && back - out <= 6 * 60 ? back - out : null;
-    if (duration !== null) {
-      durationTotal += duration;
-      durationCount += 1;
-    }
-
+    const kind = TRIP_KINDS.find((item) => item === clean(cell(row, "kind"))) ?? null;
+    const out = kind ? excelMinutes(cell(row, "out")) : null;
+    const back = kind ? excelMinutes(cell(row, "in")) : null;
     const rawDestination = clean(cell(row, "destination"));
     const hospital = rawDestination ? matchHospital(rawDestination, hospitals) : null;
-    const name = hospital?.name ?? (clean(stripReturnLeg(rawDestination)) || "غير محدد");
-    const key = hospital ? `h:${hospital.id}` : `t:${normalizePlaceName(name) || "غير محدد"}`;
-    if (!hospital) unmatched += 1;
-    const destination = destinations.get(key) ?? { key, name, hospitalId: hospital?.id ?? null, zone: hospital?.zone ?? null, trips: 0, avgMinutes: null, minutesTotal: 0, minutesCount: 0 };
-    destinations.set(key, destination);
-    destination.trips += 1;
-    if (duration !== null) {
-      destination.minutesTotal += duration;
-      destination.minutesCount += 1;
-    }
-    increment(zones, hospital?.zone ?? "وجهات أخرى");
-
+    const place = hospital?.name ?? (clean(stripReturnLeg(rawDestination)) || "غير محدد");
     const plate = clean(cell(row, "plate")).replace(/\.0$/, "");
-    if (plate && plate !== "0") {
-      const vehicle = vehicles.get(plate) ?? { plate, drivers: new Map<string, number>(), trips: 0 };
-      vehicles.set(plate, vehicle);
-      vehicle.trips += 1;
-      const driver = clean(cell(row, "driver"));
-      if (driver) increment(vehicle.drivers, driver);
-    }
     const building = clean(cell(row, "building")).replace(/\.0$/, "");
-    if (building && building !== "0") increment(buildings, building);
-    increment(requesters, clean(cell(row, "requester")) || "غير محدد");
+    trips.push({
+      date,
+      hour: out !== null ? Math.floor(out / 60) : null,
+      kind,
+      hospitalId: hospital?.id ?? null,
+      place,
+      plate: kind && plate && plate !== "0" ? plate : null,
+      driver: kind ? clean(cell(row, "driver")) || null : null,
+      building: building && building !== "0" ? building : null,
+      minutes: out !== null && back !== null && back > out && back - out <= 6 * 60 ? back - out : null,
+      nonMedical: !hospital && NON_MEDICAL_NAMES.some((name) => place.toLowerCase().includes(name)),
+    });
   }
 
-  if (!totalTrips) throw new Error("الملف لا يحتوي على رحلات بتاريخ صحيح");
+  if (!trips.length) throw new Error("الملف لا يحتوي على رحلات بتاريخ صحيح");
+  return trips;
+}
 
-  const days = Array.from(daily.values()).sort((a, b) => a.date.localeCompare(b.date));
-  const activeDays = days.filter((day) => day.total > 0);
-  const weekdayMap = new Map<string, { trips: number; days: number }>();
-  for (const day of activeDays) {
-    const entry = weekdayMap.get(day.weekday) ?? { trips: 0, days: 0 };
-    entry.trips += day.total;
-    entry.days += 1;
-    weekdayMap.set(day.weekday, entry);
-  }
-
-  const destinationList = sortDesc(Array.from(destinations.values()).map(({ minutesTotal, minutesCount, ...item }) => ({
-    ...item,
-    avgMinutes: minutesCount ? Math.round(minutesTotal / minutesCount) : null,
-  })));
-  // نحتفظ بالمستشفيات المعروفة كلها، وبأكثر الوجهات الأخرى تكرارًا فقط
-  const keptDestinations = [
-    ...destinationList.filter((item) => item.hospitalId),
-    ...destinationList.filter((item) => !item.hospitalId).slice(0, 25),
-  ];
-
-  return {
-    source,
-    importedAt: now.toISOString(),
-    from: days[0].date,
-    to: days[days.length - 1].date,
-    totalTrips,
-    completedTrips,
-    activeDays: activeDays.length,
-    avgTripMinutes: durationCount ? Math.round(durationTotal / durationCount) : null,
-    daily: days,
-    byWeekday: WEEKDAYS.map((weekday) => ({ weekday, trips: weekdayMap.get(weekday)?.trips ?? 0, days: weekdayMap.get(weekday)?.days ?? 0 })),
-    byHour: Array.from({ length: 24 }, (_, hour) => ({ hour, trips: hours.get(String(hour)) ?? 0 })),
-    byKind: KINDS.map((kind) => ({ kind, trips: kinds.get(kind) ?? 0 })),
-    destinations: sortDesc(keptDestinations),
-    zones: sortDesc(Array.from(zones, ([zone, trips]) => ({ zone, trips }))),
-    vehicles: sortDesc(Array.from(vehicles.values()).map((vehicle) => ({
-      plate: vehicle.plate,
-      driver: Array.from(vehicle.drivers).sort((a, b) => b[1] - a[1]).map(([name]) => name).slice(0, 3).join(" / "),
-      trips: vehicle.trips,
-    }))),
-    buildings: sortDesc(Array.from(buildings, ([building, trips]) => ({ building, trips }))).slice(0, 60),
-    requesters: sortDesc(Array.from(requesters, ([type, trips]) => ({ type, trips }))),
-    unmatchedDestinations: unmatched,
-  };
+export function summarizeHistory(rows: unknown[][], source: string, hospitals: Hospital[] = DEFAULT_HOSPITALS, now = new Date()): HistorySummary {
+  return { ...summarizeTrips(parseTripRows(rows, hospitals), hospitals), source, importedAt: now.toISOString() };
 }
 
 export type ImportedDriver = { plate: string; drivers: string[]; phone: string; kind: TripKind };
@@ -243,7 +135,7 @@ export function parseDriverList(rows: unknown[][]): ImportedDriver[] {
   for (const row of rows.slice(headerIndex + 1)) {
     const name = clean(row[nameCol]);
     const plate = clean(row[plateCol]).replace(/\.0$/, "");
-    const kind = KINDS.find((item) => item === clean(row[kindCol]));
+    const kind = TRIP_KINDS.find((item) => item === clean(row[kindCol]));
     if (!name || !plate || !kind) continue;
     const phone = clean(row[phoneCol]).replace(/\.0$/, "");
     const entry = byPlate.get(plate) ?? { plate, drivers: [], phone, kind };
