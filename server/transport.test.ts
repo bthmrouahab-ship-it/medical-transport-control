@@ -172,7 +172,7 @@ describe("medical transport rules", () => {
 
   it("groups trips to neighbouring hospitals in Hamad Medical City", () => {
     const first: ClinicAppointment = { ...appointment, clinic: "Hamad General Hospital", buildingNumber: "12" };
-    const second: ClinicAppointment = { ...appointment, id: "APT-3", clinic: "Bone and joint center", buildingNumber: "30", appointmentAt: "09:10" };
+    const second: ClinicAppointment = { ...appointment, id: "APT-3", clinic: "Heart Hospital", buildingNumber: "30", appointmentAt: "09:10" };
     const score = calculateTripGroupingScore(first, second);
     expect(score.sameDestination).toBe(false);
     expect(score.nearbyDestination).toBe(true);

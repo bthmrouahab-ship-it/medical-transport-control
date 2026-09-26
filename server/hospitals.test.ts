@@ -15,7 +15,7 @@ describe("hospital catalog", () => {
   it("finds hospitals on the same campus", () => {
     const hgh = DEFAULT_HOSPITALS.find((hospital) => hospital.id === "hgh")!;
     const near = nearbyHospitals(hgh, DEFAULT_HOSPITALS).map((item) => item.hospital.id);
-    expect(near).toContain("bone-joint");
+    expect(near).toContain("heart");
     expect(near).not.toContain("wakra");
     expect(distanceKm(hgh, DEFAULT_HOSPITALS.find((hospital) => hospital.id === "cuban")!)).toBeGreaterThan(50);
   });
