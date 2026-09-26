@@ -1,6 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { onAuthStateChanged } from "firebase/auth";
 import { ArrowRight, Languages, Loader2, MapPin } from "lucide-react";
 import {
   DEFAULT_VEHICLES,
@@ -26,9 +25,8 @@ import Login from "./Login";
 import ChangePasswordForm from "@/components/ChangePasswordForm";
 import { SHARED_KEYS, clearSharedBackend, loadState, removeState, saveState, setSharedBackend, subscribeState } from "@/lib/appStore";
 import { appendAudit } from "@/lib/audit";
-import { auth, authReady, firestore } from "@/lib/firebase";
-import { createFirestoreBackend } from "@/lib/firestoreBackend";
-import { isLoginInProgress, logout, watchProfile } from "@/lib/auth";
+import { createApiBackend } from "@/lib/apiBackend";
+import { authErrorMessage, logout, watchSession } from "@/lib/auth";
 
 // صفحات تُحمَّل حسب دور المستخدم فقط، حتى لا يحمّل كل مستخدم كود الأدوار الأخرى والخرائط والمخططات
 const AdminPanel = lazy(() => import("./AdminPanel"));
@@ -91,49 +89,33 @@ export default function RolePortal() {
     // مسح بقايا الإصدارات السابقة التي كانت تحفظ الجلسة وبيانات المرضى على الجهاز.
     ["fox_session", ...SHARED_KEYS].forEach(removeState);
 
-    let stopProfile: (() => void) | null = null;
-    let stopAuth: (() => void) | null = null;
-    let cancelled = false;
-    authReady.then(() => {
-      if (cancelled) return;
-      stopAuth = onAuthStateChanged(auth, (user) => {
-        stopProfile?.();
-        stopProfile = null;
-        if (!user || user.isAnonymous) {
-          if (user) logout().catch(() => {});
-          clearSharedBackend();
-          dataUid.current = null;
-          dataLoaded.current = false;
-          setGate({ status: "signedOut" });
-          return;
-        }
-        // أثناء تسجيل الدخول تبقى شاشة الدخول ظاهرة حتى تظهر رسالة الخطأ إن كان الحساب موقوفًا
-        if (!isLoginInProgress()) setGate({ status: "loading" });
-        stopProfile = watchProfile(user.uid, (profile) => {
-          if (!profile || !profile.active) {
-            if (isLoginInProgress()) return;
-            signOutNow(profile ? "تم إيقاف حسابك. تواصل مع مدير النظام." : "انتهت صلاحية هذا الحساب. سجّل الدخول مرة أخرى.");
-            return;
-          }
-          // تحديث الملف (مثل تغيير الاسم) لا يعيد تحميل الصفحة؛ السائق لا يحتاج تحميل بيانات
-          const stillReady = (current: Gate) => current.status === "ready" && current.profile.uid === profile.uid
-            && (profile.role === "driver"
-              ? current.profile.role === "driver"
-              : dataLoaded.current && dataUid.current === profile.uid);
-          setGate((current) => stillReady(current)
-            ? { status: "ready", profile }
-            : { status: "profile", profile });
-        }, (error) => {
-          console.error("[auth] profile", error);
-          if (!isLoginInProgress()) signOutNow("تعذر التحقق من صلاحيات الحساب. سجّل الدخول مرة أخرى.");
-        });
-      });
+    return watchSession((profile, message) => {
+      if (!profile) {
+        clearSharedBackend();
+        dataUid.current = null;
+        dataLoaded.current = false;
+        setShowManager(false);
+        setChangingPassword(false);
+        setGate({ status: "signedOut" });
+        if (message) toast.error(message);
+        return;
+      }
+      if (!profile.active) {
+        signOutNow("تم إيقاف حسابك. تواصل مع مدير النظام.");
+        return;
+      }
+      // تحديث الملف (مثل تغيير الاسم) لا يعيد تحميل الصفحة؛ السائق لا يحتاج تحميل بيانات
+      const stillReady = (current: Gate) => current.status === "ready" && current.profile.uid === profile.uid
+        && (profile.role === "driver"
+          ? current.profile.role === "driver"
+          : dataLoaded.current && dataUid.current === profile.uid && current.profile.role === profile.role);
+      setGate((current) => stillReady(current)
+        ? { status: "ready", profile }
+        : { status: "profile", profile });
+    }, (error) => {
+      console.error("[auth] session", error);
+      setGate({ status: "error", message: authErrorMessage(error, "تعذر الاتصال بالخادم. تحقق من الإنترنت ثم أعد تحميل الصفحة.") });
     });
-    return () => {
-      cancelled = true;
-      stopProfile?.();
-      stopAuth?.();
-    };
   }, [signOutNow]);
 
   // تحميل البيانات المشتركة بعد التحقق من الحساب وتغيير كلمة المرور المؤقتة.
@@ -154,9 +136,9 @@ export default function RolePortal() {
     }
     dataUid.current = profile.uid;
     dataLoaded.current = false;
-    setSharedBackend(createFirestoreBackend(firestore), (error) => {
-      console.error("[firestore]", error);
-      toast.error("تعذر حفظ التغيير في قاعدة البيانات. تحقق من الاتصال وحاول مرة أخرى.");
+    setSharedBackend(createApiBackend(), (error) => {
+      console.error("[save]", error);
+      toast.error(authErrorMessage(error, "تعذر حفظ التغيير. تحقق من الاتصال وحاول مرة أخرى."));
     })
       .then(() => {
         if (dataUid.current !== profile.uid) return;
@@ -164,7 +146,7 @@ export default function RolePortal() {
         setGate((current) => current.status === "profile" && current.profile.uid === profile.uid ? { status: "ready", profile: current.profile } : current);
       })
       .catch((error) => {
-        console.error("[firestore] init", error);
+        console.error("[data] init", error);
         if (dataUid.current !== profile.uid) return;
         dataUid.current = null;
         setGate({ status: "error", message: "تعذر تحميل البيانات. تحقق من الاتصال ثم أعد تحميل الصفحة." });

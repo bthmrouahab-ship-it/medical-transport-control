@@ -22,7 +22,6 @@ export default defineConfig({
         // مكتبات كبيرة في ملفات منفصلة: تُحمَّل عند الحاجة وتبقى في ذاكرة المتصفح بين التحديثات
         manualChunks(id) {
           if (!id.includes("node_modules")) return undefined;
-          if (id.includes("/firebase/") || id.includes("/@firebase/")) return "firebase";
           if (id.includes("/react-dom/") || id.includes("/react/") || id.includes("/scheduler/")) return "react";
           return undefined;
         },
@@ -31,6 +30,8 @@ export default defineConfig({
   },
   server: {
     host: true,
+    // التجربة المحلية: خادم PHP (pnpm run dev:api) على المنفذ 8000
+    proxy: { "/api": "http://127.0.0.1:8000" },
     allowedHosts: ["localhost", "127.0.0.1"],
     fs: {
       strict: true,

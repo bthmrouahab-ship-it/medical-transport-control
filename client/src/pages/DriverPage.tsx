@@ -1,11 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import { doc, setDoc, updateDoc } from "firebase/firestore";
 import { LocateFixed, MapPin, Pause, Play } from "lucide-react";
 import AppHeader from "@/components/AppHeader";
 import { toast } from "sonner";
 import type { UserProfile } from "@shared/users";
 import { distanceKm } from "@shared/hospitals";
-import { firestore } from "@/lib/firebase";
+import { api } from "@/lib/api";
 
 /** أقل فترة بين إرسالين، وأقل مسافة تستدعي إرسالًا أسرع. */
 const SEND_EVERY_MS = 20000;
@@ -43,7 +42,6 @@ export default function DriverPage({ profile, onLogout, onChangePassword }: {
   const watchId = useRef<number | null>(null);
   const lastSent = useRef<{ lat: number; lng: number; at: number } | null>(null);
   const wakeLock = useRef<WakeLockSentinel | null>(null);
-  const locationRef = doc(firestore, "vehicleLocations", plate || "_");
 
   async function keepScreenOn() {
     try {
@@ -60,7 +58,7 @@ export default function DriverPage({ profile, onLogout, onChangePassword }: {
     wakeLock.current = null;
     lastSent.current = null;
     setStatus("idle");
-    if (plate) updateDoc(locationRef, { sharing: false, updatedAt: new Date().toISOString() }).catch(() => {});
+    if (plate) api("location", { sharing: false }).catch(() => {});
     if (!silent) toast.success("تم إيقاف مشاركة الموقع");
   }
 
@@ -85,16 +83,14 @@ export default function DriverPage({ profile, onLogout, onChangePassword }: {
         if (previous && now - previous.at < SEND_EVERY_MS && moved < MIN_MOVE_KM) return;
         if (previous && now - previous.at < 5000) return;
         lastSent.current = { ...point, at: now };
-        setDoc(locationRef, {
-          plate,
+        // السيارة ووقت التحديث يحددهما الخادم من حساب السائق
+        api("location", {
+          sharing: true,
           lat: point.lat,
           lng: point.lng,
           accuracy: Math.round(position.coords.accuracy),
           speed: position.coords.speed === null ? null : Math.round(position.coords.speed * 3.6),
           heading: position.coords.heading === null ? null : Math.round(position.coords.heading),
-          driver: profile.displayName,
-          sharing: true,
-          updatedAt: new Date(now).toISOString(),
         }).catch((sendError) => {
           console.error("[gps]", sendError);
           toast.error("تعذر إرسال الموقع. تحقق من الإنترنت.");

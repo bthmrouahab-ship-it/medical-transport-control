@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   generateTemporaryPassword,
-  internalEmail,
   normalizeUsername,
   validatePassword,
   validateUsername,
@@ -31,10 +30,6 @@ describe("users", () => {
     for (let index = 0; index < 50; index += 1) {
       expect(validatePassword(generateTemporaryPassword())).toBeNull();
     }
-  });
-
-  it("builds internal emails from the username", () => {
-    expect(internalEmail("Clinic1", "abc")).toBe("clinic1.abc@althumama-complex-car.firebaseapp.com");
   });
 });
 
