@@ -1,6 +1,27 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { BellRing, CheckCircle2, Plus, Clock3, Copy, Download, Link2, MapPin, MessageCircle, Phone, Send, Settings2, Sparkles, Truck, Users } from "lucide-react";
+import {
+  AlertTriangle,
+  Bell,
+  BellRing,
+  CarFront,
+  CheckCircle2,
+  Copy,
+  Download,
+  History,
+  Link2,
+  MapPin,
+  MessageCircle,
+  PauseCircle,
+  Phone,
+  Plus,
+  Radio,
+  Send,
+  Sparkles,
+  Timer,
+  Truck,
+  Users,
+} from "lucide-react";
 import {
   appointmentPickupLabel,
   assignVehicleForTrips,
@@ -9,6 +30,7 @@ import {
   findUnrequestedMatches,
   groupCapacity,
   isNonMedical,
+  localDateString,
   matchHospitalZone,
   suggestJoinDispatched,
   whatsappLink,
@@ -17,13 +39,48 @@ import {
   type VehicleRequest,
 } from "@shared/transport";
 import type { Hospital } from "@shared/hospitals";
-import { DateChooser, InfoCard, PageHeading, SectionCard } from "@/components/ui-kit";
+import { arrivalsOn, tripEndpoints, tripPhase, vehicleAvailability, type TripPhase } from "@shared/trips";
+import {
+  AuditTimeline,
+  Badge,
+  DateChooser,
+  Dot,
+  EmptyState,
+  Panel,
+  PageHeader,
+  Segmented,
+  Stat,
+  StatusBadge,
+  Steps,
+  Switch,
+  TimeBlock,
+  btn,
+  cx,
+  formatDay,
+  inputClass,
+  longDate,
+  timeLabel,
+} from "@/components/ui-kit";
 import NonMedicalTripForm from "./NonMedicalTripForm";
-import { useHospitals, useNow } from "@/lib/useShared";
+import { useHospitals, useLiveVehicles, useNow } from "@/lib/useShared";
+import { NOTIFY_KEY, deviceNotificationsOn, useArrivalAlerts } from "@/lib/arrivalAlerts";
 
 type Trip = { request: VehicleRequest; appointment: ClinicAppointment };
+type VehicleFilter = "all" | "available" | "busy" | "off";
 
-export function FleetSupervisorPage({ vehicles, appointments, requests, audit, date, onDateChange, onManager, onUpdate, onDispatch, onExport, onAddTrip }: {
+/** مرحلة رحلة سيارة كاملة (قد تحمل أكثر من مريض). */
+function groupPhase(phases: TripPhase[]): TripPhase {
+  const toPickup = phases.filter((phase) => phase.kind === "toPickup");
+  if (toPickup.length) return { kind: "toPickup", atPickup: toPickup.every((phase) => phase.kind === "toPickup" && phase.atPickup) };
+  const onRoad = phases.filter((phase): phase is Extract<TripPhase, { kind: "toDestination" }> => phase.kind === "toDestination");
+  if (!onRoad.length) return phases[0];
+  const last = onRoad.reduce((latest, phase) => (phase.etaAt > latest.etaAt ? phase : latest));
+  return { ...last, tracking: onRoad.some((phase) => phase.tracking) };
+}
+
+const minutesText = (minutes: number) => (minutes <= 1 ? "دقيقة" : minutes <= 10 ? `${minutes} دقائق` : `${minutes} دقيقة`);
+
+export function FleetSupervisorPage({ vehicles, appointments, requests, audit, date, onDateChange, onManager, onUpdate, onDispatch, onArrived, onExport, onAddTrip }: {
   vehicles: Vehicle[];
   appointments: ClinicAppointment[];
   requests: VehicleRequest[];
@@ -33,29 +90,89 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, audit, d
   onManager: () => void;
   onUpdate: (vehicles: Vehicle[]) => void;
   onDispatch: (requestIds: string[], vehicle: Vehicle, joinRequestIds?: string[]) => void;
+  onArrived: (requestIds: string[], source: "manual" | "estimate") => void;
   onExport: () => void;
   onAddTrip: (appointment: ClinicAppointment, request: VehicleRequest) => void;
 }) {
   const [addingTrip, setAddingTrip] = useState(false);
   const [selectedVehicles, setSelectedVehicles] = useState<Record<string, string>>({});
+  const [vehicleFilter, setVehicleFilter] = useState<VehicleFilter>("all");
   const hospitals = useHospitals();
-  const now = useNow();
+  const now = useNow(15000);
+  const today = localDateString(now);
+
+  // السيارات التي يصل موقعها مباشرة الآن، واسم السائق الذي يقودها فعليًا
+  const liveGps = useLiveVehicles(now);
+  const gpsLive = (plate?: string) => Boolean(plate && liveGps.has(plate));
+  const driverOf = (plate: string | undefined, fallback?: string) => (plate && liveGps.get(plate)?.driver) || fallback || vehicles.find((vehicle) => vehicle.plate === plate)?.driver || "";
+
   const withAppointment = (request: VehicleRequest): Trip | null => {
     const appointment = appointments.find((item) => item.id === request.appointmentId);
     return appointment ? { request, appointment } : null;
   };
+  const isTrip = (trip: Trip | null): trip is Trip => Boolean(trip);
   const onDate = (trip: Trip) => trip.appointment.appointmentDate === date;
-  const pending = requests.filter((request) => request.status === "بانتظار التوزيع").map(withAppointment).filter((trip): trip is Trip => Boolean(trip) && onDate(trip!));
-  const allOnTheWay = requests.filter((request) => request.status === "تم إرسال السيارة" || request.status === "وصلت السيارة").map(withAppointment).filter((trip): trip is Trip => Boolean(trip));
-  // السيارة المشغولة برحلة جارية لا تُرسل مرة أخرى مهما كان تاريخ الرحلة
-  const busyPlates = new Set(allOnTheWay.map((trip) => trip.request.vehiclePlate).filter(Boolean));
-  const onTheWay = allOnTheWay.filter(onDate);
-  const dispatchable = vehicles.filter((vehicle) => vehicle.available && !busyPlates.has(vehicle.plate));
+
+  const pending = requests.filter((request) => request.status === "بانتظار التوزيع").map(withAppointment).filter(isTrip).filter(onDate);
+  const phases = new Map(requests.map((request) => [request.id, tripPhase(request, now, gpsLive(request.vehiclePlate))]));
+  // الرحلات الجارية الآن (إلى الاستلام أو إلى الوجهة) مهما كان تاريخ الموعد
+  const active = requests
+    .filter((request) => ["toPickup", "toDestination"].includes(phases.get(request.id)!.kind))
+    .map(withAppointment)
+    .filter(isTrip);
+  const availability = new Map(vehicles.map((vehicle) => [vehicle.plate, vehicleAvailability(vehicle.plate, requests, now, gpsLive(vehicle.plate))]));
+  const isBusy = (plate: string) => Boolean(availability.get(plate)?.busy);
+  const dispatchable = vehicles.filter((vehicle) => vehicle.available && !isBusy(vehicle.plate));
+  const toPickupTrips = active.filter((trip) => phases.get(trip.request.id)!.kind === "toPickup");
 
   const groups = buildTripGroups(pending.map((trip) => ({ appointment: trip.appointment, direction: trip.request.direction })), hospitals);
   const groupedIds = new Set(groups.flatMap((group) => group.appointmentIds));
-  const joins = suggestJoinDispatched(pending.filter((trip) => !groupedIds.has(trip.appointment.id)), onTheWay, hospitals);
+  const joins = suggestJoinDispatched(pending.filter((trip) => !groupedIds.has(trip.appointment.id)), toPickupTrips.filter(onDate), hospitals);
   const unrequested = findUnrequestedMatches(appointments, requests, hospitals, now).filter((match) => match.appointment.appointmentDate === date);
+
+  // الرحلات الجارية مجمّعة حسب السيارة (groupId أو الطلب نفسه)
+  const activeGroups = Array.from(active.reduce((map, trip) => {
+    const key = trip.request.groupId ?? trip.request.id;
+    map.set(key, [...(map.get(key) ?? []), trip]);
+    return map;
+  }, new Map<string, Trip[]>()).values());
+
+  // الوصول إلى الوجهة اليوم (GPS أو تأكيد يدوي أو انتهاء المدة التقديرية)
+  const arrivals = arrivalsOn(today, requests, now, gpsLive);
+
+  // تسجيل انتهاء المدة التقديرية لسيارة بلا GPS، حتى تظهر الرحلة منتهية لكل المستخدمين
+  const recorded = useRef(new Set<string>());
+  useEffect(() => {
+    const due = requests.filter((request) => request.status === "تم استلام المريض" && request.etaAt && !recorded.current.has(request.id)
+      && phases.get(request.id)?.kind === "arrived");
+    if (!due.length) return;
+    due.forEach((request) => recorded.current.add(request.id));
+    onArrived(due.map((request) => request.id), "estimate");
+  }, [requests, now, liveGps]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // رسالة لمشرف السيارات عند وصول سيارة، وتنبيه على الجهاز إن فعّله
+  useArrivalAlerts({ arrivals, appointments, hospitals, driverOf });
+  const [notifyDevice, setNotifyDevice] = useState(deviceNotificationsOn);
+
+  async function toggleDeviceNotifications() {
+    if (notifyDevice) {
+      setNotifyDevice(false);
+      try { localStorage.setItem(NOTIFY_KEY, "off"); } catch { /* غير متاح */ }
+      return;
+    }
+    if (!("Notification" in window)) {
+      toast.error("هذا المتصفح لا يدعم التنبيهات");
+      return;
+    }
+    const permission = Notification.permission === "granted" ? "granted" : await Notification.requestPermission();
+    if (permission !== "granted") {
+      toast.error("لم يسمح المتصفح بالتنبيهات. فعّلها من إعدادات الموقع في المتصفح.");
+      return;
+    }
+    setNotifyDevice(true);
+    try { localStorage.setItem(NOTIFY_KEY, "on"); } catch { /* غير متاح */ }
+    toast.success("ستصلك تنبيهات الوصول على الجهاز عندما تكون الصفحة في الخلفية");
+  }
 
   function dispatchSingle(trip: Trip) {
     const suggested = assignVehicleForTrips(dispatchable, [trip.appointment]);
@@ -81,140 +198,257 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, audit, d
   function joinTrip(requestId: string, plate: string, groupId?: string) {
     const vehicle = vehicles.find((item) => item.plate === plate);
     if (!vehicle) return;
-    const partners = onTheWay.filter((trip) => trip.request.vehiclePlate === plate && (groupId ? trip.request.groupId === groupId : !trip.request.groupId)).map((trip) => trip.request.id);
+    const partners = toPickupTrips.filter((trip) => trip.request.vehiclePlate === plate && (groupId ? trip.request.groupId === groupId : !trip.request.groupId)).map((trip) => trip.request.id);
     onDispatch([requestId], vehicle, partners);
   }
 
-  // الرحلات المرسلة مجمّعة حسب الرحلة الواحدة (groupId أو الطلب نفسه)
-  const sentTrips = Array.from(onTheWay.reduce((map, trip) => {
-    const key = trip.request.groupId ?? trip.request.id;
-    map.set(key, [...(map.get(key) ?? []), trip]);
-    return map;
-  }, new Map<string, Trip[]>()).values());
+  const availabilityText = (vehicle: Vehicle) => {
+    if (!vehicle.available) return { tone: "neutral" as const, text: "خارج الخدمة" };
+    const state = availability.get(vehicle.plate);
+    if (!state?.busy) return { tone: "green" as const, text: "متاحة" };
+    if (state.toPickup) return { tone: "blue" as const, text: "في الطريق إلى الاستلام" };
+    return { tone: "blue" as const, text: state.until ? `في رحلة · تتفرغ ${timeLabel(state.until)}` : "في رحلة" };
+  };
+  const vehicleCounts = {
+    all: vehicles.length,
+    available: dispatchable.length,
+    busy: vehicles.filter((vehicle) => vehicle.available && isBusy(vehicle.plate)).length,
+    off: vehicles.filter((vehicle) => !vehicle.available).length,
+  };
+  const shownVehicles = vehicles.filter((vehicle) => vehicleFilter === "all"
+    || (vehicleFilter === "available" && vehicle.available && !isBusy(vehicle.plate))
+    || (vehicleFilter === "busy" && vehicle.available && isBusy(vehicle.plate))
+    || (vehicleFilter === "off" && !vehicle.available));
+  const trackingCount = activeGroups.filter((trips) => trips.some((trip) => {
+    const phase = phases.get(trip.request.id)!;
+    return phase.kind === "toDestination" && phase.tracking;
+  })).length;
 
   return (
     <>
-      <PageHeading
+      <PageHeader
         title="توزيع السيارات"
-        action={(
-          <div className="flex flex-wrap gap-2">
-            <button onClick={() => setAddingTrip(true)} className="flex min-h-11 items-center gap-2 rounded-xl bg-[#a61d2d] px-4 text-sm font-bold text-white hover:bg-[#8b1725]"><Plus className="h-4 w-4" /> رحلة غير طبية</button>
-            <button onClick={onExport} className="flex min-h-11 items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 text-sm font-bold text-slate-600"><Download className="h-4 w-4 text-[#a61d2d]" /> Excel</button>
-            <button onClick={onManager} className="flex min-h-11 items-center gap-2 rounded-xl bg-[#10233f] px-4 text-sm font-bold text-white"><MapPin className="h-4 w-4" /> الخريطة والإحصائيات</button>
-          </div>
+        subtitle={<>{longDate(date)}{date === today ? " · اليوم" : ""}</>}
+        actions={(
+          <>
+            <button onClick={() => setAddingTrip(true)} className={btn("primary")}><Plus className="h-4 w-4" /> رحلة غير طبية</button>
+            <button onClick={onExport} className={btn("secondary")}><Download className="h-4 w-4" /> Excel</button>
+            <button onClick={onManager} className={btn("dark")}><MapPin className="h-4 w-4" /> الخريطة والإحصائيات</button>
+          </>
         )}
       />
 
-      <div className="mb-5"><DateChooser value={date} onChange={onDateChange} /></div>
+      <div className="mb-6"><DateChooser value={date} onChange={onDateChange} /></div>
 
       {addingTrip && <NonMedicalTripForm defaultDate={date} onCancel={() => setAddingTrip(false)} onSave={(appointment, request) => { onAddTrip(appointment, request); setAddingTrip(false); }} />}
 
-      <div className="mb-6 grid gap-4 sm:grid-cols-3">
-        <InfoCard icon={BellRing} label="بانتظار التوزيع" value={String(pending.length)} tone="amber" />
-        <InfoCard icon={CheckCircle2} label="سيارات جاهزة" value={String(dispatchable.length)} tone="blue" />
-        <InfoCard icon={Settings2} label="خارج الخدمة" value={String(vehicles.filter((vehicle) => !vehicle.available).length)} tone="teal" />
+      <div className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4 lg:gap-4">
+        <Stat icon={BellRing} tone="amber" label="بانتظار التوزيع" value={pending.length} hint={date === today ? "طلبات اليوم" : "طلبات التاريخ المحدد"} />
+        <Stat icon={Truck} tone="blue" label="رحلات جارية" value={activeGroups.length} hint={trackingCount ? `${trackingCount} بمتابعة GPS` : "الآن"} />
+        <Stat icon={CheckCircle2} tone="green" label="سيارات متاحة" value={dispatchable.length} hint={`من ${vehicles.length} سيارة`} />
+        <Stat icon={PauseCircle} tone="neutral" label="خارج الخدمة" value={vehicleCounts.off} />
       </div>
 
-      <div className="space-y-6">
-        {(groups.length > 0 || joins.length > 0) && (
-          <SectionCard tone="blue" title={<><Sparkles className="h-5 w-5 text-blue-700" /> جمع الرحلات</>} badge={<span className="rounded-full bg-blue-100 px-3 py-1 text-xs font-bold text-blue-800">{groups.length + joins.length}</span>}>
-            <div className="grid gap-4 p-5 lg:grid-cols-2">
-              {groups.map((group) => {
-                const members = pending.filter((trip) => group.appointmentIds.includes(trip.appointment.id));
-                const vehicle = assignVehicleForTrips(dispatchable, members.map((trip) => trip.appointment));
-                return (
-                  <div key={group.appointmentIds.join("-")} className="rounded-2xl border border-blue-100 bg-[#f8fbff] p-4">
-                    <div className="flex items-start justify-between gap-3">
-                      <p className="text-xs font-bold text-blue-800">{group.direction} · {group.reason}</p>
-                      <span className="shrink-0 rounded-full bg-blue-100 px-2.5 py-1 text-xs font-bold text-blue-700">{members.length} رحلات</span>
+      <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_380px]">
+        <div className="min-w-0 space-y-6">
+          <Panel tone="amber" icon={BellRing} title="طلبات بانتظار التوزيع" count={pending.length} description="اختر السيارة المناسبة ثم أرسلها">
+            {pending.length ? (
+              <div className="divide-y divide-slate-100">
+                {pending.map((trip) => {
+                  const suggested = assignVehicleForTrips(dispatchable, [trip.appointment]);
+                  const selectedPlate = selectedVehicles[trip.request.id] || suggested?.plate || "";
+                  // الرحلة العادية تقبل أي سيارة (سيدان وباص أولًا)، واحتياجات خاصة تحتاج سيارة مجهزة
+                  const compatible = (trip.appointment.kind === "احتياجات خاصة" ? vehicles.filter((vehicle) => vehicle.kind === "احتياجات خاصة") : [...vehicles]
+                    .sort((a, b) => Number(a.kind === "احتياجات خاصة") - Number(b.kind === "احتياجات خاصة")))
+                    .filter((vehicle) => vehicle.available);
+                  const ready = compatible.filter((vehicle) => !isBusy(vehicle.plate));
+                  const zone = matchHospitalZone(trip.appointment, hospitals);
+                  return (
+                    <div key={trip.request.id} className="flex flex-col gap-4 p-4 sm:p-5 lg:flex-row lg:items-center">
+                      <div className="flex min-w-0 flex-1 gap-4">
+                        <TimeBlock time={trip.appointment.appointmentAt} day={formatDay(trip.appointment.appointmentDate, now)} />
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <p className="font-semibold text-ink">{trip.appointment.patientName}</p>
+                            <Badge tone={trip.request.direction === "عودة" ? "amber" : "neutral"}>{trip.request.direction}</Badge>
+                            {isNonMedical(trip.appointment) && <Badge tone="violet">غير طبية</Badge>}
+                            {groupedIds.has(trip.appointment.id) && <Badge tone="violet" icon={Sparkles}>قابلة للجمع</Badge>}
+                          </div>
+                          <p className="mt-1 text-sm text-slate-600">{appointmentPickupLabel(trip.appointment)} ← {trip.appointment.clinic}{zone && <span className="text-slate-400"> · {zone}</span>}</p>
+                          <p className="mt-0.5 text-xs text-slate-500">{trip.appointment.kind}{trip.appointment.assistance.length ? ` · ${trip.appointment.assistance.join("، ")}` : ""}</p>
+                        </div>
+                      </div>
+                      <div className="flex flex-col gap-2 sm:flex-row lg:w-[360px]">
+                        <select aria-label="السيارة" value={ready.some((vehicle) => vehicle.plate === selectedPlate) ? selectedPlate : ""} onChange={(event) => setSelectedVehicles((current) => ({ ...current, [trip.request.id]: event.target.value }))} className={cx(inputClass, "h-10 min-w-0 flex-1")}>
+                          {!ready.length && <option value="">لا توجد سيارة متاحة</option>}
+                          {ready.map((vehicle) => <option key={vehicle.plate} value={vehicle.plate}>{vehicle.plate} · {driverOf(vehicle.plate)} · {vehicle.kind}</option>)}
+                          {compatible.filter((vehicle) => isBusy(vehicle.plate)).map((vehicle) => {
+                            const until = availability.get(vehicle.plate)?.until;
+                            return <option key={vehicle.plate} value={vehicle.plate} disabled>{vehicle.plate} · مشغولة{until ? ` حتى ${timeLabel(until)}` : ""}</option>;
+                          })}
+                        </select>
+                        <button disabled={!ready.length} onClick={() => dispatchSingle(trip)} className={btn("primary")}><Send className="h-4 w-4" /> إرسال</button>
+                      </div>
                     </div>
-                    <TripList trips={members} hospitals={hospitals} />
-                    <p className="mt-3 text-xs text-slate-500">السيارة المقترحة: <b className="text-slate-700">{vehicle ? `${vehicle.plate} · ${vehicle.driver}` : "لا توجد سيارة متاحة"}</b></p>
-                    <button disabled={!vehicle} onClick={() => dispatchGroup(group.appointmentIds)} className="mt-3 flex min-h-10 w-full items-center justify-center gap-2 rounded-xl bg-blue-700 text-xs font-bold text-white hover:bg-blue-800 disabled:opacity-40"><Send className="h-4 w-4" /> جمع {members.length} رحلات وإرسال السيارة</button>
-                  </div>
-                );
-              })}
-              {joins.map((join) => {
-                const trip = pending.find((item) => item.request.id === join.requestId)!;
-                return (
-                  <div key={join.requestId} className="rounded-2xl border border-emerald-100 bg-emerald-50/40 p-4">
-                    <p className="text-xs font-bold text-emerald-800">{join.reason}</p>
-                    <TripList trips={[trip]} hospitals={hospitals} />
-                    <button onClick={() => joinTrip(join.requestId, join.plate, join.groupId)} className="mt-3 flex min-h-10 w-full items-center justify-center gap-2 rounded-xl bg-emerald-700 text-xs font-bold text-white hover:bg-emerald-800"><Link2 className="h-4 w-4" /> ضم إلى السيارة {join.plate}</button>
-                  </div>
-                );
-              })}
-            </div>
-          </SectionCard>
-        )}
-
-        <SectionCard tone="amber" title={<><BellRing className="h-5 w-5 text-amber-700" /> طلبات جديدة</>} badge={<span className="rounded-full bg-amber-200 px-3 py-1 text-xs font-bold text-amber-900">{pending.length}</span>}>
-          <div className="divide-y divide-slate-100">
-            {pending.length ? pending.map((trip) => {
-              const suggested = assignVehicleForTrips(dispatchable, [trip.appointment]);
-              const selectedPlate = selectedVehicles[trip.request.id] || suggested?.plate || "none";
-              // الرحلة العادية تقبل أي سيارة (سيدان وباص أولًا)، واحتياجات خاصة تحتاج سيارة مجهزة
-              const compatible = trip.appointment.kind === "احتياجات خاصة"
-                ? dispatchable.filter((vehicle) => vehicle.kind === "احتياجات خاصة")
-                : [...dispatchable].sort((a, b) => Number(a.kind === "احتياجات خاصة") - Number(b.kind === "احتياجات خاصة"));
-              const zone = matchHospitalZone(trip.appointment, hospitals);
-              return (
-                <div key={trip.request.id} className="grid gap-4 p-5 lg:grid-cols-[1.4fr_.8fr_auto] lg:items-center">
-                  <div>
-                    <div className="flex flex-wrap items-center gap-2"><p className="font-bold">{trip.appointment.patientName}</p><span className="rounded-full bg-slate-100 px-2 py-1 text-[10px] font-bold text-slate-500">{trip.request.direction}</span>{isNonMedical(trip.appointment) && <span className="rounded-full bg-violet-50 px-2 py-1 text-[10px] font-bold text-violet-700">غير طبية</span>}{groupedIds.has(trip.appointment.id) && <span className="rounded-full bg-blue-50 px-2 py-1 text-[10px] font-bold text-blue-700">قابلة للجمع</span>}</div>
-                    <p className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-500"><Clock3 className="h-4 w-4" />{trip.appointment.appointmentAt}<MapPin className="h-4 w-4" />{appointmentPickupLabel(trip.appointment)} ← {trip.appointment.clinic}{zone && <span className="rounded-full bg-blue-50 px-2 py-0.5 text-[10px] font-bold text-blue-700">{zone}</span>}</p>
-                    <p className="mt-1 text-[11px] text-slate-400">{trip.appointment.kind}{trip.appointment.assistance.length ? ` · ${trip.appointment.assistance.join("، ")}` : ""}</p>
-                  </div>
-                  <select aria-label="السيارة" value={selectedPlate} onChange={(event) => setSelectedVehicles((current) => ({ ...current, [trip.request.id]: event.target.value }))} className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-xs font-bold outline-none focus:border-[#d88994]">
-                    {!compatible.length && <option value="none">لا توجد سيارة مناسبة</option>}
-                    {compatible.map((vehicle) => <option key={vehicle.plate} value={vehicle.plate}>{vehicle.plate} · {vehicle.driver} · {vehicle.kind}</option>)}
-                  </select>
-                  <button disabled={!compatible.length} onClick={() => dispatchSingle(trip)} className="flex min-h-11 items-center justify-center gap-2 rounded-xl bg-[#a61d2d] px-4 text-sm font-bold text-white hover:bg-[#8b1725] disabled:cursor-not-allowed disabled:opacity-40"><Send className="h-4 w-4" /> إرسال</button>
-                </div>
-              );
-            }) : <p className="p-8 text-center text-sm font-bold text-slate-400">لا توجد طلبات جديدة</p>}
-          </div>
-        </SectionCard>
-
-        {unrequested.length > 0 && (
-          <SectionCard tone="red" title={<><Users className="h-5 w-5 text-red-700" /> لنفس الوجهة ولم يُطلب لها سيارة</>} badge={<span className="rounded-full bg-red-100 px-3 py-1 text-xs font-bold text-red-800">{unrequested.length}</span>}>
-            <ul className="divide-y divide-red-50">
-              {unrequested.map((match) => (
-                <li key={match.appointment.id} className="p-4 text-sm">
-                  <p className="font-bold">{match.appointment.patientName} <span className="font-semibold text-slate-500">· {appointmentPickupLabel(match.appointment)} · {match.appointment.appointmentAt} · {match.appointment.clinic}</span></p>
-                  <p className="mt-1 text-xs text-slate-600">{match.sameDestination ? "نفس وجهة" : "وجهة مجاورة لـ"} {match.matchedAppointment.patientName} ({match.matchedRequest.status}{match.matchedRequest.vehiclePlate ? ` · ${match.matchedRequest.vehiclePlate}` : ""}) · فارق {match.gapMinutes} د</p>
-                </li>
-              ))}
-            </ul>
-          </SectionCard>
-        )}
-
-        <SectionCard title={<><Truck className="h-5 w-5 text-[#a61d2d]" /> رحلات جارية</>} badge={<span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-600">{sentTrips.length}</span>}>
-          <div className="divide-y divide-slate-100">
-            {sentTrips.length ? sentTrips.map((trips) => <SentTrip key={trips[0].request.groupId ?? trips[0].request.id} trips={trips} vehicles={vehicles} hospitals={hospitals} />) : <p className="p-6 text-center text-sm font-bold text-slate-400">لا توجد رحلات جارية</p>}
-          </div>
-        </SectionCard>
-
-        <SectionCard title="السيارات" badge={<span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-600">{vehicles.filter((vehicle) => vehicle.available).length} / {vehicles.length}</span>}>
-          <div className="grid gap-2 p-4 sm:grid-cols-2 lg:grid-cols-3">
-            {vehicles.map((vehicle) => (
-              <div key={vehicle.plate} className={`flex items-center gap-3 rounded-xl border px-3 py-2.5 ${vehicle.available ? "border-slate-200" : "border-slate-100 bg-slate-50"}`}>
-                <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${!vehicle.available ? "bg-slate-300" : busyPlates.has(vehicle.plate) ? "bg-[#eb6834]" : "bg-[#1baf7a]"}`} title={!vehicle.available ? "خارج الخدمة" : busyPlates.has(vehicle.plate) ? "في رحلة" : "متاحة"} />
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-bold"><span dir="ltr">{vehicle.plate}</span> · {vehicle.driver}</p>
-                  <p className="truncate text-[11px] text-slate-400">{vehicle.kind} · <span dir="ltr">{vehicle.phone}</span>{busyPlates.has(vehicle.plate) ? " · في رحلة" : !vehicle.available ? " · خارج الخدمة" : ""}</p>
-                </div>
-                <button onClick={() => onUpdate(vehicles.map((item) => item.plate === vehicle.plate ? { ...item, available: !item.available } : item))} className={`shrink-0 rounded-lg px-2.5 py-1.5 text-[11px] font-bold ${vehicle.available ? "border border-slate-200 text-slate-500 hover:bg-slate-50" : "bg-[#a61d2d] text-white"}`}>{vehicle.available ? "إيقاف" : "إتاحة"}</button>
+                  );
+                })}
               </div>
-            ))}
-          </div>
-        </SectionCard>
+            ) : <EmptyState icon={CheckCircle2} title="لا توجد طلبات بانتظار التوزيع" hint="تظهر هنا طلبات مشرفي المباني فور وصولها" />}
+          </Panel>
 
-        <SectionCard title="سجل العمليات">
-          <div className="max-h-56 divide-y divide-slate-100 overflow-auto">
-            {audit.length ? audit.map((item, index) => <p key={`${item}-${index}`} className="px-5 py-3 text-xs text-slate-500">{item}</p>) : <p className="p-5 text-xs text-slate-400">—</p>}
-          </div>
-        </SectionCard>
+          {(groups.length > 0 || joins.length > 0) && (
+            <Panel tone="violet" icon={Sparkles} title="اقتراحات جمع الرحلات" count={groups.length + joins.length} description="مرضى لنفس الوجهة أو وجهات متجاورة في نفس التوقيت">
+              <div className="grid gap-4 p-4 sm:p-5 lg:grid-cols-2">
+                {groups.map((group) => {
+                  const members = pending.filter((trip) => group.appointmentIds.includes(trip.appointment.id));
+                  const vehicle = assignVehicleForTrips(dispatchable, members.map((trip) => trip.appointment));
+                  return (
+                    <div key={group.appointmentIds.join("-")} className="flex flex-col rounded-xl bg-violet-50/50 p-4 ring-1 ring-violet-100">
+                      <div className="flex items-start justify-between gap-3">
+                        <p className="text-xs font-medium text-violet-800">{group.direction} · {group.reason}</p>
+                        <Badge tone="violet">{members.length} رحلات</Badge>
+                      </div>
+                      <TripList trips={members} hospitals={hospitals} />
+                      <p className="mt-3 text-xs text-slate-500">السيارة المقترحة: <span className="font-semibold text-slate-700">{vehicle ? `${vehicle.plate} · ${driverOf(vehicle.plate)}` : "لا توجد سيارة متاحة"}</span></p>
+                      <button disabled={!vehicle} onClick={() => dispatchGroup(group.appointmentIds)} className={cx(btn("dark", "sm"), "mt-3 w-full")}><Send className="h-4 w-4" /> جمع {members.length} رحلات وإرسال السيارة</button>
+                    </div>
+                  );
+                })}
+                {joins.map((join) => {
+                  const trip = pending.find((item) => item.request.id === join.requestId)!;
+                  return (
+                    <div key={join.requestId} className="flex flex-col rounded-xl bg-emerald-50/50 p-4 ring-1 ring-emerald-100">
+                      <p className="text-xs font-medium text-emerald-800">{join.reason}</p>
+                      <TripList trips={[trip]} hospitals={hospitals} />
+                      <button onClick={() => joinTrip(join.requestId, join.plate, join.groupId)} className={cx(btn("success", "sm"), "mt-3 w-full")}><Link2 className="h-4 w-4" /> ضم إلى السيارة {join.plate}</button>
+                    </div>
+                  );
+                })}
+              </div>
+            </Panel>
+          )}
+
+          {unrequested.length > 0 && (
+            <Panel tone="red" icon={AlertTriangle} title="مواعيد لم يُطلب لها سيارة" count={unrequested.length} description="لنفس وجهة رحلة قائمة وفي نفس التوقيت">
+              <ul className="divide-y divide-slate-100">
+                {unrequested.map((match) => (
+                  <li key={match.appointment.id} className="flex gap-4 p-4 sm:px-5">
+                    <TimeBlock time={match.appointment.appointmentAt} />
+                    <div className="min-w-0 text-sm">
+                      <p className="font-semibold text-ink">{match.appointment.patientName} <span className="font-normal text-slate-500">· {appointmentPickupLabel(match.appointment)} · {match.appointment.clinic}</span></p>
+                      <p className="mt-1 text-xs text-slate-500">{match.sameDestination ? "نفس وجهة" : "وجهة مجاورة لـ"} {match.matchedAppointment.patientName} ({match.matchedRequest.status}{match.matchedRequest.vehiclePlate ? ` · ${match.matchedRequest.vehiclePlate}` : ""}) · فارق {match.gapMinutes} د</p>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </Panel>
+          )}
+
+          <Panel tone="blue" icon={Truck} title="رحلات جارية" count={activeGroups.length} description="من إرسال السيارة حتى وصولها إلى الوجهة">
+            {activeGroups.length ? (
+              <div className="divide-y divide-slate-100">
+                {activeGroups.map((trips) => (
+                  <ActiveTrip
+                    key={trips[0].request.groupId ?? trips[0].request.id}
+                    trips={trips}
+                    phase={groupPhase(trips.map((trip) => phases.get(trip.request.id)!))}
+                    vehicle={vehicles.find((item) => item.plate === trips[0].request.vehiclePlate)}
+                    driver={driverOf(trips[0].request.vehiclePlate, trips[0].request.driver)}
+                    hospitals={hospitals}
+                    onArrived={() => onArrived(trips.map((trip) => trip.request.id), "manual")}
+                  />
+                ))}
+              </div>
+            ) : <EmptyState icon={Truck} title="لا توجد رحلات جارية" />}
+          </Panel>
+        </div>
+
+        <aside className="min-w-0 space-y-6">
+          <Panel
+            tone="green"
+            icon={CheckCircle2}
+            title="وصول السيارات اليوم"
+            count={arrivals.length}
+            description="تصبح السيارة متاحة فور وصولها"
+            actions={(
+              <button
+                onClick={toggleDeviceNotifications}
+                aria-pressed={notifyDevice}
+                aria-label={notifyDevice ? "إيقاف تنبيه الجهاز عند الوصول" : "تفعيل تنبيه الجهاز عند الوصول"}
+                title={notifyDevice ? "تنبيه الجهاز مفعّل" : "تنبيه على الجهاز عند الوصول"}
+                className={cx(btn(notifyDevice ? "success" : "secondary", "sm"), "w-9 px-0")}
+              >
+                {notifyDevice ? <BellRing className="h-4 w-4" /> : <Bell className="h-4 w-4" />}
+              </button>
+            )}
+          >
+            {arrivals.length ? (
+              <ul className="max-h-80 divide-y divide-slate-100 overflow-y-auto">
+                {arrivals.map(({ request, at, source }) => {
+                  const appointment = appointments.find((item) => item.id === request.appointmentId);
+                  const destination = appointment ? tripEndpoints(appointment, request.direction, hospitals).destination : "";
+                  return (
+                    <li key={request.id} className="flex items-start gap-3 px-5 py-3">
+                      <span dir="ltr" className="mt-0.5 w-12 shrink-0 text-sm font-semibold text-ink tabular">{timeLabel(at)}</span>
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-medium text-ink"><span dir="ltr">{request.vehiclePlate}</span> · {driverOf(request.vehiclePlate, request.driver)}</p>
+                        <p className="truncate text-xs text-slate-500">{destination}{appointment ? ` · ${appointment.patientName}` : ""}</p>
+                      </div>
+                      <Badge tone={source === "gps" ? "green" : source === "manual" ? "blue" : "neutral"} icon={source === "gps" ? Radio : source === "manual" ? CheckCircle2 : Timer}>
+                        {source === "gps" ? "GPS" : source === "manual" ? "يدوي" : "تقديري"}
+                      </Badge>
+                    </li>
+                  );
+                })}
+              </ul>
+            ) : <EmptyState icon={Radio} title="لم تصل سيارات اليوم بعد" hint="مع GPS يُكتشف الوصول تلقائيًا، وبدونه تنتهي الرحلة عند الوقت المتوقع" />}
+          </Panel>
+
+          <Panel icon={CarFront} title="السيارات" count={vehicles.length} bodyClassName="p-0">
+            <div className="border-b border-slate-100 px-4 py-3">
+              <Segmented
+                full
+                label="تصفية السيارات"
+                size="sm"
+                value={vehicleFilter}
+                onChange={setVehicleFilter}
+                options={[
+                  { value: "all", label: `الكل ${vehicleCounts.all}` },
+                  { value: "available", label: `متاحة ${vehicleCounts.available}` },
+                  { value: "busy", label: `في رحلة ${vehicleCounts.busy}` },
+                  { value: "off", label: `موقوفة ${vehicleCounts.off}` },
+                ]}
+              />
+            </div>
+            <ul className="max-h-[520px] divide-y divide-slate-100 overflow-y-auto">
+              {shownVehicles.map((vehicle) => {
+                const state = availabilityText(vehicle);
+                const live = liveGps.get(vehicle.plate);
+                return (
+                  <li key={vehicle.plate} className="flex items-center gap-3 px-4 py-3">
+                    <Dot tone={state.tone} />
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-medium text-ink"><span dir="ltr">{vehicle.plate}</span> · {live?.driver ?? vehicle.driver}</p>
+                      <p className="truncate text-xs text-slate-500">{vehicle.kind} · {state.text}{live ? " · GPS مباشر" : ""}</p>
+                    </div>
+                    <Switch
+                      checked={vehicle.available}
+                      label={vehicle.available ? `إيقاف السيارة ${vehicle.plate}` : `إتاحة السيارة ${vehicle.plate}`}
+                      onChange={(available) => onUpdate(vehicles.map((item) => item.plate === vehicle.plate ? { ...item, available } : item))}
+                    />
+                  </li>
+                );
+              })}
+              {!shownVehicles.length && <li><EmptyState icon={CarFront} title="لا توجد سيارات في هذا التصنيف" /></li>}
+            </ul>
+          </Panel>
+
+          <Panel icon={History} title="سجل العمليات" count={audit.length}>
+            {audit.length ? (
+              <AuditTimeline items={audit} className="max-h-72" />
+            ) : <EmptyState icon={Users} title="لا توجد عمليات بعد" />}
+          </Panel>
+        </aside>
       </div>
     </>
   );
@@ -224,8 +458,8 @@ function TripList({ trips, hospitals }: { trips: Trip[]; hospitals: Hospital[] }
   return (
     <ul className="mt-3 space-y-2">
       {trips.map((trip) => (
-        <li key={trip.request.id} className="rounded-xl bg-white px-3 py-2 text-xs ring-1 ring-slate-100">
-          <p className="font-bold text-slate-800">{trip.appointment.patientName} <span className="font-semibold text-slate-400" dir="ltr">{trip.appointment.appointmentAt}</span></p>
+        <li key={trip.request.id} className="rounded-lg bg-white px-3 py-2 text-xs ring-1 ring-slate-200/70">
+          <p className="font-semibold text-ink">{trip.appointment.patientName} <span dir="ltr" className="font-medium text-slate-500 tabular">{trip.appointment.appointmentAt}</span></p>
           <p className="mt-0.5 text-slate-500">{appointmentPickupLabel(trip.appointment)} ← {trip.appointment.clinic}{matchHospitalZone(trip.appointment, hospitals) ? ` · ${matchHospitalZone(trip.appointment, hospitals)}` : ""}</p>
         </li>
       ))}
@@ -233,24 +467,70 @@ function TripList({ trips, hospitals }: { trips: Trip[]; hospitals: Hospital[] }
   );
 }
 
-function SentTrip({ trips, vehicles, hospitals }: { trips: Trip[]; vehicles: Vehicle[]; hospitals: Hospital[] }) {
+const STEPS = ["أُرسلت", "عند الاستلام", "في الطريق", "الوجهة"];
+
+/** رحلة سيارة جارية: مرحلتها، والوقت المتوقع للوصول، ومتابعة GPS، ورسالة السائق. */
+function ActiveTrip({ trips, phase, vehicle, driver, hospitals, onArrived }: {
+  trips: Trip[];
+  phase: TripPhase;
+  vehicle?: Vehicle;
+  driver: string;
+  hospitals: Hospital[];
+  onArrived: () => void;
+}) {
   const plate = trips[0].request.vehiclePlate ?? "";
-  const vehicle = vehicles.find((item) => item.plate === plate);
-  const message = buildDriverMessage(trips, { plate, driver: trips[0].request.driver ?? vehicle?.driver ?? "" }, hospitals);
+  const message = buildDriverMessage(trips, { plate, driver }, hospitals);
   const phone = vehicle?.phone;
   const seatsLeft = Math.min(...trips.map((trip) => groupCapacity(trip.appointment.kind))) - trips.length;
+  const step = phase.kind === "toPickup" ? (phase.atPickup ? 1 : 0) : phase.kind === "toDestination" ? 2 : 3;
+  const destinations = Array.from(new Set(trips.map((trip) => tripEndpoints(trip.appointment, trip.request.direction, hospitals).destination)));
   return (
-    <div className="flex flex-col gap-3 px-5 py-4 lg:flex-row lg:items-center">
-      <div className="flex-1">
-        <p className="font-bold"><span dir="ltr">{plate}</span> · {trips[0].request.driver ?? vehicle?.driver}{trips.length > 1 && <span className="mr-2 rounded-full bg-blue-50 px-2 py-0.5 text-[10px] font-bold text-blue-700">{trips.length} مرضى</span>}{seatsLeft > 0 && <span className="mr-2 rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-bold text-emerald-700">{seatsLeft} مقعد متاح</span>}</p>
-        <p className="mt-1 text-xs text-slate-500">{trips.map((trip) => `${trip.appointment.patientName} (${trip.appointment.appointmentAt}) ← ${trip.appointment.clinic}`).join(" · ")}</p>
-        <p className="mt-1 text-[11px] font-bold text-violet-700">{Array.from(new Set(trips.map((trip) => trip.request.status))).join(" / ")}{trips[0].request.notificationSentAt ? ` · ${trips[0].request.notificationSentAt}` : ""}</p>
+    <article className="p-4 sm:p-5">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-3">
+          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-50 text-blue-700"><Truck className="h-5 w-5" /></span>
+          <div className="min-w-0">
+            <p className="truncate font-semibold text-ink"><span dir="ltr">{plate}</span> · {driver}</p>
+            <p className="truncate text-xs text-slate-500">{trips[0].request.direction} إلى {destinations.join("، ")}{trips.length > 1 ? ` · ${trips.length} مرضى` : ""}</p>
+          </div>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          {phase.kind === "toDestination" && (phase.tracking ? <Badge tone="green" icon={Radio}>GPS مباشر</Badge> : <Badge icon={Timer}>وقت تقديري</Badge>)}
+          {seatsLeft > 0 && phase.kind === "toPickup" && <Badge tone="green">{seatsLeft} مقعد متاح</Badge>}
+          <StatusBadge status={trips[0].request.status} />
+        </div>
       </div>
-      <div className="flex flex-wrap gap-2">
-        {phone && <a href={whatsappLink(phone, message)} target="_blank" rel="noreferrer" className="flex min-h-10 items-center gap-1.5 rounded-xl bg-[#1faa53] px-3 text-xs font-bold text-white hover:bg-[#178f45]"><MessageCircle className="h-4 w-4" /> واتساب</a>}
-        {phone && <a href={`tel:${phone}`} className="flex min-h-10 items-center gap-1.5 rounded-xl border border-slate-200 px-3 text-xs font-bold text-slate-600 hover:bg-slate-50"><Phone className="h-4 w-4" /> اتصال</a>}
-        <button onClick={() => navigator.clipboard?.writeText(message).then(() => toast.success("تم نسخ الرسالة"), () => toast.error("تعذر النسخ"))} className="flex min-h-10 items-center gap-1.5 rounded-xl border border-slate-200 px-3 text-xs font-bold text-slate-600 hover:bg-slate-50"><Copy className="h-4 w-4" /> نسخ</button>
+
+      <div className="mt-3"><Steps steps={STEPS} current={step} /></div>
+
+      <ul className="mt-3 space-y-1 text-sm text-slate-600">
+        {trips.map((trip) => (
+          <li key={trip.request.id} className="flex flex-wrap gap-x-2">
+            <span className="font-medium text-ink">{trip.appointment.patientName}</span>
+            <span dir="ltr" className="text-slate-500 tabular">{trip.appointment.appointmentAt}</span>
+            <span className="text-slate-500">{appointmentPickupLabel(trip.appointment)} ← {trip.appointment.clinic}</span>
+          </li>
+        ))}
+      </ul>
+
+      {phase.kind === "toDestination" && (
+        <p className={cx("mt-3 flex flex-wrap items-center gap-x-2 rounded-lg px-3 py-2 text-sm", phase.late ? "bg-amber-50 text-amber-900" : "bg-slate-50 text-slate-700")}>
+          <Timer className="h-4 w-4 shrink-0" />
+          <span>الوصول المتوقع <span dir="ltr" className="font-semibold tabular">{timeLabel(phase.etaAt)}</span></span>
+          <span className="text-slate-500">·</span>
+          <span>{phase.late ? `متأخرة ${minutesText(-phase.minutesLeft)} عن الوقت المتوقع` : `بعد ${minutesText(phase.minutesLeft)}`}</span>
+          {phase.tracking && <span className="text-xs text-slate-500">· يُسجَّل الوصول تلقائيًا عند اقتراب السيارة من الوجهة</span>}
+        </p>
+      )}
+
+      <div className="mt-4 flex flex-wrap gap-2">
+        {phone && <a href={whatsappLink(phone, message)} target="_blank" rel="noreferrer" className={cx(btn("secondary", "sm"), "text-emerald-700")}><MessageCircle className="h-4 w-4" /> واتساب</a>}
+        {phone && <a href={`tel:${phone}`} className={btn("secondary", "sm")}><Phone className="h-4 w-4" /> اتصال</a>}
+        <button onClick={() => navigator.clipboard?.writeText(message).then(() => toast.success("تم نسخ الرسالة"), () => toast.error("تعذر النسخ"))} className={btn("secondary", "sm")}><Copy className="h-4 w-4" /> نسخ الرسالة</button>
+        {phase.kind === "toDestination" && (
+          <button onClick={() => window.confirm(`تأكيد وصول السيارة ${plate} إلى الوجهة؟ ستصبح متاحة لرحلة جديدة.`) && onArrived()} className={btn("success", "sm")}><CheckCircle2 className="h-4 w-4" /> تأكيد الوصول</button>
+        )}
       </div>
-    </div>
+    </article>
   );
 }

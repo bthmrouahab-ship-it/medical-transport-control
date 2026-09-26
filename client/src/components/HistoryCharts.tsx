@@ -11,45 +11,27 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import { BarChart3, Building2, CalendarDays, CheckCircle2, Clock3, MapPinned, Table2, Timer, TrendingUp, Truck } from "lucide-react";
 import type { StatsFilter, StatsSummary } from "@shared/stats";
+import { Panel, Stat, btn, cx } from "./ui-kit";
 
 // ألوان المخططات (الوضع الفاتح): السلسلة الأولى أزرق، الثانية برتقالي؛ النص بألوان النص لا بلون السلسلة
 const SERIES_1 = "#2a78d6";
 const SERIES_2 = "#eb6834";
-const GRID = "#e6e4df";
-const AXIS = "#52514e";
+const GRID = "#e2e8f0";
+const AXIS = "#64748b";
 
 const axisProps = { tick: { fill: AXIS, fontSize: 11 }, axisLine: false, tickLine: false } as const;
-const tooltipStyle = { contentStyle: { borderRadius: 12, border: "1px solid #e2e8f0", fontSize: 12, direction: "rtl" as const }, cursor: { fill: "#f1f5f9" } };
+const tooltipStyle = { contentStyle: { borderRadius: 12, border: "1px solid #e2e8f0", boxShadow: "0 8px 24px -12px rgba(15,31,53,.25)", fontSize: 12, direction: "rtl" as const }, cursor: { fill: "#f1f5f9" } };
 
-function Stat({ label, value, hint }: { label: string; value: string; hint?: string }) {
-  return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-5">
-      <p className="text-xs font-bold text-slate-500">{label}</p>
-      <p className="mt-3 text-3xl font-bold text-slate-900">{value}</p>
-      {hint && <p className="mt-1 text-[11px] text-slate-400">{hint}</p>}
-    </div>
-  );
-}
-
-function Card({ title, subtitle, children }: { title: string; subtitle?: string; children: React.ReactNode }) {
-  return (
-    <section className="rounded-2xl border border-slate-200 bg-white p-5">
-      <h3 className="font-bold text-slate-900">{title}</h3>
-      {subtitle && <p className="mt-1 text-xs text-slate-400">{subtitle}</p>}
-      <div className="mt-4">{children}</div>
-    </section>
-  );
-}
-
-const NoData = () => <p className="py-6 text-center text-xs text-slate-400">لا توجد بيانات لهذه الفترة</p>;
+const NoData = () => <p className="py-8 text-center text-sm text-slate-400">لا توجد بيانات لهذه الفترة</p>;
 
 const shortDate = (date: string) => `${Number(date.slice(8, 10))}/${Number(date.slice(5, 7))}`;
 
 /** زر داخل القوائم: النقر على منطقة أو وجهة أو سيارة أو مبنى يختاره فلترًا. */
 function Pick({ onClick, label, children, className = "" }: { onClick?: () => void; label: string; children: React.ReactNode; className?: string }) {
   if (!onClick) return <div className={className}>{children}</div>;
-  return <button type="button" onClick={onClick} title={`عرض ${label} فقط`} className={`w-full text-right hover:bg-slate-50 ${className}`}>{children}</button>;
+  return <button type="button" onClick={onClick} title={`عرض ${label} فقط`} className={cx("w-full text-start transition hover:bg-slate-50", className)}>{children}</button>;
 }
 
 export default function HistoryCharts({ summary, onFilter }: { summary: StatsSummary; onFilter?: (patch: Partial<StatsFilter>) => void }) {
@@ -68,15 +50,15 @@ export default function HistoryCharts({ summary, onFilter }: { summary: StatsSum
   const peak = hours.reduce((best, item) => (item.trips > best.trips ? item : best), hours[0]);
 
   return (
-    <div className="space-y-5">
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <Stat label="إجمالي المواعيد" value={summary.totalTrips.toLocaleString("en")} hint={`${summary.activeDays} يوم`} />
-        <Stat label="نسبة الإنجاز" value={`${completion}%`} hint={`${summary.completedTrips.toLocaleString("en")} رحلة منجزة`} />
-        <Stat label="متوسط المواعيد يوميًا" value={String(dailyAverage)} />
-        <Stat label="متوسط مدة الرحلة" value={summary.avgTripMinutes ? `${summary.avgTripMinutes} د` : "—"} />
+    <div className="space-y-6">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4 lg:gap-4">
+        <Stat icon={CalendarDays} tone="blue" label="إجمالي المواعيد" value={summary.totalTrips.toLocaleString("en")} hint={`${summary.activeDays} يوم`} />
+        <Stat icon={CheckCircle2} tone="green" label="نسبة الإنجاز" value={`${completion}%`} hint={`${summary.completedTrips.toLocaleString("en")} رحلة منجزة`} />
+        <Stat icon={TrendingUp} tone="violet" label="متوسط المواعيد يوميًا" value={String(dailyAverage)} />
+        <Stat icon={Timer} tone="cyan" label="متوسط مدة الرحلة" value={summary.avgTripMinutes ? `${summary.avgTripMinutes} د` : "—"} />
       </div>
 
-      <Card title="المواعيد يوميًا">
+      <Panel icon={TrendingUp} title="المواعيد يوميًا" description="الإجمالي والمنجز لكل يوم" bodyClassName="p-5">
         <div dir="ltr" className="h-64">
           <ResponsiveContainer width="100%" height="100%">
             <LineChart data={summary.daily} margin={{ top: 8, right: 12, bottom: 0, left: -12 }}>
@@ -85,15 +67,15 @@ export default function HistoryCharts({ summary, onFilter }: { summary: StatsSum
               <YAxis {...axisProps} allowDecimals={false} />
               <Tooltip {...tooltipStyle} cursor={{ stroke: AXIS, strokeDasharray: "3 3" }} labelFormatter={(date) => `${date}`} />
               <Legend wrapperStyle={{ fontSize: 12, color: AXIS }} />
-              <Line type="monotone" dataKey="total" name="إجمالي المواعيد" stroke={SERIES_1} strokeWidth={2} dot={summary.daily.length < 15} activeDot={{ r: 5, stroke: "#fcfcfb", strokeWidth: 2 }} />
-              <Line type="monotone" dataKey="completed" name="المنجزة" stroke={SERIES_2} strokeWidth={2} dot={summary.daily.length < 15} activeDot={{ r: 5, stroke: "#fcfcfb", strokeWidth: 2 }} />
+              <Line type="monotone" dataKey="total" name="إجمالي المواعيد" stroke={SERIES_1} strokeWidth={2} dot={summary.daily.length < 15} activeDot={{ r: 5, stroke: "#ffffff", strokeWidth: 2 }} />
+              <Line type="monotone" dataKey="completed" name="المنجزة" stroke={SERIES_2} strokeWidth={2} dot={summary.daily.length < 15} activeDot={{ r: 5, stroke: "#ffffff", strokeWidth: 2 }} />
             </LineChart>
           </ResponsiveContainer>
         </div>
-      </Card>
+      </Panel>
 
-      <div className="grid gap-5 lg:grid-cols-2">
-        <Card title="خروج السيارات حسب الساعة" subtitle={peak ? `الذروة الساعة ${peak.hour}:00 (${peak.trips} رحلة)` : undefined}>
+      <div className="grid gap-6 lg:grid-cols-2">
+        <Panel icon={Clock3} title="خروج السيارات حسب الساعة" description={peak ? `الذروة الساعة ${peak.hour}:00 (${peak.trips} رحلة)` : undefined} bodyClassName="p-5">
           <div dir="ltr" className="h-56">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={hours} margin={{ top: 8, right: 8, bottom: 0, left: -16 }}>
@@ -105,8 +87,8 @@ export default function HistoryCharts({ summary, onFilter }: { summary: StatsSum
               </BarChart>
             </ResponsiveContainer>
           </div>
-        </Card>
-        <Card title="متوسط المواعيد حسب اليوم">
+        </Panel>
+        <Panel icon={BarChart3} title="متوسط المواعيد حسب اليوم" description="أيام الأسبوع التي فيها رحلات" bodyClassName="p-5">
           <div dir="ltr" className="h-56">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={weekdays} margin={{ top: 8, right: 8, bottom: 0, left: -16 }}>
@@ -114,22 +96,36 @@ export default function HistoryCharts({ summary, onFilter }: { summary: StatsSum
                 <XAxis dataKey="weekday" reversed {...axisProps} />
                 <YAxis {...axisProps} allowDecimals={false} />
                 <Tooltip {...tooltipStyle} formatter={(value, _name, item) => [`${value} يوميًا (${item.payload.days} يوم)`, "المتوسط"]} />
-                <Bar dataKey="average" fill={SERIES_1} radius={[4, 4, 0, 0]} maxBarSize={36} />
+                <Bar dataKey="average" fill={SERIES_1} radius={[4, 4, 0, 0]} maxBarSize={24} />
               </BarChart>
             </ResponsiveContainer>
           </div>
-        </Card>
+        </Panel>
       </div>
 
-      <div className="grid gap-5 lg:grid-cols-[1.4fr_1fr]">
-        <Card title="أكثر الوجهات طلبًا">
-          <div className="mb-3 flex justify-end"><button onClick={() => setShowTable((value) => !value)} className="rounded-lg border border-slate-200 px-3 py-1 text-xs font-bold text-slate-600 hover:bg-slate-50">{showTable ? "عرض كمخطط" : "عرض كجدول"}</button></div>
+      <div className="grid items-start gap-6 lg:grid-cols-[1.4fr_1fr]">
+        <Panel
+          icon={MapPinned}
+          title="أكثر الوجهات طلبًا"
+          description={onFilter ? "اضغط على وجهة لعرض رحلاتها فقط" : undefined}
+          actions={<button onClick={() => setShowTable((value) => !value)} className={btn("secondary", "sm")}>{showTable ? <><BarChart3 className="h-3.5 w-3.5" /> مخطط</> : <><Table2 className="h-3.5 w-3.5" /> جدول</>}</button>}
+          bodyClassName="p-5"
+        >
           {!summary.destinations.length ? <NoData /> : showTable ? (
-            <div className="max-h-96 overflow-auto">
-              <table className="w-full text-right text-xs">
-                <thead className="sticky top-0 bg-white text-slate-500"><tr><th className="py-2">الوجهة</th><th>المنطقة</th><th>الرحلات</th><th>متوسط المدة</th></tr></thead>
+            <div className="-mx-5 -my-5 max-h-96 overflow-auto">
+              <table className="w-full text-start text-sm">
+                <thead className="sticky top-0 bg-slate-50 text-xs text-slate-500">
+                  <tr><th className="px-5 py-2.5 text-start font-medium">الوجهة</th><th className="py-2.5 text-start font-medium">المنطقة</th><th className="py-2.5 text-start font-medium">الرحلات</th><th className="px-5 py-2.5 text-start font-medium">متوسط المدة</th></tr>
+                </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {summary.destinations.map((item) => <tr key={item.key} onClick={pick({ destination: item.key })} className={onFilter ? "cursor-pointer hover:bg-slate-50" : undefined}><td className="py-2 font-bold text-slate-700">{item.name}</td><td className="text-slate-500">{item.zone ?? "أخرى"}</td><td>{item.trips}</td><td>{item.avgMinutes ? `${item.avgMinutes} د` : "—"}</td></tr>)}
+                  {summary.destinations.map((item) => (
+                    <tr key={item.key} onClick={pick({ destination: item.key })} className={onFilter ? "cursor-pointer hover:bg-slate-50" : undefined}>
+                      <td className="px-5 py-2.5 font-medium text-ink">{item.name}</td>
+                      <td className="py-2.5 text-slate-500">{item.zone ?? "أخرى"}</td>
+                      <td className="py-2.5 tabular">{item.trips}</td>
+                      <td className="px-5 py-2.5 tabular text-slate-600">{item.avgMinutes ? `${item.avgMinutes} د` : "—"}</td>
+                    </tr>
+                  ))}
                 </tbody>
               </table>
             </div>
@@ -138,7 +134,7 @@ export default function HistoryCharts({ summary, onFilter }: { summary: StatsSum
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={topDestinations} layout="vertical" margin={{ top: 0, right: 8, bottom: 0, left: 8 }}>
                   <CartesianGrid stroke={GRID} horizontal={false} />
-                  <XAxis type="number" {...axisProps} allowDecimals={false} />
+                  <XAxis type="number" reversed {...axisProps} allowDecimals={false} />
                   <YAxis type="category" dataKey="name" orientation="right" width={170} {...axisProps} tick={{ fill: AXIS, fontSize: 11 }} />
                   <Tooltip {...tooltipStyle} formatter={(value, _name, item) => [`${value} رحلة${item.payload.avgMinutes ? ` · متوسط ${item.payload.avgMinutes} د` : ""}`, item.payload.zone ?? "وجهة أخرى"]} />
                   <Bar dataKey="trips" fill={SERIES_1} radius={[4, 0, 0, 4]} maxBarSize={18} cursor={onFilter ? "pointer" : undefined} onClick={(item: { key?: string }) => item?.key && onFilter?.({ destination: item.key })} />
@@ -146,45 +142,66 @@ export default function HistoryCharts({ summary, onFilter }: { summary: StatsSum
               </ResponsiveContainer>
             </div>
           )}
-        </Card>
-        <div className="space-y-5">
-          <Card title="الرحلات حسب المنطقة">
+        </Panel>
+        <div className="space-y-6">
+          <Panel icon={MapPinned} title="الرحلات حسب المنطقة" bodyClassName="p-5">
             {!summary.zones.length && <NoData />}
-            <ul className="space-y-2">
+            <ul className="space-y-2.5">
               {summary.zones.map((zone) => {
                 const share = zoneTotal ? Math.round((zone.trips / zoneTotal) * 100) : 0;
                 return (
                   <li key={zone.zone}>
-                    <Pick onClick={pick({ zone: zone.zone, destination: "all" })} label={zone.zone} className="rounded-lg px-1 py-0.5">
-                      <div className="flex justify-between text-xs"><span className="font-bold text-slate-700">{zone.zone}</span><span className="text-slate-500">{zone.trips} · {share}%</span></div>
-                      <div className="mt-1 h-2 rounded-full bg-slate-100"><div className="h-2 rounded-full" style={{ width: `${share}%`, background: SERIES_1 }} /></div>
+                    <Pick onClick={pick({ zone: zone.zone, destination: "all" })} label={zone.zone} className="rounded-lg px-1.5 py-1">
+                      <div className="flex justify-between text-sm"><span className="font-medium text-slate-700">{zone.zone}</span><span className="text-slate-500 tabular">{zone.trips} · {share}%</span></div>
+                      <div className="mt-1.5 h-2 rounded-full bg-slate-100"><div className="h-2 rounded-full" style={{ width: `${share}%`, background: SERIES_1 }} /></div>
                     </Pick>
                   </li>
                 );
               })}
             </ul>
-          </Card>
-          <Card title="نوع المركبة">
-            <ul className="space-y-2 text-sm">
-              {summary.byKind.map((item) => <li key={item.kind}><Pick onClick={pick({ kind: item.kind })} label={item.kind} className="flex justify-between rounded-lg px-1 py-0.5"><span className="text-slate-600">{item.kind}</span><b>{item.trips} <span className="text-xs font-normal text-slate-400">({summary.completedTrips ? Math.round((item.trips / summary.completedTrips) * 100) : 0}%)</span></b></Pick></li>)}
+          </Panel>
+          <Panel icon={Truck} title="نوع المركبة" description="من الرحلات المنجزة" bodyClassName="px-3 py-2">
+            <ul className="divide-y divide-slate-100 text-sm">
+              {summary.byKind.map((item) => (
+                <li key={item.kind}>
+                  <Pick onClick={pick({ kind: item.kind })} label={item.kind} className="flex justify-between rounded-lg px-2 py-2.5">
+                    <span className="text-slate-600">{item.kind}</span>
+                    <span className="font-semibold text-ink tabular">{item.trips} <span className="text-xs font-normal text-slate-400">({summary.completedTrips ? Math.round((item.trips / summary.completedTrips) * 100) : 0}%)</span></span>
+                  </Pick>
+                </li>
+              ))}
             </ul>
-          </Card>
+          </Panel>
         </div>
       </div>
 
-      <div className="grid gap-5 lg:grid-cols-2">
-        <Card title="السيارات الأكثر عملًا">
+      <div className="grid items-start gap-6 lg:grid-cols-2">
+        <Panel icon={Truck} title="السيارات الأكثر عملًا" count={summary.vehicles.length || undefined} bodyClassName="px-3 py-2">
           {!summary.vehicles.length && <NoData />}
           <ul className="max-h-72 divide-y divide-slate-100 overflow-auto text-sm">
-            {summary.vehicles.slice(0, 20).map((item) => <li key={item.plate}><Pick onClick={pick({ plate: item.plate })} label={`السيارة ${item.plate}`} className="flex justify-between py-2"><span><b dir="ltr">{item.plate}</b> <span className="text-xs text-slate-500">{item.driver}</span></span><b>{item.trips}</b></Pick></li>)}
+            {summary.vehicles.slice(0, 20).map((item) => (
+              <li key={item.plate}>
+                <Pick onClick={pick({ plate: item.plate })} label={`السيارة ${item.plate}`} className="flex justify-between gap-3 rounded-lg px-2 py-2.5">
+                  <span className="min-w-0 truncate"><span dir="ltr" className="font-semibold text-ink">{item.plate}</span> <span className="text-xs text-slate-500">{item.driver}</span></span>
+                  <span className="font-semibold text-ink tabular">{item.trips}</span>
+                </Pick>
+              </li>
+            ))}
           </ul>
-        </Card>
-        <Card title="المباني الأكثر طلبًا">
+        </Panel>
+        <Panel icon={Building2} title="المباني الأكثر طلبًا" count={summary.buildings.length || undefined} bodyClassName="px-3 py-2">
           {!summary.buildings.length && <NoData />}
-          <ul className="grid max-h-72 grid-cols-2 gap-x-6 overflow-auto text-sm">
-            {summary.buildings.slice(0, 20).map((item) => <li key={item.building} className="border-b border-slate-100"><Pick onClick={pick({ building: item.building })} label={`مبنى ${item.building}`} className="flex justify-between py-2"><span>مبنى {item.building}</span><b>{item.trips}</b></Pick></li>)}
+          <ul className="grid max-h-72 grid-cols-2 gap-x-4 overflow-auto text-sm">
+            {summary.buildings.slice(0, 20).map((item) => (
+              <li key={item.building} className="border-b border-slate-100">
+                <Pick onClick={pick({ building: item.building })} label={`مبنى ${item.building}`} className="flex justify-between rounded-lg px-2 py-2.5">
+                  <span className="text-slate-700">مبنى {item.building}</span>
+                  <span className="font-semibold text-ink tabular">{item.trips}</span>
+                </Pick>
+              </li>
+            ))}
           </ul>
-        </Card>
+        </Panel>
       </div>
     </div>
   );

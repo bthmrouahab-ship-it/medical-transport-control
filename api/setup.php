@@ -21,11 +21,11 @@ function page(string $title, string $body, int $status = 200): never
     header('Content-Type: text/html; charset=utf-8');
     echo '<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">'
         . '<meta name="robots" content="noindex"><title>' . htmlspecialchars($title) . '</title><style>'
-        . 'body{font-family:system-ui,Tahoma,sans-serif;background:#f5f7fb;color:#10233f;margin:0;padding:24px}'
-        . 'main{max-width:520px;margin:40px auto;background:#fff;border:1px solid #e2e8f0;border-radius:20px;padding:28px}'
+        . 'body{font-family:system-ui,Tahoma,sans-serif;background:#eef2f6;color:#0f1f35;margin:0;padding:24px}'
+        . 'main{max-width:520px;margin:40px auto;background:#fff;border:1px solid #e2e8f0;border-top:4px solid #b3202f;border-radius:20px;padding:28px;box-shadow:0 8px 24px -16px rgba(15,31,53,.25)}'
         . 'h1{font-size:22px;margin:0 0 6px}p{line-height:1.7;color:#475569}label{display:block;margin:14px 0 4px;font-weight:700;font-size:14px}'
         . 'input{width:100%;box-sizing:border-box;height:44px;border:1px solid #cbd5e1;border-radius:12px;padding:0 12px;font-size:15px}'
-        . 'button,a.button{display:inline-block;margin-top:20px;background:#a61d2d;color:#fff;border:0;border-radius:12px;padding:12px 20px;font-weight:700;font-size:15px;text-decoration:none;cursor:pointer}'
+        . 'button,a.button{display:inline-block;margin-top:20px;background:#b3202f;color:#fff;border:0;border-radius:12px;padding:12px 20px;font-weight:700;font-size:15px;text-decoration:none;cursor:pointer}'
         . '.error{background:#fef2f2;color:#b91c1c;padding:12px;border-radius:12px;font-weight:700}.hint{font-size:12px;color:#94a3b8;font-weight:400}'
         . 'fieldset{border:1px solid #e2e8f0;border-radius:14px;margin:16px 0 0;padding:4px 16px 16px}legend{font-weight:700;padding:0 6px}'
         . '</style></head><body><main><h1>' . htmlspecialchars($title) . '</h1>' . $body . '</main></body></html>';

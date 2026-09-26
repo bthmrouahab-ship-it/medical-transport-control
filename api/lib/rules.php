@@ -9,9 +9,11 @@ declare(strict_types=1);
 const APPOINTMENT_STATUSES = ['بانتظار طلب السيارة', 'تم طلب السيارة', 'تم استلام المريض', 'طلب عودة', 'مكتملة'];
 const APPOINTMENT_FIELDS = ['id', 'patientName', 'clinic', 'buildingNumber', 'apartmentNumber', 'mobile', 'appointmentDate',
     'appointmentAt', 'hospitalId', 'category', 'kind', 'assistance', 'status', '_o'];
-const REQUEST_STATUSES = ['بانتظار التوزيع', 'تم إرسال السيارة', 'وصلت السيارة', 'تم استلام المريض'];
+const REQUEST_STATUSES = ['بانتظار التوزيع', 'تم إرسال السيارة', 'وصلت السيارة', 'تم استلام المريض', 'وصلت الوجهة'];
 const REQUEST_FIELDS = ['id', 'appointmentId', 'vehiclePlate', 'driver', 'direction', 'status', 'notificationMethod',
-    'createdAt', 'groupId', 'notificationSentAt', '_o'];
+    'createdAt', 'groupId', 'notificationSentAt', 'pickedUpAt', 'etaAt', 'destLat', 'destLng', 'arrivedAt', 'arrivalSource', '_o'];
+/** خانات مرحلة الطريق إلى الوجهة (تُكتب عند استلام المريض وعند الوصول) */
+const TRIP_FIELDS = ['pickedUpAt', 'etaAt', 'destLat', 'destLng', 'arrivedAt', 'arrivalSource'];
 const VEHICLE_FIELDS = ['plate', 'driver', 'phone', 'kind', 'available', '_o'];
 const VEHICLE_KINDS = ['سيدان', 'احتياجات خاصة', 'باص'];
 const HOSPITAL_FIELDS = ['id', 'name', 'nameEn', 'zone', 'lat', 'lng', 'aliases', 'verified', '_o'];
@@ -41,6 +43,17 @@ function is_text($value, int $max): bool
 function has_role(array $user, array $roles): bool
 {
     return in_array($user['role'], $roles, true);
+}
+
+/** أوقات بصيغة ISO، وإحداثيات الوجهة داخل قطر، ومصدر وصول معروف. */
+function valid_trip_fields(array $data): bool
+{
+    foreach (['pickedUpAt', 'etaAt', 'arrivedAt'] as $field) {
+        if (array_key_exists($field, $data) && !(is_text($data[$field], 40) && strtotime($data[$field]) !== false)) return false;
+    }
+    if (array_key_exists('destLat', $data) && !(is_numeric($data['destLat']) && $data['destLat'] > 24 && $data['destLat'] < 27)) return false;
+    if (array_key_exists('destLng', $data) && !(is_numeric($data['destLng']) && $data['destLng'] > 50 && $data['destLng'] < 52.5)) return false;
+    return !array_key_exists('arrivalSource', $data) || in_array($data['arrivalSource'], ['gps', 'estimate', 'manual'], true);
 }
 
 function valid_appointment(array $data, string $id): bool
@@ -96,21 +109,27 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
                     && in_array($after['direction'] ?? null, ['ذهاب', 'عودة'], true)
                     && ($after['status'] ?? null) === 'بانتظار التوزيع'
                     && in_array($after['notificationMethod'] ?? null, ['whatsapp', 'call'], true)
-                    && !array_intersect(array_keys($after), ['vehiclePlate', 'driver', 'groupId', 'notificationSentAt']);
+                    && !array_intersect(array_keys($after), ['vehiclePlate', 'driver', 'groupId', 'notificationSentAt', ...TRIP_FIELDS]);
                 return $valid ? null : 'بيانات الطلب غير صالحة';
             }
+            if (!valid_trip_fields($after)) return 'بيانات الطلب غير صالحة';
             if ($role === 'admin') {
                 return only($changed, REQUEST_FIELDS) && !array_intersect($changed, ['id', 'appointmentId'])
                     && in_array($after['status'] ?? null, REQUEST_STATUSES, true) ? null : $denied;
             }
-            // مشرف السيارات: إرسال السيارة وجمع الرحلات
+            // مشرف السيارات: إرسال السيارة وجمع الرحلات، وتأكيد وصولها إلى الوجهة (يدويًا أو بانتهاء المدة التقديرية)
             if ($role === 'fleetSupervisor') {
-                return only($changed, ['vehiclePlate', 'driver', 'status', 'groupId', 'notificationSentAt'])
-                    && (!in_array('status', $changed, true) || ($after['status'] ?? null) === 'تم إرسال السيارة') ? null : $denied;
+                if (!only($changed, ['vehiclePlate', 'driver', 'status', 'groupId', 'notificationSentAt', 'arrivedAt', 'arrivalSource'])) return $denied;
+                $to = $after['status'] ?? null;
+                $arriving = $to === 'وصلت الوجهة' && ($before['status'] ?? null) === 'تم استلام المريض';
+                if (in_array('status', $changed, true) && $to !== 'تم إرسال السيارة' && !$arriving) return $denied;
+                // بيانات الوصول تُكتب مرة واحدة عند الوصول، ولا تُغيَّر بعده (مثل وصول سجّله GPS)
+                return !array_intersect($changed, ['arrivedAt', 'arrivalSource']) || $arriving ? null : $denied;
             }
-            // مشرف المبنى: تأكيد وصول السيارة واستلام المريض فقط
+            // مشرف المبنى: تأكيد وصول السيارة واستلام المريض، ومعه وقت الاستلام والوقت المتوقع للوصول
             if ($role === 'buildingSupervisor') {
-                return only($changed, ['status']) && in_array($after['status'] ?? null, ['وصلت السيارة', 'تم استلام المريض'], true) ? null : $denied;
+                return only($changed, ['status', 'pickedUpAt', 'etaAt', 'destLat', 'destLng'])
+                    && in_array($after['status'] ?? null, ['وصلت السيارة', 'تم استلام المريض'], true) ? null : $denied;
             }
             return $denied;
 

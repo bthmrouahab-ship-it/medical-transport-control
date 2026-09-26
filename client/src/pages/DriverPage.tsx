@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import { LocateFixed, MapPin, Pause, Play } from "lucide-react";
+import { CarFront, LocateFixed, MapPin, Pause, Play, SunMedium } from "lucide-react";
 import AppHeader from "@/components/AppHeader";
+import { Badge, btn, cx } from "@/components/ui-kit";
 import { toast } from "sonner";
 import type { UserProfile } from "@shared/users";
 import { distanceKm } from "@shared/hospitals";
@@ -78,19 +79,23 @@ export default function DriverPage({ profile, onLogout, onChangePassword }: {
         const now = Date.now();
         setLast({ ...point, accuracy: Math.round(position.coords.accuracy), at: new Date(now) });
         setStatus("sharing");
+        setError("");
         const previous = lastSent.current;
         const moved = previous ? distanceKm(previous, point) : Infinity;
         if (previous && now - previous.at < SEND_EVERY_MS && moved < MIN_MOVE_KM) return;
         if (previous && now - previous.at < 5000) return;
         lastSent.current = { ...point, at: now };
         // السيارة ووقت التحديث يحددهما الخادم من حساب السائق
-        api("location", {
+        api<{ ok: boolean; arrived?: number }>("location", {
           sharing: true,
           lat: point.lat,
           lng: point.lng,
           accuracy: Math.round(position.coords.accuracy),
           speed: position.coords.speed === null ? null : Math.round(position.coords.speed * 3.6),
           heading: position.coords.heading === null ? null : Math.round(position.coords.heading),
+        }).then((result) => {
+          // الخادم اكتشف وصول السيارة إلى وجهة رحلة جارية
+          if (result.arrived) toast.success("تم تسجيل وصولك إلى الوجهة", { description: "وصلت رسالة لمشرف السيارات، والسيارة متاحة الآن لرحلة جديدة.", duration: 10000 });
         }).catch((sendError) => {
           console.error("[gps]", sendError);
           toast.error("تعذر إرسال الموقع. تحقق من الإنترنت.");
@@ -124,28 +129,44 @@ export default function DriverPage({ profile, onLogout, onChangePassword }: {
 
   const sharing = status === "sharing" || status === "starting";
 
+  const tone = status === "sharing" ? "green" : status === "error" ? "red" : status === "starting" ? "blue" : "neutral";
+  const title = status === "sharing" ? "يتم إرسال موقعك إلى مشرف السيارات" : status === "starting" ? "جارٍ تحديد الموقع..." : status === "error" ? "المشاركة متوقفة" : "مشاركة الموقع متوقفة";
+
   return (
-    <div className="min-h-screen bg-[#f5f7fb]" dir="rtl">
+    <div className="min-h-screen bg-page" dir="rtl">
       <AppHeader role="السائق" name={profile.displayName} onChangePassword={onChangePassword} onLogout={() => { if (watchId.current !== null) stop(true); onLogout(); }} />
-      <main className="mx-auto max-w-md p-5">
+      <main className="mx-auto max-w-md p-4 sm:p-6">
         {!plate ? (
-          <p className="rounded-2xl border border-amber-200 bg-amber-50 p-5 text-sm font-bold text-amber-800">لم يربط مدير النظام حسابك بسيارة بعد.</p>
+          <p className="rounded-2xl bg-amber-50 p-5 text-sm font-medium text-amber-900 ring-1 ring-inset ring-amber-200">لم يربط مدير النظام حسابك بسيارة بعد.</p>
         ) : (
-          <div className="rounded-2xl border border-slate-200 bg-white p-6 text-center">
-            <p className="text-xs font-bold text-slate-400">السيارة</p>
-            <p className="mt-1 text-3xl font-bold" dir="ltr">{plate}</p>
-            <div className={`mx-auto mt-6 flex h-28 w-28 items-center justify-center rounded-full ${status === "sharing" ? "bg-emerald-50 text-emerald-600" : status === "error" ? "bg-red-50 text-red-600" : "bg-slate-100 text-slate-400"}`}>
-              {status === "sharing" ? <LocateFixed className="h-12 w-12 animate-pulse" /> : <MapPin className="h-12 w-12" />}
+          <div className="overflow-hidden rounded-3xl bg-white shadow-card ring-1 ring-slate-200/80">
+            <div className="flex items-center justify-between gap-3 bg-navy-900 px-5 py-4 text-white">
+              <div className="flex items-center gap-3">
+                <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-white/10"><CarFront className="h-5 w-5" /></span>
+                <div className="leading-tight">
+                  <p className="text-xs text-slate-300">السيارة</p>
+                  <p className="text-2xl font-semibold tabular" dir="ltr">{plate}</p>
+                </div>
+              </div>
+              <Badge tone={tone}>{status === "sharing" ? "GPS مباشر" : status === "starting" ? "جارٍ التشغيل" : status === "error" ? "خطأ" : "متوقف"}</Badge>
             </div>
-            <p className="mt-4 font-bold">
-              {status === "sharing" ? "يتم إرسال موقعك إلى مشرف السيارات" : status === "starting" ? "جارٍ تحديد الموقع..." : status === "error" ? "المشاركة متوقفة" : "مشاركة الموقع متوقفة"}
-            </p>
-            {last && <p className="mt-1 text-xs text-slate-400">آخر تحديث <span dir="ltr">{last.at.toLocaleTimeString("en-GB")}</span> · دقة ±{last.accuracy} م</p>}
-            {error && <p role="alert" className="mt-3 rounded-xl bg-red-50 p-3 text-xs font-bold text-red-700">{error}</p>}
-            <button onClick={() => (sharing ? stop() : start())} className={`mt-6 flex h-14 w-full items-center justify-center gap-2 rounded-2xl text-base font-bold text-white ${sharing ? "bg-slate-700" : "bg-[#a61d2d]"}`}>
-              {sharing ? <><Pause className="h-5 w-5" /> إيقاف المشاركة</> : <><Play className="h-5 w-5" /> بدء مشاركة الموقع</>}
-            </button>
-            <p className="mt-4 text-[11px] text-slate-400">أبقِ الشاشة مضاءة أثناء الرحلة</p>
+            <div className="p-6 text-center">
+              <div className={cx(
+                "mx-auto flex h-32 w-32 items-center justify-center rounded-full ring-8",
+                status === "sharing" ? "bg-emerald-50 text-emerald-600 ring-emerald-50/60" : status === "error" ? "bg-red-50 text-red-600 ring-red-50/60" : "bg-slate-100 text-slate-400 ring-slate-100/60",
+              )}>
+                {status === "sharing" ? <LocateFixed className="h-14 w-14 animate-pulse" /> : <MapPin className="h-14 w-14" />}
+              </div>
+              <p className="mt-5 text-lg font-semibold text-ink">{title}</p>
+              {last
+                ? <p className="mt-1 text-sm text-slate-500">آخر تحديث <span dir="ltr" className="tabular">{last.at.toLocaleTimeString("en-GB")}</span> · دقة ±{last.accuracy} م</p>
+                : <p className="mt-1 text-sm text-slate-500">يُسجَّل وصولك إلى الوجهة تلقائيًا أثناء المشاركة</p>}
+              {error && <p role="alert" className="mt-4 rounded-xl bg-red-50 p-3 text-start text-sm leading-6 text-red-700 ring-1 ring-inset ring-red-200">{error}</p>}
+              <button onClick={() => (sharing ? stop() : start())} className={cx(btn(sharing ? "dark" : "primary", "lg"), "mt-6 h-14 w-full rounded-2xl text-base")}>
+                {sharing ? <><Pause className="h-5 w-5" /> إيقاف المشاركة</> : <><Play className="h-5 w-5" /> بدء مشاركة الموقع</>}
+              </button>
+              <p className="mt-4 flex items-center justify-center gap-1.5 text-xs text-slate-500"><SunMedium className="h-4 w-4" /> أبقِ الشاشة مضاءة والصفحة مفتوحة أثناء الرحلة</p>
+            </div>
           </div>
         )}
       </main>

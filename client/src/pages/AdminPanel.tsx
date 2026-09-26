@@ -4,11 +4,13 @@ import {
   CheckCircle2,
   ClipboardList,
   Copy,
+  Info,
   KeyRound,
   Loader2,
   Map as MapIcon,
   Pencil,
   Plus,
+  Power,
   ShieldCheck,
   Trash2,
   Truck,
@@ -36,6 +38,7 @@ import {
 import { hasSharedState, loadState, saveState, subscribeState } from "@/lib/appStore";
 import { appendAudit } from "@/lib/audit";
 import AppHeader from "@/components/AppHeader";
+import { AuditTimeline, Badge, EmptyState, Panel, PageHeader, Segmented, btn, cx, inputClass, labelClass } from "@/components/ui-kit";
 import { HISTORY_SEED } from "@shared/historySeed";
 import { syncHospitals, type Hospital } from "@shared/hospitals";
 import { authErrorMessage, createUser, resetUserPassword, updateUser, watchUsers } from "@/lib/auth";
@@ -44,8 +47,6 @@ import { authErrorMessage, createUser, resetUserPassword, updateUser, watchUsers
 const FleetDashboard = lazy(() => import("@/components/FleetDashboard"));
 
 type Tab = "dashboard" | "users" | "vehicles" | "audit";
-
-const inputClass = "h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none focus:border-[#e6a1aa]";
 
 function loadRequests() {
   return loadState<unknown[]>("fox_requests", [])
@@ -72,11 +73,15 @@ export default function AdminPanel({ profile, onLogout, onChangePassword }: {
       const synced = syncHospitals(stored);
       if (JSON.stringify(synced) !== JSON.stringify(stored)) saveState("fox_hospitals", synced);
     }
-    return subscribeState((key) => {
+    const refresh = (key: string) => {
       if (key === "fox_fleet") setVehicles(loadState("fox_fleet", DEFAULT_VEHICLES));
       else if (key === "fox_requests") setRequests(loadRequests());
       else if (key === "fox_audit") setAudit(loadState("fox_audit", []));
-    });
+    };
+    const stop = subscribeState(refresh);
+    // تغييرات وصلت بين أول عرض للصفحة وبدء الاشتراك
+    ["fox_fleet", "fox_requests", "fox_audit"].forEach(refresh);
+    return stop;
   }, []);
 
   function log(message: string) {
@@ -89,35 +94,31 @@ export default function AdminPanel({ profile, onLogout, onChangePassword }: {
     log(message);
   }
 
-  const tabs: { id: Tab; label: string; icon: typeof UsersRound }[] = [
-    { id: "dashboard", label: "الخريطة والإحصائيات", icon: MapIcon },
-    { id: "users", label: "المستخدمون", icon: UsersRound },
-    { id: "vehicles", label: "السيارات", icon: Truck },
-    { id: "audit", label: "سجل العمليات", icon: ClipboardList },
+  const tabs: { value: Tab; label: string; icon: typeof UsersRound }[] = [
+    { value: "dashboard", label: "الخريطة والإحصائيات", icon: MapIcon },
+    { value: "users", label: "المستخدمون", icon: UsersRound },
+    { value: "vehicles", label: "السيارات", icon: Truck },
+    { value: "audit", label: "سجل العمليات", icon: ClipboardList },
   ];
 
   return (
-    <div className="min-h-screen bg-[#f5f7fb]" dir="rtl">
+    <div className="min-h-screen bg-page" dir="rtl">
       <AppHeader role="مدير النظام" name={profile.displayName} onChangePassword={onChangePassword} onLogout={onLogout} />
 
       <main className="mx-auto max-w-7xl p-4 lg:p-8">
-        <nav className="mb-7 flex gap-2 overflow-x-auto" aria-label="أقسام لوحة المدير">
-          {tabs.map((item) => (
-            <button key={item.id} onClick={() => setTab(item.id)} aria-current={tab === item.id ? "page" : undefined} className={`flex min-h-11 shrink-0 items-center gap-2 rounded-xl px-4 text-sm font-bold ${tab === item.id ? "bg-[#a61d2d] text-white" : "border border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}>
-              <item.icon className="h-4 w-4" /> {item.label}
-            </button>
-          ))}
+        <nav className="mb-7" aria-label="أقسام لوحة المدير">
+          <Segmented label="أقسام لوحة المدير" value={tab} onChange={setTab} options={tabs} />
         </nav>
         {tab === "dashboard" && <Suspense fallback={<div className="flex min-h-64 items-center justify-center text-slate-400"><Loader2 className="h-6 w-6 animate-spin" /><span className="sr-only">جارٍ التحميل</span></div>}><FleetDashboard canEdit actor={profile.displayName} /></Suspense>}
         {tab === "users" && <UsersTab profile={profile} vehicles={vehicles} onLog={log} />}
         {tab === "vehicles" && <VehiclesTab vehicles={vehicles} requests={requests} onChange={updateVehicles} />}
         {tab === "audit" && (
-          <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
-            <h3 className="border-b border-slate-100 px-5 py-4 font-bold">سجل العمليات</h3>
-            <div className="max-h-[60vh] divide-y divide-slate-100 overflow-auto">
-              {audit.length ? audit.map((item, index) => <p key={`${item}-${index}`} className="px-5 py-3 text-xs text-slate-500">{item}</p>) : <p className="p-5 text-xs text-slate-400">لا توجد عمليات مسجلة بعد</p>}
-            </div>
-          </section>
+          <>
+            <PageHeader title="سجل العمليات" subtitle="آخر 50 عملية في النظام ومن نفّذها" />
+            <Panel icon={ClipboardList} title="العمليات" count={audit.length}>
+              {audit.length ? <AuditTimeline items={audit} className="max-h-[65vh]" /> : <EmptyState icon={ClipboardList} title="لا توجد عمليات مسجلة بعد" />}
+            </Panel>
+          </>
         )}
       </main>
     </div>
@@ -156,12 +157,14 @@ function UsersTab({ profile, vehicles, onLog }: { profile: UserProfile; vehicles
     }, "تم إصدار كلمة مرور مؤقتة", `إعادة تعيين كلمة مرور المستخدم ${user.username}`);
   }
 
+  const activeCount = users?.filter((user) => user.active).length ?? 0;
   return (
     <>
-      <div className="mb-6 flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
-        <h2 className="text-2xl font-bold">المستخدمون</h2>
-        <button onClick={() => { setShowForm(true); setIssued(null); }} className="flex min-h-11 items-center gap-2 rounded-xl bg-[#a61d2d] px-4 text-sm font-bold text-white hover:bg-[#8b1725]"><UserPlus className="h-4 w-4" /> إضافة مستخدم</button>
-      </div>
+      <PageHeader
+        title="المستخدمون"
+        subtitle="الحسابات والأدوار وكلمات المرور المؤقتة"
+        actions={<button onClick={() => { setShowForm(true); setIssued(null); }} className={btn("primary")}><UserPlus className="h-4 w-4" /> إضافة مستخدم</button>}
+      />
 
       {issued && <IssuedPassword {...issued} onClose={() => setIssued(null)} />}
       {showForm && (
@@ -178,31 +181,33 @@ function UsersTab({ profile, vehicles, onLog }: { profile: UserProfile; vehicles
         />
       )}
 
-      <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+      <Panel icon={UsersRound} title="الحسابات" count={users?.length} description={users ? `${activeCount} حساب مفعّل` : undefined}>
         <div className="divide-y divide-slate-100">
-          {users === null && <p className="p-6 text-center text-sm text-slate-400">جارٍ التحميل...</p>}
+          {users === null && <p className="flex items-center justify-center gap-2 p-8 text-sm text-slate-400"><Loader2 className="h-4 w-4 animate-spin" /> جارٍ التحميل...</p>}
           {users?.map((user) => {
             const isSelf = user.uid === profile.uid;
             const busy = busyUid === user.uid;
             return (
-              <div key={user.uid} className="grid gap-3 p-5 lg:grid-cols-[1.3fr_1fr_auto] lg:items-center">
-                <div>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <p className="font-bold">{user.displayName}</p>
-                    <span dir="ltr" className="rounded-full bg-slate-100 px-2 py-1 text-[11px] font-bold text-slate-500">{user.username}</span>
-                    {isSelf && <span className="rounded-full bg-blue-50 px-2 py-1 text-[10px] font-bold text-blue-700">أنت</span>}
-                    {!user.active && <span className="rounded-full bg-red-50 px-2 py-1 text-[10px] font-bold text-red-700">موقوف</span>}
-                    {user.active && user.mustChangePassword && <span className="rounded-full bg-amber-50 px-2 py-1 text-[10px] font-bold text-amber-700">بانتظار تغيير كلمة المرور</span>}
+              <div key={user.uid} className={cx("grid gap-4 p-4 sm:p-5 lg:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)_auto] lg:items-center", !user.active && "bg-slate-50/70")}>
+                <div className="flex min-w-0 items-center gap-3">
+                  <span className={cx("flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-sm font-semibold", user.active ? "bg-navy-900 text-white" : "bg-slate-200 text-slate-500")}>{user.displayName.trim().charAt(0) || "؟"}</span>
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="font-semibold text-ink">{user.displayName}</p>
+                      <span dir="ltr" className="text-xs text-slate-400">{user.username}</span>
+                      {isSelf && <Badge tone="blue">أنت</Badge>}
+                      {!user.active && <Badge tone="red">موقوف</Badge>}
+                      {user.active && user.mustChangePassword && <Badge tone="amber">بانتظار تغيير كلمة المرور</Badge>}
+                    </div>
+                    <button disabled={busy} onClick={() => {
+                      const name = window.prompt("الاسم الظاهر الجديد", user.displayName);
+                      if (name === null || name.trim() === user.displayName) return;
+                      run(user.uid, () => updateUser(user.uid, { displayName: name }), "تم تحديث الاسم", `تغيير اسم المستخدم ${user.username}`);
+                    }} className="mt-0.5 inline-flex items-center gap-1 text-xs text-slate-500 hover:text-brand-600"><Pencil className="h-3 w-3" /> تعديل الاسم</button>
                   </div>
-                  <button disabled={busy} onClick={() => {
-                    const name = window.prompt("الاسم الظاهر الجديد", user.displayName);
-                    if (name === null || name.trim() === user.displayName) return;
-                    run(user.uid, () => updateUser(user.uid, { displayName: name }), "تم تحديث الاسم", `تغيير اسم المستخدم ${user.username}`);
-                  }} className="mt-1 flex items-center gap-1 text-[11px] font-bold text-slate-400 hover:text-[#a61d2d]"><Pencil className="h-3 w-3" /> تعديل الاسم</button>
                 </div>
-                <label>
-                  <span className="sr-only">الدور</span>
-                  <select disabled={isSelf || busy} value={user.role} onChange={(event) => {
+                <div className="grid gap-2">
+                  <select aria-label="الدور" disabled={isSelf || busy} value={user.role} onChange={(event) => {
                     const role = event.target.value as UserRole;
                     const vehiclePlate = role === "driver" ? user.vehiclePlate ?? vehicles[0]?.plate : undefined;
                     if (role === "driver" && !vehiclePlate) {
@@ -210,31 +215,31 @@ function UsersTab({ profile, vehicles, onLog }: { profile: UserProfile; vehicles
                       return;
                     }
                     run(user.uid, () => updateUser(user.uid, vehiclePlate ? { role, vehiclePlate } : { role }), "تم تغيير الدور", `تغيير دور ${user.username} إلى ${ROLE_LABELS[role]}`);
-                  }} className={`${inputClass} font-bold disabled:bg-slate-50 disabled:text-slate-400`}>
+                  }} className={cx(inputClass, "h-10 font-medium")}>
                     {USER_ROLES.map((role) => <option key={role} value={role}>{ROLE_LABELS[role]}</option>)}
                   </select>
                   {user.role === "driver" && (
                     <select aria-label="سيارة السائق" disabled={busy} value={user.vehiclePlate ?? ""} onChange={(event) => {
                       const vehiclePlate = event.target.value;
                       run(user.uid, () => updateUser(user.uid, { vehiclePlate }), "تم ربط السائق بالسيارة", `ربط السائق ${user.username} بالسيارة ${vehiclePlate}`);
-                    }} className={`${inputClass} mt-2`}>
+                    }} className={cx(inputClass, "h-10")}>
                       {!user.vehiclePlate && <option value="">اختر السيارة</option>}
                       {vehicles.map((vehicle) => <option key={vehicle.plate} value={vehicle.plate}>{vehicle.plate} · {vehicle.driver}</option>)}
                     </select>
                   )}
-                </label>
-                <div className="flex flex-wrap gap-2">
-                  <button disabled={isSelf || busy} onClick={() => resetPassword(user)} className="flex min-h-10 items-center gap-1 rounded-xl border border-slate-200 px-3 text-xs font-bold text-slate-600 hover:bg-slate-50 disabled:opacity-40"><KeyRound className="h-3.5 w-3.5" /> كلمة مرور جديدة</button>
+                </div>
+                <div className="flex flex-wrap gap-2 lg:justify-end">
+                  <button disabled={isSelf || busy} onClick={() => resetPassword(user)} className={btn("secondary", "sm")}><KeyRound className="h-3.5 w-3.5" /> كلمة مرور جديدة</button>
                   <button disabled={isSelf || busy} onClick={() => {
                     if (user.active && !window.confirm(`إيقاف حساب ${user.username}؟ سيُمنع من الدخول فورًا.`)) return;
                     run(user.uid, () => updateUser(user.uid, { active: !user.active }), user.active ? "تم إيقاف الحساب" : "تم تفعيل الحساب", `${user.active ? "إيقاف" : "تفعيل"} المستخدم ${user.username}`);
-                  }} className={`min-h-10 rounded-xl px-3 text-xs font-bold disabled:opacity-40 ${user.active ? "border border-red-100 text-red-600 hover:bg-red-50" : "bg-emerald-600 text-white"}`}>{user.active ? "إيقاف" : "تفعيل"}</button>
+                  }} className={btn(user.active ? "danger" : "success", "sm")}><Power className="h-3.5 w-3.5" /> {user.active ? "إيقاف" : "تفعيل"}</button>
                 </div>
               </div>
             );
           })}
         </div>
-      </section>
+      </Panel>
     </>
   );
 }
@@ -262,47 +267,48 @@ function NewUserForm({ vehicles, onCreate, onCancel }: {
   }
 
   return (
-    <form onSubmit={submit} className="mb-6 grid gap-4 rounded-2xl border border-[#f0c4ca] bg-white p-5 sm:grid-cols-2">
-      <h3 className="flex items-center gap-2 font-bold sm:col-span-2"><UserPlus className="h-5 w-5 text-[#a61d2d]" /> مستخدم جديد</h3>
-      <label><span className="mb-1.5 block text-xs font-bold text-slate-600">اسم المستخدم (بالإنجليزية)</span><input dir="ltr" autoCapitalize="none" spellCheck={false} value={form.username} onChange={(event) => setForm({ ...form, username: event.target.value })} placeholder="clinic.ahmed" className={inputClass} /></label>
-      <label><span className="mb-1.5 block text-xs font-bold text-slate-600">الاسم الظاهر</span><input value={form.displayName} onChange={(event) => setForm({ ...form, displayName: event.target.value })} placeholder="أحمد - العيادة" className={inputClass} /></label>
-      <label><span className="mb-1.5 block text-xs font-bold text-slate-600">الدور</span>
-        <select value={form.role} onChange={(event) => setForm({ ...form, role: event.target.value as UserRole })} className={`${inputClass} font-bold`}>
-          {USER_ROLES.map((role) => <option key={role} value={role}>{ROLE_LABELS[role]}</option>)}
-        </select>
-      </label>
-      {form.role === "driver" && (
-        <label className="sm:col-span-2"><span className="mb-1.5 block text-xs font-bold text-slate-600">السيارة (يرسل السائق موقعها عبر GPS الهاتف)</span>
-          <select value={form.vehiclePlate} onChange={(event) => setForm({ ...form, vehiclePlate: event.target.value })} className={`${inputClass} font-bold`}>
-            {vehicles.map((vehicle) => <option key={vehicle.plate} value={vehicle.plate}>{vehicle.plate} · {vehicle.driver} · {vehicle.kind}</option>)}
+    <Panel tone="brand" icon={UserPlus} title="مستخدم جديد" className="mb-6" actions={<button type="button" onClick={onCancel} aria-label="إغلاق" className={btn("ghost", "sm")}><X className="h-4 w-4" /></button>}>
+      <form onSubmit={submit} className="grid gap-5 p-5 sm:grid-cols-2 sm:p-6">
+        <label><span className={labelClass}>اسم المستخدم (بالإنجليزية)</span><input dir="ltr" autoCapitalize="none" spellCheck={false} value={form.username} onChange={(event) => setForm({ ...form, username: event.target.value })} placeholder="clinic.ahmed" className={inputClass} /></label>
+        <label><span className={labelClass}>الاسم الظاهر</span><input value={form.displayName} onChange={(event) => setForm({ ...form, displayName: event.target.value })} placeholder="أحمد - العيادة" className={inputClass} /></label>
+        <label><span className={labelClass}>الدور</span>
+          <select value={form.role} onChange={(event) => setForm({ ...form, role: event.target.value as UserRole })} className={cx(inputClass, "font-medium")}>
+            {USER_ROLES.map((role) => <option key={role} value={role}>{ROLE_LABELS[role]}</option>)}
           </select>
         </label>
-      )}
-      <label><span className="mb-1.5 block text-xs font-bold text-slate-600">كلمة المرور المؤقتة</span>
-        <div className="flex gap-2">
-          <input dir="ltr" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} className={`${inputClass} font-mono`} />
-          <button type="button" onClick={() => setForm({ ...form, password: generateTemporaryPassword() })} className="shrink-0 rounded-xl border border-slate-200 px-3 text-xs font-bold text-slate-600 hover:bg-slate-50">توليد</button>
+        <label><span className={labelClass}>كلمة المرور المؤقتة</span>
+          <div className="flex gap-2">
+            <input dir="ltr" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} className={cx(inputClass, "font-mono")} />
+            <button type="button" onClick={() => setForm({ ...form, password: generateTemporaryPassword() })} className={cx(btn("secondary"), "h-11")}>توليد</button>
+          </div>
+        </label>
+        {form.role === "driver" && (
+          <label className="sm:col-span-2"><span className={labelClass}>السيارة (يرسل السائق موقعها عبر GPS الهاتف)</span>
+            <select value={form.vehiclePlate} onChange={(event) => setForm({ ...form, vehiclePlate: event.target.value })} className={cx(inputClass, "font-medium")}>
+              {vehicles.map((vehicle) => <option key={vehicle.plate} value={vehicle.plate}>{vehicle.plate} · {vehicle.driver} · {vehicle.kind}</option>)}
+            </select>
+          </label>
+        )}
+        {error && <p role="alert" className="rounded-xl bg-red-50 p-3 text-sm font-medium text-red-700 ring-1 ring-inset ring-red-200 sm:col-span-2">{error}</p>}
+        <div className="flex gap-3 border-t border-slate-100 pt-5 sm:col-span-2">
+          <button disabled={busy} className={cx(btn("primary", "lg"), "flex-1")}><CheckCircle2 className="h-4 w-4" /> {busy ? "جارٍ الإنشاء..." : "إنشاء الحساب"}</button>
+          <button type="button" onClick={onCancel} className={btn("secondary", "lg")}>إلغاء</button>
         </div>
-      </label>
-      {error && <p role="alert" className="rounded-xl bg-red-50 p-3 text-xs font-bold text-red-700 sm:col-span-2">{error}</p>}
-      <div className="flex gap-3 sm:col-span-2">
-        <button disabled={busy} className="flex min-h-11 flex-1 items-center justify-center gap-2 rounded-xl bg-[#a61d2d] text-sm font-bold text-white hover:bg-[#8b1725] disabled:opacity-60"><CheckCircle2 className="h-4 w-4" /> {busy ? "جارٍ الإنشاء..." : "إنشاء الحساب"}</button>
-        <button type="button" onClick={onCancel} className="rounded-xl border border-slate-200 px-5 text-sm font-bold text-slate-600">إلغاء</button>
-      </div>
-    </form>
+      </form>
+    </Panel>
   );
 }
 
 function IssuedPassword({ username, password, onClose }: { username: string; password: string; onClose: () => void }) {
   return (
-    <div role="status" className="mb-6 flex flex-col gap-3 rounded-2xl border border-emerald-200 bg-emerald-50 p-5 text-sm text-emerald-900 sm:flex-row sm:items-center">
-      <ShieldCheck className="h-6 w-6 shrink-0" />
+    <div role="status" className="mb-6 flex flex-col gap-3 rounded-2xl bg-emerald-50 p-5 text-sm text-emerald-900 ring-1 ring-inset ring-emerald-200 sm:flex-row sm:items-center">
+      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-emerald-100 text-emerald-700"><ShieldCheck className="h-5 w-5" /></span>
       <div className="flex-1">
-        <p className="font-bold">سلّم هذه البيانات للمستخدم بشكل آمن. لن تظهر مرة أخرى.</p>
+        <p className="font-semibold">سلّم هذه البيانات للمستخدم بشكل آمن. لن تظهر مرة أخرى.</p>
         <p className="mt-1">اسم المستخدم: <b dir="ltr">{username}</b> · كلمة المرور المؤقتة: <b dir="ltr" className="font-mono">{password}</b></p>
       </div>
-      <button onClick={() => navigator.clipboard?.writeText(`${username} / ${password}`).then(() => toast.success("تم النسخ"), () => toast.error("تعذر النسخ"))} className="flex min-h-10 items-center gap-1 rounded-xl bg-white px-3 text-xs font-bold text-emerald-800"><Copy className="h-3.5 w-3.5" /> نسخ</button>
-      <button onClick={onClose} aria-label="إغلاق" className="flex h-10 w-10 items-center justify-center rounded-xl text-emerald-800 hover:bg-white"><X className="h-4 w-4" /></button>
+      <button onClick={() => navigator.clipboard?.writeText(`${username} / ${password}`).then(() => toast.success("تم النسخ"), () => toast.error("تعذر النسخ"))} className={btn("secondary", "sm")}><Copy className="h-3.5 w-3.5" /> نسخ</button>
+      <button onClick={onClose} aria-label="إغلاق" className={btn("ghost", "sm")}><X className="h-4 w-4" /></button>
     </div>
   );
 }
@@ -351,41 +357,49 @@ function VehiclesTab({ vehicles, requests, onChange }: {
     toast.success("تم حذف السيارة");
   }
 
+  const availableCount = vehicles.filter((vehicle) => vehicle.available).length;
   return (
     <>
-      <div className="mb-6 flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
-        <h2 className="text-2xl font-bold">السيارات والسائقون</h2>
-        <button onClick={() => setEditing("")} className="flex min-h-11 items-center gap-2 rounded-xl bg-[#a61d2d] px-4 text-sm font-bold text-white hover:bg-[#8b1725]"><Plus className="h-4 w-4" /> إضافة سيارة</button>
-      </div>
+      <PageHeader
+        title="السيارات والسائقون"
+        subtitle={`${vehicles.length} سيارة · ${availableCount} متاحة للخدمة`}
+        actions={<button onClick={() => setEditing("")} className={btn("primary")}><Plus className="h-4 w-4" /> إضافة سيارة</button>}
+      />
       {missingSeed.length > 0 && (
-        <div className="mb-4 flex flex-col gap-3 rounded-2xl border border-blue-100 bg-blue-50 p-4 text-sm text-blue-900 sm:flex-row sm:items-center sm:justify-between">
-          <span><b>{missingSeed.length}</b> سيارة من ملف السائقين غير مضافة: <span dir="ltr">{missingSeed.map((vehicle) => vehicle.plate).join("، ")}</span></span>
-          <button onClick={() => onChange([...vehicles, ...missingSeed], `إضافة ${missingSeed.length} سيارة من ملف السائقين`)} className="shrink-0 rounded-xl bg-blue-700 px-4 py-2 text-xs font-bold text-white">إضافة الكل</button>
+        <div className="mb-6 flex flex-col gap-3 rounded-2xl bg-blue-50 p-4 text-sm text-blue-900 ring-1 ring-inset ring-blue-200 sm:flex-row sm:items-center sm:justify-between">
+          <span className="flex items-start gap-2"><Info className="mt-0.5 h-4 w-4 shrink-0" /><span><b>{missingSeed.length}</b> سيارة من ملف السائقين غير مضافة: <span dir="ltr">{missingSeed.map((vehicle) => vehicle.plate).join("، ")}</span></span></span>
+          <button onClick={() => onChange([...vehicles, ...missingSeed], `إضافة ${missingSeed.length} سيارة من ملف السائقين`)} className={btn("dark", "sm")}>إضافة الكل</button>
         </div>
       )}
       {editing === "" && <VehicleForm onSave={save} onCancel={() => setEditing(null)} />}
-      <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+      <Panel icon={Truck} title="السيارات" count={vehicles.length}>
         <div className="divide-y divide-slate-100">
-          {vehicles.length === 0 && <p className="p-6 text-center text-sm text-slate-400">لا توجد سيارات مسجلة.</p>}
-          {vehicles.map((vehicle) => editing === vehicle.plate
-            ? <div key={vehicle.plate} className="p-3"><VehicleForm initial={vehicle} onSave={save} onCancel={() => setEditing(null)} /></div>
-            : (
-              <div key={vehicle.plate} className="flex flex-col gap-3 p-5 sm:flex-row sm:items-center">
-                <div className="flex flex-1 items-center gap-3">
-                  <div className={`flex h-11 w-11 items-center justify-center rounded-xl ${vehicle.available ? "bg-[#fff1f2] text-[#a61d2d]" : "bg-slate-100 text-slate-400"}`}><Truck className="h-5 w-5" /></div>
-                  <div>
-                    <p className="font-bold">{vehicle.plate} · {vehicle.driver}</p>
-                    <p className="mt-1 text-xs text-slate-400">{vehicle.kind} · <span dir="ltr">{vehicle.phone}</span> · {vehicle.available ? "متاحة للخدمة" : "خارج الخدمة"}{vehicleHasActiveTrip(vehicle.plate, requests) && " · في رحلة جارية"}</p>
+          {vehicles.length === 0 && <EmptyState icon={Truck} title="لا توجد سيارات مسجلة" />}
+          {vehicles.map((vehicle) => {
+            if (editing === vehicle.plate) return <div key={vehicle.plate} className="bg-slate-50/70 p-3"><VehicleForm initial={vehicle} onSave={save} onCancel={() => setEditing(null)} /></div>;
+            const onTrip = vehicleHasActiveTrip(vehicle.plate, requests);
+            return (
+              <div key={vehicle.plate} className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:px-5">
+                <div className="flex min-w-0 flex-1 items-center gap-3">
+                  <span className={cx("flex h-10 w-10 shrink-0 items-center justify-center rounded-xl", vehicle.available ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-400")}><Truck className="h-5 w-5" /></span>
+                  <div className="min-w-0">
+                    <p className="font-semibold text-ink"><span dir="ltr" className="tabular">{vehicle.plate}</span> · {vehicle.driver}</p>
+                    <p className="mt-0.5 flex flex-wrap items-center gap-x-2 text-xs text-slate-500">
+                      <span>{vehicle.kind}</span>
+                      {vehicle.phone && <><span className="text-slate-300">·</span><span dir="ltr">{vehicle.phone}</span></>}
+                    </p>
                   </div>
                 </div>
-                <div className="flex gap-2">
-                  <button onClick={() => setEditing(vehicle.plate)} className="flex min-h-10 items-center gap-1 rounded-xl border border-slate-200 px-3 text-xs font-bold text-slate-600 hover:bg-slate-50"><Pencil className="h-3.5 w-3.5" /> تعديل</button>
-                  <button onClick={() => remove(vehicle)} className="flex min-h-10 items-center gap-1 rounded-xl border border-red-100 px-3 text-xs font-bold text-red-600 hover:bg-red-50"><Trash2 className="h-3.5 w-3.5" /> حذف</button>
+                <div className="flex flex-wrap items-center gap-2">
+                  {onTrip ? <Badge tone="blue">في رحلة جارية</Badge> : vehicle.available ? <Badge tone="green">متاحة للخدمة</Badge> : <Badge>خارج الخدمة</Badge>}
+                  <button onClick={() => setEditing(vehicle.plate)} className={btn("secondary", "sm")}><Pencil className="h-3.5 w-3.5" /> تعديل</button>
+                  <button onClick={() => remove(vehicle)} className={btn("danger", "sm")}><Trash2 className="h-3.5 w-3.5" /> حذف</button>
                 </div>
               </div>
-            ))}
+            );
+          })}
         </div>
-      </section>
+      </Panel>
     </>
   );
 }
@@ -398,20 +412,24 @@ function VehicleForm({ initial, onSave, onCancel }: { initial?: Vehicle; onSave:
     kind: initial?.kind ?? "سيدان",
   });
 
-  return (
-    <form onSubmit={(event) => { event.preventDefault(); onSave(draft); }} className="mb-4 grid gap-4 rounded-2xl border border-[#f0c4ca] bg-white p-5 sm:grid-cols-2 lg:grid-cols-4">
-      <label><span className="mb-1.5 block text-xs font-bold text-slate-600">رقم السيارة</span><input dir="ltr" value={draft.plate} onChange={(event) => setDraft({ ...draft, plate: event.target.value })} className={inputClass} /></label>
-      <label><span className="mb-1.5 block text-xs font-bold text-slate-600">اسم السائق</span><input value={draft.driver} onChange={(event) => setDraft({ ...draft, driver: event.target.value })} className={inputClass} /></label>
-      <label><span className="mb-1.5 block text-xs font-bold text-slate-600">هاتف السائق</span><input dir="ltr" type="tel" value={draft.phone} onChange={(event) => setDraft({ ...draft, phone: event.target.value })} className={inputClass} /></label>
-      <label><span className="mb-1.5 block text-xs font-bold text-slate-600">نوع السيارة</span>
-        <select value={draft.kind} onChange={(event) => setDraft({ ...draft, kind: event.target.value as VehicleKind })} className={`${inputClass} font-bold`}>
+  const form = (
+    <form onSubmit={(event) => { event.preventDefault(); onSave(draft); }} className="grid gap-5 p-5 sm:grid-cols-2 lg:grid-cols-4">
+      <label><span className={labelClass}>رقم السيارة</span><input dir="ltr" value={draft.plate} onChange={(event) => setDraft({ ...draft, plate: event.target.value })} className={inputClass} /></label>
+      <label><span className={labelClass}>اسم السائق</span><input value={draft.driver} onChange={(event) => setDraft({ ...draft, driver: event.target.value })} className={inputClass} /></label>
+      <label><span className={labelClass}>هاتف السائق</span><input dir="ltr" type="tel" value={draft.phone} onChange={(event) => setDraft({ ...draft, phone: event.target.value })} className={inputClass} /></label>
+      <label><span className={labelClass}>نوع السيارة</span>
+        <select value={draft.kind} onChange={(event) => setDraft({ ...draft, kind: event.target.value as VehicleKind })} className={cx(inputClass, "font-medium")}>
           {VEHICLE_KINDS.map((kind) => <option key={kind} value={kind}>{kind}</option>)}
         </select>
       </label>
       <div className="flex gap-3 sm:col-span-2 lg:col-span-4">
-        <button className="flex min-h-11 flex-1 items-center justify-center gap-2 rounded-xl bg-[#a61d2d] text-sm font-bold text-white hover:bg-[#8b1725]"><CheckCircle2 className="h-4 w-4" /> {initial ? "حفظ التعديلات" : "إضافة السيارة"}</button>
-        <button type="button" onClick={onCancel} className="rounded-xl border border-slate-200 px-5 text-sm font-bold text-slate-600">إلغاء</button>
+        <button className={cx(btn("primary"), "flex-1 sm:flex-none")}><CheckCircle2 className="h-4 w-4" /> {initial ? "حفظ التعديلات" : "إضافة السيارة"}</button>
+        <button type="button" onClick={onCancel} className={btn("secondary")}>إلغاء</button>
       </div>
     </form>
   );
+  // التعديل داخل قائمة السيارات، والإضافة في قسم مستقل فوقها
+  return initial
+    ? <div className="rounded-xl bg-white ring-1 ring-slate-200">{form}</div>
+    : <Panel tone="brand" icon={Plus} title="سيارة جديدة" className="mb-6">{form}</Panel>;
 }

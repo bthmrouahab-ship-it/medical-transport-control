@@ -38,17 +38,31 @@ export type Vehicle = {
   available: boolean;
 };
 
+export type RequestStatus = "بانتظار التوزيع" | "تم إرسال السيارة" | "وصلت السيارة" | "تم استلام المريض" | "وصلت الوجهة";
+/** كيف عُرف وصول السيارة إلى الوجهة: GPS السائق، أو انتهاء المدة التقديرية، أو تأكيد مشرف السيارات. */
+export type ArrivalSource = "gps" | "estimate" | "manual";
+
 export type VehicleRequest = {
   id: string;
   appointmentId: string;
   vehiclePlate?: string;
   driver?: string;
   direction: "ذهاب" | "عودة";
-  status: "بانتظار التوزيع" | "تم إرسال السيارة" | "وصلت السيارة" | "تم استلام المريض";
+  status: RequestStatus;
   notificationMethod: "whatsapp" | "call";
   createdAt: string;
   groupId?: string;
   notificationSentAt?: string;
+  /** وقت استلام المريض، أي بداية الطريق إلى الوجهة (ISO) */
+  pickedUpAt?: string;
+  /** الوقت التقديري للوصول إلى الوجهة (ISO) */
+  etaAt?: string;
+  /** إحداثيات الوجهة؛ منها يكتشف الخادم الوصول عبر GPS السائق */
+  destLat?: number;
+  destLng?: number;
+  /** وقت الوصول إلى الوجهة (ISO) ومصدره */
+  arrivedAt?: string;
+  arrivalSource?: ArrivalSource;
 };
 
 export type TripGroupSuggestion = {
@@ -301,11 +315,17 @@ export function migrateRequest(value: unknown): VehicleRequest | null {
   const appointmentId = toText(raw.appointmentId);
   if (!id || !appointmentId) return null;
   const legacyStatus = toText(raw.status);
-  const status: VehicleRequest["status"] = legacyStatus === "وصلت السيارة" || legacyStatus === "تم استلام المريض"
+  const status: VehicleRequest["status"] = legacyStatus === "وصلت السيارة" || legacyStatus === "تم استلام المريض" || legacyStatus === "وصلت الوجهة"
     ? legacyStatus
     : legacyStatus === "تم التأكيد" || legacyStatus === "تم إرسال السيارة"
       ? "تم إرسال السيارة"
       : "بانتظار التوزيع";
+  const isoTime = (value: unknown) => {
+    const text = toText(value);
+    return text && !Number.isNaN(Date.parse(text)) ? text : undefined;
+  };
+  const coordinate = (value: unknown) => (typeof value === "number" && Number.isFinite(value) ? value : undefined);
+  const arrivalSource = raw.arrivalSource === "gps" || raw.arrivalSource === "estimate" || raw.arrivalSource === "manual" ? raw.arrivalSource : undefined;
   return {
     id,
     appointmentId,
@@ -317,6 +337,12 @@ export function migrateRequest(value: unknown): VehicleRequest | null {
     createdAt: toText(raw.createdAt),
     groupId: toText(raw.groupId) || undefined,
     notificationSentAt: toText(raw.notificationSentAt) || undefined,
+    pickedUpAt: isoTime(raw.pickedUpAt),
+    etaAt: isoTime(raw.etaAt),
+    destLat: coordinate(raw.destLat),
+    destLng: coordinate(raw.destLng),
+    arrivedAt: isoTime(raw.arrivedAt),
+    arrivalSource,
   };
 }
 
@@ -345,6 +371,11 @@ function hospitalFor(appointment: ClinicAppointment, hospitals: Hospital[]) {
   if (isNonMedical(appointment)) return null;
   return (appointment.hospitalId && hospitals.find((hospital) => hospital.id === appointment.hospitalId))
     || matchHospital(appointment.clinic, hospitals);
+}
+
+/** مستشفى الموعد من الدليل (null للرحلات غير الطبية أو الوجهات غير المعروفة). */
+export function appointmentHospital(appointment: ClinicAppointment, hospitals: Hospital[] = DEFAULT_HOSPITALS) {
+  return hospitalFor(appointment, hospitals) || null;
 }
 
 /** منطقة المستشفى (مثل «مدينة حمد الطبية») لموعد، إن كان المستشفى في الدليل. */
@@ -434,9 +465,11 @@ export function validateVehicle(
 }
 
 /** السيارات المرتبطة برحلة جارية لا يُسمح بتغيير رقمها أو حذفها. */
-export function vehicleHasActiveTrip(plate: string, requests: VehicleRequest[]) {
+export function vehicleHasActiveTrip(plate: string, requests: VehicleRequest[], now = new Date()) {
   return requests.some((request) => request.vehiclePlate === plate
-    && (request.status === "تم إرسال السيارة" || request.status === "وصلت السيارة"));
+    && (request.status === "تم إرسال السيارة" || request.status === "وصلت السيارة"
+      // في الطريق إلى الوجهة ولم تنتهِ مدته التقديرية
+      || (request.status === "تم استلام المريض" && Boolean(request.etaAt) && !request.arrivedAt && Date.parse(request.etaAt!) > now.getTime())));
 }
 
 /** قائمة السيارات الأولية (من ملف السائقين)؛ تُحفظ في قاعدة البيانات عند أول دخول للمدير ثم يعدّلها من لوحته. */

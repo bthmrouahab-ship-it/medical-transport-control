@@ -2,6 +2,7 @@ import { useState } from "react";
 import { KeyRound } from "lucide-react";
 import { toast } from "sonner";
 import { authErrorMessage, changeOwnPassword } from "@/lib/auth";
+import { btn, cx, inputClass, labelClass } from "./ui-kit";
 
 export default function ChangePasswordForm({ required, onDone, onCancel }: {
   required?: boolean;
@@ -33,25 +34,28 @@ export default function ChangePasswordForm({ required, onDone, onCancel }: {
     }
   }
 
-  const input = "h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none focus:border-[#e6a1aa]";
+  const field = (label: string, value: string, onChange: (value: string) => void, autoComplete: string) => (
+    <label className="block">
+      <span className={labelClass}>{label}</span>
+      <input dir="ltr" type="password" autoComplete={autoComplete} value={value} onChange={(event) => onChange(event.target.value)} className={inputClass} />
+    </label>
+  );
   return (
     <form onSubmit={submit} className="space-y-4" dir="rtl">
-      <div className="flex items-start gap-3">
-        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-[#fff1f2] text-[#a61d2d]"><KeyRound className="h-5 w-5" /></div>
+      <div className="flex items-start gap-3 pb-1">
+        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-brand-50 text-brand-600"><KeyRound className="h-5 w-5" /></div>
         <div>
-          <h2 className="text-xl font-bold">تغيير كلمة المرور</h2>
-          <p className="mt-1 text-xs leading-5 text-slate-500">
-            8 أحرف على الأقل، أحرف وأرقام
-          </p>
+          <h2 className="text-xl font-semibold text-ink">تغيير كلمة المرور</h2>
+          <p className="mt-1 text-xs leading-5 text-slate-500">{required ? "يجب تغيير كلمة المرور المؤقتة قبل المتابعة. " : ""}8 أحرف على الأقل، أحرف وأرقام</p>
         </div>
       </div>
-      <label className="block"><span className="mb-1.5 block text-xs font-bold text-slate-600">كلمة المرور الحالية</span><input dir="ltr" type="password" autoComplete="current-password" value={current} onChange={(event) => setCurrent(event.target.value)} className={input} /></label>
-      <label className="block"><span className="mb-1.5 block text-xs font-bold text-slate-600">كلمة المرور الجديدة</span><input dir="ltr" type="password" autoComplete="new-password" value={next} onChange={(event) => setNext(event.target.value)} className={input} /></label>
-      <label className="block"><span className="mb-1.5 block text-xs font-bold text-slate-600">تأكيد كلمة المرور الجديدة</span><input dir="ltr" type="password" autoComplete="new-password" value={confirm} onChange={(event) => setConfirm(event.target.value)} className={input} /></label>
-      {error && <p role="alert" className="rounded-xl bg-red-50 p-3 text-center text-xs font-bold text-red-700">{error}</p>}
-      <div className="flex gap-3">
-        <button disabled={busy || !current || !next || !confirm} className="flex min-h-11 flex-1 items-center justify-center rounded-xl bg-[#a61d2d] text-sm font-bold text-white hover:bg-[#8b1725] disabled:opacity-60">{busy ? "جارٍ الحفظ..." : "حفظ كلمة المرور"}</button>
-        {onCancel && <button type="button" onClick={onCancel} className="rounded-xl border border-slate-200 px-5 text-sm font-bold text-slate-600">{required ? "تسجيل الخروج" : "إلغاء"}</button>}
+      {field("كلمة المرور الحالية", current, setCurrent, "current-password")}
+      {field("كلمة المرور الجديدة", next, setNext, "new-password")}
+      {field("تأكيد كلمة المرور الجديدة", confirm, setConfirm, "new-password")}
+      {error && <p role="alert" className="rounded-xl bg-red-50 p-3 text-center text-sm font-medium text-red-700 ring-1 ring-inset ring-red-200">{error}</p>}
+      <div className="flex gap-3 pt-1">
+        <button disabled={busy || !current || !next || !confirm} className={cx(btn("primary", "lg"), "flex-1")}>{busy ? "جارٍ الحفظ..." : "حفظ كلمة المرور"}</button>
+        {onCancel && <button type="button" onClick={onCancel} className={btn("secondary", "lg")}>{required ? "تسجيل الخروج" : "إلغاء"}</button>}
       </div>
     </form>
   );

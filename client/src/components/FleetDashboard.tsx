@@ -1,12 +1,15 @@
 import { lazy, Suspense, useMemo, useState } from "react";
-import { BarChart3, Hospital as HospitalIcon, Loader2, Map as MapIcon, Radio, Truck } from "lucide-react";
-import { matchHospital, type Hospital } from "@shared/hospitals";
+import { BarChart3, CarFront, Hospital as HospitalIcon, Loader2, Map as MapIcon, Radio, Truck } from "lucide-react";
+import type { Hospital } from "@shared/hospitals";
 import type { HistorySummary } from "@shared/history";
-import { DEFAULT_VEHICLES, migrateAppointment, migrateRequest, type ClinicAppointment, type Vehicle, type VehicleRequest } from "@shared/transport";
+import { DEFAULT_VEHICLES, localDateString, migrateAppointment, migrateRequest, type ClinicAppointment, type Vehicle, type VehicleRequest } from "@shared/transport";
+import { arrivalsOn, tripEndpoints, tripPhase } from "@shared/trips";
+import { useArrivalAlerts } from "@/lib/arrivalAlerts";
 import { saveState } from "@/lib/appStore";
 import { appendAudit } from "@/lib/audit";
 import { useHospitals, useNow, useSharedState } from "@/lib/useShared";
-import { locationFreshness, type ActiveTrip, type VehicleLocation } from "@/lib/vehicleLocation";
+import { MAP_COLORS, locationFreshness, type MapTrip, type VehicleLocation } from "@/lib/vehicleLocation";
+import { Dot, Panel, PageHeader, Segmented, Stat, cx, timeLabel, type Tone } from "./ui-kit";
 
 // الخريطة (Leaflet) والمخططات (recharts) تُحمَّل عند فتح القسم فقط
 const LiveMap = lazy(() => import("./LiveMap"));
@@ -16,12 +19,18 @@ const StatsPanel = lazy(() => import("./StatsPanel"));
 type Tab = "map" | "stats" | "hospitals";
 
 function SectionLoading() {
-  return <div className="flex min-h-64 items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-400"><Loader2 className="h-6 w-6 animate-spin" /><span className="sr-only">جارٍ التحميل</span></div>;
+  return <div className="flex min-h-64 items-center justify-center rounded-2xl bg-white text-slate-400 shadow-card ring-1 ring-slate-200/80"><Loader2 className="h-6 w-6 animate-spin" /><span className="sr-only">جارٍ التحميل</span></div>;
 }
 
-/** لوحة السيارات: خريطة مباشرة، إحصائيات الرحلات، ودليل المستشفيات (للمدير). */
-export default function FleetDashboard({ canEdit = false, actor }: { canEdit?: boolean; actor: string }) {
+const FRESH_TONE: Record<string, Tone> = { live: "green", stale: "amber", offline: "neutral" };
+
+/**
+ * لوحة السيارات: خريطة قطر المباشرة، إحصائيات الرحلات، ودليل المستشفيات (للمدير).
+ * alerts: رسالة عند وصول سيارة إلى وجهتها (لمشرف السيارات وهو على الخريطة).
+ */
+export default function FleetDashboard({ canEdit = false, alerts = false, actor }: { canEdit?: boolean; alerts?: boolean; actor: string }) {
   const [tab, setTab] = useState<Tab>("map");
+  const [focus, setFocus] = useState<{ lat: number; lng: number; key: number } | null>(null);
   const hospitals = useHospitals();
   const history = useSharedState<HistorySummary | null>("fox_history", null);
   const locations = useSharedState<VehicleLocation[]>("fox_locations", []);
@@ -45,67 +54,111 @@ export default function FleetDashboard({ canEdit = false, actor }: { canEdit?: b
     return counts;
   }, [history]);
 
-  const activeTrips = useMemo<ActiveTrip[]>(() => requests
-    .filter((request) => request.status === "تم إرسال السيارة" || request.status === "وصلت السيارة")
-    .flatMap((request) => {
-      const appointment = appointments.find((item) => item.id === request.appointmentId);
-      const hospitalId = appointment && (appointment.hospitalId || matchHospital(appointment.clinic, hospitals)?.id);
-      return hospitalId ? [{ id: request.id, hospitalId, plate: request.vehiclePlate, label: `${request.vehiclePlate ?? ""} → ${appointment!.clinic} (${request.status})` }] : [];
-    }), [requests, appointments, hospitals]);
+  // اسم السائق على الخريطة: من حسابه في صفحة السائق (من يقود السيارة فعلًا)، وإلا من بيانات السيارة
+  const mapLocations = useMemo(() => {
+    const drivers = new Map(fleet.map((vehicle) => [vehicle.plate, vehicle.driver]));
+    return locations.map((location) => ({ ...location, driver: location.driver?.trim() || drivers.get(location.plate) }));
+  }, [locations, fleet]);
+  const freshness = useMemo(() => new Map(mapLocations.map((location) => [location.plate, locationFreshness(location, now.getTime())])), [mapLocations, now]);
+  const isLive = (plate?: string) => Boolean(plate && freshness.get(plate)?.state === "live");
+  const driverOf = (plate?: string, fallback?: string) => mapLocations.find((location) => location.plate === plate && isLive(plate))?.driver || fallback || fleet.find((vehicle) => vehicle.plate === plate)?.driver || "";
 
-  const liveCount = locations.filter((location) => locationFreshness(location, now.getTime()).state === "live").length;
+  // الرحلات الجارية الآن: إلى نقطة الاستلام، أو مع المريض إلى الوجهة
+  const trips = useMemo<MapTrip[]>(() => requests.flatMap((request) => {
+    const phase = tripPhase(request, now, isLive(request.vehiclePlate));
+    if (phase.kind !== "toPickup" && phase.kind !== "toDestination") return [];
+    const appointment = appointments.find((item) => item.id === request.appointmentId);
+    if (!appointment) return [];
+    const { from, to, destination } = tripEndpoints(appointment, request.direction, hospitals);
+    const who = `${request.vehiclePlate ?? ""} · ${driverOf(request.vehiclePlate, request.driver)}`;
+    const label = phase.kind === "toPickup"
+      ? `${who}: في الطريق لاستلام مريض (${request.direction} إلى ${destination})`
+      : `${who}: مع المريض إلى ${destination} · الوصول المتوقع ${timeLabel(phase.etaAt)}`;
+    return [{ id: request.id, plate: request.vehiclePlate, phase: phase.kind, from, to, label }];
+  }), [requests, appointments, hospitals, now, freshness]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useArrivalAlerts({ arrivals: arrivalsOn(localDateString(now), requests, now, isLive), appointments, hospitals, driverOf, enabled: alerts });
+
+  const liveCount = fleet.filter((vehicle) => isLive(vehicle.plate)).length;
+  const busyPlates = new Set(trips.map((trip) => trip.plate));
 
   function saveHospitals(next: Hospital[], message: string) {
     saveState("fox_hospitals", next);
     appendAudit(message, actor);
   }
 
-  const tabs: { id: Tab; label: string; icon: typeof MapIcon }[] = [
-    { id: "map", label: "الخريطة المباشرة", icon: MapIcon },
-    { id: "stats", label: "الإحصائيات", icon: BarChart3 },
-    ...(canEdit ? [{ id: "hospitals" as const, label: "دليل المستشفيات", icon: HospitalIcon }] : []),
+  const tabs: { value: Tab; label: string; icon: typeof MapIcon }[] = [
+    { value: "map", label: "الخريطة المباشرة", icon: MapIcon },
+    { value: "stats", label: "الإحصائيات", icon: BarChart3 },
+    ...(canEdit ? [{ value: "hospitals" as const, label: "دليل المستشفيات", icon: HospitalIcon }] : []),
   ];
+
+  // السيارات بترتيب: GPS مباشر، ثم في رحلة، ثم البقية
+  const vehicleRows = fleet
+    .map((vehicle) => {
+      const fresh = freshness.get(vehicle.plate);
+      const trip = trips.find((item) => item.plate === vehicle.plate && item.phase === "toDestination") ?? trips.find((item) => item.plate === vehicle.plate);
+      const phase = trip ? tripPhase(requests.find((request) => request.id === trip.id)!, now, isLive(vehicle.plate)) : null;
+      const status = !vehicle.available ? "خارج الخدمة"
+        : phase?.kind === "toDestination" ? `مع المريض · تصل ${timeLabel(phase.etaAt)}`
+          : phase?.kind === "toPickup" ? "في الطريق للاستلام" : "متاحة";
+      const location = mapLocations.find((item) => item.plate === vehicle.plate);
+      return { vehicle, fresh, status, location, rank: (fresh?.state === "live" ? 0 : 2) + (busyPlates.has(vehicle.plate) ? 0 : 1) };
+    })
+    .sort((a, b) => a.rank - b.rank || a.vehicle.plate.localeCompare(b.vehicle.plate));
 
   return (
     <div>
-      <nav className="mb-6 flex gap-2 overflow-x-auto" aria-label="أقسام لوحة السيارات">
-        {tabs.map((item) => (
-          <button key={item.id} onClick={() => setTab(item.id)} aria-current={tab === item.id ? "page" : undefined} className={`flex min-h-10 shrink-0 items-center gap-2 rounded-xl px-4 text-sm font-bold ${tab === item.id ? "bg-[#10233f] text-white" : "border border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}>
-            <item.icon className="h-4 w-4" /> {item.label}
-          </button>
-        ))}
-      </nav>
+      <PageHeader
+        title="الخريطة والإحصائيات"
+        subtitle="السيارات مباشرة على خريطة قطر، وإحصائيات الرحلات"
+        actions={<Segmented label="أقسام لوحة السيارات" value={tab} onChange={setTab} options={tabs} />}
+      />
 
       <Suspense fallback={<SectionLoading />}>
         {tab === "map" && (
-          <div className="grid gap-5 lg:grid-cols-[1fr_300px]">
-            <LiveMap hospitals={hospitals} locations={locations} trips={activeTrips} tripCounts={tripCounts} />
-            <aside className="space-y-4">
+          <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">
+            <div className="min-w-0 space-y-3">
+              <LiveMap hospitals={hospitals} locations={mapLocations} trips={trips} tripCounts={tripCounts} focus={focus} height={600} />
+              <ul className="flex flex-wrap items-center gap-x-5 gap-y-2 rounded-xl bg-white px-4 py-2.5 text-xs text-slate-600 shadow-card ring-1 ring-slate-200/80" aria-label="مفتاح الخريطة">
+                <li className="flex items-center gap-2"><span className="h-3 w-3 rounded-full" style={{ background: MAP_COLORS.origin }} /> مجمع الثمامة</li>
+                <li className="flex items-center gap-2"><span className="h-3 w-3 rounded-full opacity-75" style={{ background: MAP_COLORS.hospital }} /> مستشفى (الحجم حسب الرحلات)</li>
+                <li className="flex items-center gap-2"><span className="w-5 border-t-[3px] border-dashed" style={{ borderColor: MAP_COLORS.toPickup }} /> في الطريق للاستلام</li>
+                <li className="flex items-center gap-2"><span className="w-5 border-t-[3px]" style={{ borderColor: MAP_COLORS.toDestination }} /> مع المريض إلى الوجهة</li>
+                <li className="flex items-center gap-2"><Dot tone="green" /> GPS مباشر</li>
+                <li className="flex items-center gap-2"><Dot tone="amber" /> آخر موقع قبل دقائق</li>
+                <li className="flex items-center gap-2"><Dot /> غير متصل</li>
+              </ul>
+            </div>
+            <aside className="min-w-0 space-y-4">
               <div className="grid grid-cols-2 gap-3">
-                <div className="rounded-2xl border border-slate-200 bg-white p-4"><p className="flex items-center gap-1 text-xs font-bold text-slate-500"><Radio className="h-3.5 w-3.5" /> GPS مباشر</p><p className="mt-2 text-2xl font-bold">{liveCount}<span className="text-sm font-normal text-slate-400"> / {fleet.length}</span></p></div>
-                <div className="rounded-2xl border border-slate-200 bg-white p-4"><p className="flex items-center gap-1 text-xs font-bold text-slate-500"><Truck className="h-3.5 w-3.5" /> رحلات جارية</p><p className="mt-2 text-2xl font-bold">{activeTrips.length}</p></div>
+                <Stat icon={Radio} tone="green" label="GPS مباشر" value={<>{liveCount}<span className="text-sm font-normal text-slate-400"> / {fleet.length}</span></>} />
+                <Stat icon={Truck} tone="blue" label="في رحلة" value={busyPlates.size} />
               </div>
-              <section className="rounded-2xl border border-slate-200 bg-white">
-                <h3 className="border-b border-slate-100 p-4 text-sm font-bold">حالة السيارات</h3>
-                <ul className="max-h-[380px] divide-y divide-slate-100 overflow-auto">
-                  {fleet.map((vehicle) => {
-                    const location = locations.find((item) => item.plate === vehicle.plate);
-                    const fresh = location ? locationFreshness(location, now.getTime()) : null;
+              <Panel icon={CarFront} title="السيارات" count={fleet.length} description="اضغط على سيارة لعرضها على الخريطة">
+                <ul className="max-h-[470px] divide-y divide-slate-100 overflow-y-auto">
+                  {vehicleRows.map(({ vehicle, fresh, status, location }) => {
+                    const shown = location && fresh && fresh.state !== "offline";
                     return (
-                      <li key={vehicle.plate} className="flex items-center justify-between gap-2 px-4 py-3 text-xs">
-                        <span><b dir="ltr">{vehicle.plate}</b> <span className="text-slate-500">{vehicle.driver}</span></span>
-                        <span className="flex items-center gap-1.5 font-bold text-slate-600"><span className="h-2.5 w-2.5 rounded-full" style={{ background: fresh?.color ?? "#d4d2cc" }} />{fresh?.label ?? "لا يوجد GPS"}</span>
+                      <li key={vehicle.plate}>
+                        <button
+                          type="button"
+                          disabled={!location}
+                          onClick={() => location && setFocus({ lat: location.lat, lng: location.lng, key: Date.now() })}
+                          className={cx("flex w-full items-center gap-3 px-4 py-3 text-start transition", location ? "hover:bg-slate-50" : "cursor-default")}
+                        >
+                          <Dot tone={FRESH_TONE[fresh?.state ?? "offline"]} pulse={fresh?.state === "live"} />
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate text-sm font-medium text-ink">{driverOf(vehicle.plate, vehicle.driver)} <span dir="ltr" className="text-xs font-normal text-slate-400">{vehicle.plate}</span></span>
+                            <span className="block truncate text-xs text-slate-500">{status}</span>
+                          </span>
+                          <span className={cx("shrink-0 text-xs", shown ? "text-slate-600" : "text-slate-400")}>{fresh ? fresh.label : "لا يوجد GPS"}</span>
+                        </button>
                       </li>
                     );
                   })}
                 </ul>
-              </section>
-              <ul className="grid grid-cols-2 gap-2 rounded-xl bg-white p-3 text-[11px] font-semibold text-slate-600 ring-1 ring-slate-200">
-                <li className="flex items-center gap-2"><span className="h-3 w-3 rounded-full bg-[#2a78d6]" /> مستشفى</li>
-                <li className="flex items-center gap-2"><span className="h-3 w-3 rounded-full border-2 border-dashed border-[#2a78d6] bg-[#2a78d6]/40" /> موقع تقريبي</li>
-                <li className="flex items-center gap-2"><span className="h-0.5 w-4 border-t-2 border-dashed border-[#eb6834]" /> رحلة جارية</li>
-                <li className="flex items-center gap-2"><span className="h-3 w-3 rounded-full bg-[#1baf7a]" /> GPS مباشر</li>
-              </ul>
+              </Panel>
             </aside>
           </div>
         )}

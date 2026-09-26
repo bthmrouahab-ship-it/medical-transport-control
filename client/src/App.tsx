@@ -4,9 +4,11 @@ import ErrorBoundary from "./components/ErrorBoundary";
 import RolePortal from "./pages/RolePortal";
 
 const toasterStyle = {
-  "--normal-bg": "var(--popover)",
-  "--normal-text": "var(--popover-foreground)",
-  "--normal-border": "var(--border)",
+  "--normal-bg": "#ffffff",
+  "--normal-text": "#0f1f35",
+  "--normal-border": "#e2e8f0",
+  "--border-radius": "14px",
+  fontFamily: "var(--font-sans)",
 } as CSSProperties;
 
 // صفحة واحدة: كل الروابط تفتح بوابة الدخول، ومنها صفحة الدور المسجل في حساب المستخدم.

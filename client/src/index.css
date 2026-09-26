@@ -1,92 +1,81 @@
 @import "tailwindcss";
 
-@custom-variant dark (&:is(.dark *));
-
-@theme inline {
-  --radius-sm: calc(var(--radius) - 4px);
-  --radius-md: calc(var(--radius) - 2px);
-  --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) + 4px);
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --color-card: var(--card);
-  --color-card-foreground: var(--card-foreground);
-  --color-popover: var(--popover);
-  --color-popover-foreground: var(--popover-foreground);
-  --color-primary: var(--primary);
-  --color-primary-foreground: var(--primary-foreground);
-  --color-secondary: var(--secondary);
-  --color-secondary-foreground: var(--secondary-foreground);
-  --color-muted: var(--muted);
-  --color-muted-foreground: var(--muted-foreground);
-  --color-accent: var(--accent);
-  --color-accent-foreground: var(--accent-foreground);
-  --color-destructive: var(--destructive);
-  --color-destructive-foreground: var(--destructive-foreground);
-  --color-border: var(--border);
-  --color-input: var(--input);
-  --color-ring: var(--ring);
-  --color-sidebar: var(--sidebar);
-  --color-sidebar-foreground: var(--sidebar-foreground);
-  --color-sidebar-primary: var(--sidebar-primary);
-  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
-  --color-sidebar-accent: var(--sidebar-accent);
-  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
-  --color-sidebar-border: var(--sidebar-border);
-  --color-sidebar-ring: var(--sidebar-ring);
-}
-
-:root {
-  --primary: #a61d2d;
-  --primary-foreground: #fff7f7;
-  --background: #f5f7fb;
-  --foreground: #17243b;
-  --card: #ffffff;
-  --card-foreground: #17243b;
-  --popover: #ffffff;
-  --popover-foreground: #17243b;
-  --secondary: #eef4f7;
-  --secondary-foreground: #3d506c;
-  --muted: #eef3f6;
-  --muted-foreground: #728199;
-  --accent: #fff1f2;
-  --accent-foreground: #861b2a;
-  --destructive: #c94747;
-  --destructive-foreground: #fff7f7;
-  --border: #e1e8ef;
-  --input: #e1e8ef;
-  --ring: #e6a1aa;
-  --sidebar: #10233f;
-  --sidebar-foreground: #eef6ff;
-  --sidebar-primary: #4de0bc;
-  --sidebar-primary-foreground: #10233f;
-  --sidebar-accent: #244669;
-  --sidebar-accent-foreground: #83f0d0;
-  --sidebar-border: rgba(255,255,255,.1);
-  --sidebar-ring: #83f0d0;
-  --radius: 0.75rem;
+/* ألوان النظام: أحمر الهلال للأزرار الأساسية، وكحلي للإطار، وخلفية رمادية هادئة تبرز البطاقات البيضاء */
+@theme {
+  --font-sans: "IBM Plex Sans Arabic", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --color-page: #eef2f6;
+  --color-ink: #0f1f35;
+  --color-brand-50: #fdf3f4;
+  --color-brand-100: #fbe4e7;
+  --color-brand-200: #f3c1c8;
+  --color-brand-600: #b3202f;
+  --color-brand-700: #951a27;
+  --color-navy-700: #1d3a5f;
+  --color-navy-800: #15304f;
+  --color-navy-900: #0f2742;
+  --shadow-card: 0 1px 2px rgba(15, 31, 53, 0.05), 0 8px 24px -16px rgba(15, 31, 53, 0.18);
 }
 
 * { box-sizing: border-box; }
-html { min-width: 320px; background: #f5f7fb; }
+html { min-width: 320px; background: #eef2f6; }
 body {
   margin: 0;
   min-width: 320px;
-  background: #f5f7fb;
-  color: #17243b;
-  font-family: "IBM Plex Sans Arabic", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  line-height: 1.55;
+  background: #eef2f6;
+  color: #0f1f35;
+  font-family: var(--font-sans);
+  line-height: 1.6;
   -webkit-font-smoothing: antialiased;
 }
 button, input, select, textarea { font: inherit; }
 button:not(:disabled), [role="button"]:not([aria-disabled="true"]), a[href], select:not(:disabled) { cursor: pointer; }
-button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible {
-  outline: 3px solid rgba(31, 124, 118, .34);
+button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, summary:focus-visible {
+  outline: 3px solid rgba(37, 99, 235, .45);
   outline-offset: 2px;
 }
 button:active:not(:disabled), a:active { transform: scale(.985); }
-input::placeholder { color: #9aa8ba; }
-::selection { background: #b9eee2; color: #10233f; }
+input::placeholder { color: #94a3b8; }
+::selection { background: #fbe4e7; color: #0f1f35; }
+/* أعمدة الأوقات والأرقام المتراصة */
+.tabular { font-variant-numeric: tabular-nums; }
+/* السيارة على الخريطة: بطاقة باسم السائق ورقم اللوحة، وتحتها نقطة موقعها بلون إشارة GPS */
+.vehicle-pin { background: transparent; border: 0; }
+.vehicle-pin__body {
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  transform: translate(-50%, calc(-100% + 8px));
+}
+.vehicle-pin__label {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  direction: rtl;
+  white-space: nowrap;
+  border-radius: 8px;
+  background: #fff;
+  padding: 3px 8px;
+  color: #0f1f35;
+  font: 600 12px/1.35 var(--font-sans);
+  box-shadow: 0 1px 2px rgba(15, 31, 53, .18), 0 6px 14px -4px rgba(15, 31, 53, .3);
+}
+.vehicle-pin__label span { color: #64748b; font-size: 11px; font-weight: 500; }
+.vehicle-pin__dot {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 3px solid #fff;
+  box-shadow: 0 0 0 1px rgba(15, 31, 53, .3), 0 2px 4px rgba(15, 31, 53, .3);
+}
+.vehicle-pin__body.is-offline { opacity: .65; }
+.leaflet-container { font-family: var(--font-sans); background: #e5ebf1; }
+.leaflet-tooltip { font-family: var(--font-sans); border-radius: 8px; }
+.leaflet-tooltip.map-label { border: 0; background: #0f2742; color: #fff; font-weight: 600; box-shadow: 0 4px 12px -4px rgba(15, 39, 66, .5); }
+.leaflet-tooltip-top.map-label::before { border-top-color: #0f2742; }
 
 @media (prefers-reduced-motion: no-preference) {
   button, a, input, select { transition: border-color .18s ease, background-color .18s ease, color .18s ease, transform .18s ease, box-shadow .18s ease; }
