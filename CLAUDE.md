@@ -9,7 +9,7 @@
 - Firebase Auth بالبريد وكلمة المرور: اسم المستخدم يتحول إلى بريد داخلي، والملفات في `users/{uid}` و`usernames/{name}`.
 - Firestore، والصلاحيات حسب الدور في `firestore.rules`: مشرف المبنى يغيّر حالة الموعد والطلب فقط، ومشرف السيارات يغيّر خانات الإرسال في الطلب فقط.
 - الخرائط بمكتبة Leaflet مع OpenStreetMap، والمخططات بمكتبة recharts.
-- مجلد `server/` فيه اختبارات vitest فقط؛ الخادم Express القديم غير مستخدم في النشر.
+- مجلد `server/` فيه اختبارات vitest فقط (أُزيل خادم قالب Manus القديم).
 
 ## الأدوار
 - **المدير (admin):** المستخدمون والسيارات ودليل المستشفيات والخريطة والإحصائيات. الحساب الأول `Admin` / `Admin123` يُنشأ عند أول دخول ويُجبر على تغيير كلمة المرور.
@@ -40,7 +40,6 @@
 - قواعد Firestore تُختبر على المحاكي بمكتبة `@firebase/rules-unit-testing`.
 
 ## أمور معلّقة
-- حذف بقايا قالب Manus غير المستخدمة (لم تُحذف في الجلسة السحابية): `client/public/__manus__/` (مستثناة من النشر في `firebase.json`)، `client/src/_core/`، `client/src/lib/trpc.ts`، `client/src/const.ts`، `client/src/components/{AIChatBox,ManusDialog,Map,DashboardLayout,DashboardLayoutSkeleton}.tsx`، `client/src/pages/{ComponentShowcase,NotFound}.tsx`، `client/src/contexts/`، `client/src/hooks/`، `client/src/components/ui/`، `client/src/lib/utils.ts`، `server/_core/`، `server/{routers,db,storage}.ts`، `server/auth.logout.test.ts`، `shared/{const,types,dispatch}.ts`، `shared/_core/`، `server/dispatch.test.ts`، `drizzle/`، `drizzle.config.ts`، `template.json`، `components.json`، `patches/`؛ ثم إزالة حزمها من `package.json` (tRPC وExpress وDrizzle وAWS وRadix وwouter وغيرها).
 - إعادة رفع ملف Excel للفترة 11-07 إلى 23-08-2026 من لوحة المدير لتفعيل الفلترة الكاملة لتلك الفترة.
 - شعار الهلال الأحمر الرسمي: يوضع في `client/public/qrcs-logo.png`، وحاليًا يظهر هلال مرسوم بالكود.
 - التأكد بعد النشر من أن مشاركة الموقع تعمل في صفحة السائق، وأن السيارات المضافة تظهر لمشرف السيارات.
