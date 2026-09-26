@@ -1,30 +1,20 @@
-import { Toaster } from "@/components/ui/sonner";
-import { TooltipProvider } from "@/components/ui/tooltip";
-import NotFound from "@/pages/NotFound";
-import { Route, Switch } from "wouter";
+import type { CSSProperties } from "react";
+import { Toaster } from "sonner";
 import ErrorBoundary from "./components/ErrorBoundary";
-import { ThemeProvider } from "./contexts/ThemeContext";
 import RolePortal from "./pages/RolePortal";
 
-function Router() {
-  return (
-    <Switch>
-      <Route path="/" component={RolePortal} />
-      <Route path="/404" component={NotFound} />
-      <Route component={NotFound} />
-    </Switch>
-  );
-}
+const toasterStyle = {
+  "--normal-bg": "var(--popover)",
+  "--normal-text": "var(--popover-foreground)",
+  "--normal-border": "var(--border)",
+} as CSSProperties;
 
+// صفحة واحدة: كل الروابط تفتح بوابة الدخول، ومنها صفحة الدور المسجل في حساب المستخدم.
 export default function App() {
   return (
     <ErrorBoundary>
-      <ThemeProvider defaultTheme="light">
-        <TooltipProvider>
-          <Toaster position="top-center" richColors />
-          <Router />
-        </TooltipProvider>
-      </ThemeProvider>
+      <Toaster position="top-center" richColors theme="light" className="toaster group" style={toasterStyle} />
+      <RolePortal />
     </ErrorBoundary>
   );
 }

@@ -7,7 +7,7 @@
 ## التقنية
 - React وVite وTailwind وTypeScript (الواجهة في `client/`، والمنطق المشترك في `shared/`).
 - Firebase Auth بالبريد وكلمة المرور: اسم المستخدم يتحول إلى بريد داخلي، والملفات في `users/{uid}` و`usernames/{name}`.
-- Firestore، والصلاحيات حسب الدور في `firestore.rules`.
+- Firestore، والصلاحيات حسب الدور في `firestore.rules`: مشرف المبنى يغيّر حالة الموعد والطلب فقط، ومشرف السيارات يغيّر خانات الإرسال في الطلب فقط.
 - الخرائط بمكتبة Leaflet مع OpenStreetMap، والمخططات بمكتبة recharts.
 - مجلد `server/` فيه اختبارات vitest فقط؛ الخادم Express القديم غير مستخدم في النشر.
 
@@ -27,9 +27,11 @@
 - **رسالة السائق:** بالعربية ثم الإنجليزية (`buildDriverMessage`)، عبر رابط `wa.me` برمز قطر 974.
 
 ## البيانات
-- `shared/seedData.ts`: ملخص إحصائيات الفترة 11-07 إلى 23-08-2026 بلا بيانات مرضى، و22 سيارة. تُحفظ عند دخول المدير إن لم تكن موجودة.
+- `shared/seedData.ts`: 22 سيارة، و`shared/historySeed.ts`: ملخص إحصائيات الفترة 11-07 إلى 23-08-2026 بلا بيانات مرضى (في `meta/history`). يُحفظان عند دخول المدير إن لم يكونا موجودين.
+- **الإحصائيات (`shared/stats.ts` و`StatsPanel.tsx`):** سجلات رحلات بلا بيانات مرضى. ملفات Excel تُحفظ يومًا بيوم في `statsDays/{date}` (الرفع الجديد يضيف أيامه أو يستبدلها فقط)، ورحلات النظام تُحسب مباشرة من المواعيد والطلبات. لكل يوم مصدر واحد: ملف Excel، ثم الملخص القديم، ثم النظام. الملخص القديم بلا تفاصيل يومية للساعات والوجهات والسيارات، فتفاصيله تظهر فقط عند عرض كامل فترته بلا فلاتر.
 - `shared/hospitals.ts`: 23 مستشفى؛ الخانة `verified` تعني إحداثيات مؤكدة. `syncHospitals` يحدّث المستشفيات غير المؤكدة المحفوظة.
-- `client/src/lib/appStore.ts` و`firestoreBackend.ts`: كل قائمة مجموعة في Firestore، ولا يُكتب إلا ما تغيّر (المقارنة عبر `stableStringify`).
+- `client/src/lib/appStore.ts` و`firestoreBackend.ts`: كل قائمة مجموعة في Firestore، ولا يُكتب إلا ما تغيّر: المقارنة مع القائمة التي عدّلها المستخدم (`saveState(key, next, baseline)`)، والعنصر الموجود تُكتب خاناته المتغيرة فقط (`updateDoc`).
+- الخريطة والإحصائيات ولوحة المدير وصفحة السائق تُحمَّل عند الحاجة (`React.lazy`).
 - **ممنوع رفع بيانات المرضى** (الأسماء والأرقام والشقق) إلى المستودع.
 
 ## التحقق قبل الدفع
@@ -38,6 +40,8 @@
 - قواعد Firestore تُختبر على المحاكي بمكتبة `@firebase/rules-unit-testing`.
 
 ## أمور معلّقة
+- حذف بقايا قالب Manus غير المستخدمة (لم تُحذف في الجلسة السحابية): `client/public/__manus__/` (مستثناة من النشر في `firebase.json`)، `client/src/_core/`، `client/src/lib/trpc.ts`، `client/src/const.ts`، `client/src/components/{AIChatBox,ManusDialog,Map,DashboardLayout,DashboardLayoutSkeleton}.tsx`، `client/src/pages/{ComponentShowcase,NotFound}.tsx`، `client/src/contexts/`، `client/src/hooks/`، `client/src/components/ui/`، `client/src/lib/utils.ts`، `server/_core/`، `server/{routers,db,storage}.ts`، `server/auth.logout.test.ts`، `shared/{const,types,dispatch}.ts`، `shared/_core/`، `server/dispatch.test.ts`، `drizzle/`، `drizzle.config.ts`، `template.json`، `components.json`، `patches/`؛ ثم إزالة حزمها من `package.json` (tRPC وExpress وDrizzle وAWS وRadix وwouter وغيرها).
+- إعادة رفع ملف Excel للفترة 11-07 إلى 23-08-2026 من لوحة المدير لتفعيل الفلترة الكاملة لتلك الفترة.
 - شعار الهلال الأحمر الرسمي: يوضع في `client/public/qrcs-logo.png`، وحاليًا يظهر هلال مرسوم بالكود.
 - التأكد بعد النشر من أن مشاركة الموقع تعمل في صفحة السائق، وأن السيارات المضافة تظهر لمشرف السيارات.
 - التتبع الدائم بأجهزة GPS يحتاج خطة Blaze المدفوعة في Firebase.

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { onAuthStateChanged } from "firebase/auth";
 import { ArrowRight, Languages, Loader2, MapPin } from "lucide-react";
@@ -22,16 +22,22 @@ import { CLINIC_TEXT, useLang } from "@/lib/i18n";
 import { ClinicForm, ClinicHome } from "./ClinicPages";
 import { SupervisorHome } from "./SupervisorPage";
 import { FleetSupervisorPage } from "./FleetSupervisorPage";
-import FleetDashboard from "@/components/FleetDashboard";
 import Login from "./Login";
-import AdminPanel from "./AdminPanel";
-import DriverPage from "./DriverPage";
 import ChangePasswordForm from "@/components/ChangePasswordForm";
 import { SHARED_KEYS, clearSharedBackend, loadState, removeState, saveState, setSharedBackend, subscribeState } from "@/lib/appStore";
 import { appendAudit } from "@/lib/audit";
 import { auth, authReady, firestore } from "@/lib/firebase";
 import { createFirestoreBackend } from "@/lib/firestoreBackend";
 import { isLoginInProgress, logout, watchProfile } from "@/lib/auth";
+
+// صفحات تُحمَّل حسب دور المستخدم فقط، حتى لا يحمّل كل مستخدم كود الأدوار الأخرى والخرائط والمخططات
+const AdminPanel = lazy(() => import("./AdminPanel"));
+const DriverPage = lazy(() => import("./DriverPage"));
+const FleetDashboard = lazy(() => import("@/components/FleetDashboard"));
+
+function PageLoading() {
+  return <div className="flex min-h-screen items-center justify-center bg-[#f5f7fb] text-slate-400" dir="rtl"><Loader2 className="h-6 w-6 animate-spin" /><span className="sr-only">جارٍ التحميل</span></div>;
+}
 
 type Role = "clinic" | "buildingSupervisor" | "fleetSupervisor";
 type Session = { role: Role; name: string };
@@ -183,7 +189,7 @@ export default function RolePortal() {
   }, [signedIn, signOutNow]);
 
   if (gate.status === "loading" || (gate.status === "profile" && !gate.profile.mustChangePassword)) {
-    return <div className="flex min-h-screen items-center justify-center bg-[#f5f7fb] text-slate-400" dir="rtl"><Loader2 className="h-6 w-6 animate-spin" /><span className="sr-only">جارٍ التحميل</span></div>;
+    return <PageLoading />;
   }
   if (gate.status === "signedOut") return <Login />;
   if (gate.status === "error") {
@@ -216,11 +222,11 @@ export default function RolePortal() {
   }
 
   if (profile.role === "driver") {
-    return <DriverPage profile={profile} onLogout={() => signOutNow()} onChangePassword={() => setChangingPassword(true)} />;
+    return <Suspense fallback={<PageLoading />}><DriverPage profile={profile} onLogout={() => signOutNow()} onChangePassword={() => setChangingPassword(true)} /></Suspense>;
   }
 
   if (profile.role === "admin") {
-    return <AdminPanel profile={profile} onLogout={() => signOutNow()} onChangePassword={() => setChangingPassword(true)} />;
+    return <Suspense fallback={<PageLoading />}><AdminPanel profile={profile} onLogout={() => signOutNow()} onChangePassword={() => setChangingPassword(true)} /></Suspense>;
   }
 
   if (showManager && profile.role === "fleetSupervisor") {
@@ -232,7 +238,7 @@ export default function RolePortal() {
           actions={<button onClick={() => setShowManager(false)} className="flex h-10 items-center gap-1 rounded-xl border border-slate-200 bg-white px-3 text-sm font-bold text-slate-700"><ArrowRight className="h-4 w-4" /> التوزيع</button>}
           onLogout={() => signOutNow()}
         />
-        <main className="mx-auto max-w-7xl p-4 lg:p-8"><FleetDashboard actor={profile.displayName} /></main>
+        <main className="mx-auto max-w-7xl p-4 lg:p-8"><Suspense fallback={<div className="flex min-h-64 items-center justify-center text-slate-400"><Loader2 className="h-6 w-6 animate-spin" /></div>}><FleetDashboard actor={profile.displayName} /></Suspense></main>
       </div>
     );
   }
@@ -280,8 +286,9 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
     else if (key === "fox_audit") setAudit(loadState("fox_audit", []));
   }), []);
 
-  function updateAppointments(next: ClinicAppointment[]) { setAppointments(next); saveState("fox_appointments", next); }
-  function updateRequests(next: VehicleRequest[]) { setRequests(next); saveState("fox_requests", next); }
+  // المقارنة مع ما يعرضه الموقع (بعد التوحيد) حتى لا تُكتب مواعيد أو طلبات لم تتغير
+  function updateAppointments(next: ClinicAppointment[]) { saveState("fox_appointments", next, appointments); setAppointments(next); }
+  function updateRequests(next: VehicleRequest[]) { saveState("fox_requests", next, requests); setRequests(next); }
   function updateFleet(next: Vehicle[]) { setFleetVehicles(next); saveState("fox_fleet", next); }
   function logAudit(message: string) {
     setAudit(appendAudit(message, session.name));

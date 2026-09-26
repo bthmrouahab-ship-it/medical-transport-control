@@ -1,11 +1,13 @@
 import {
   collection,
   deleteDoc,
+  deleteField,
   doc,
   getDoc,
   getDocs,
   onSnapshot,
   setDoc,
+  updateDoc,
   type DocumentData,
   type Firestore,
 } from "firebase/firestore";
@@ -101,9 +103,9 @@ export function createFirestoreBackend(db: Firestore): SharedBackend {
           return;
         }
         const cfg = COLLECTIONS[key]!;
-        const before = new Map<string, string>();
+        const before = new Map<string, Rec>();
         for (const item of (Array.isArray(previous) ? previous : []) as Rec[]) {
-          before.set(docId(item[cfg.idField]), stableStringify(item));
+          before.set(docId(item[cfg.idField]), clean(item));
         }
         const ops: Promise<void>[] = [];
         const seen = new Set<string>();
@@ -111,11 +113,24 @@ export function createFirestoreBackend(db: Firestore): SharedBackend {
         ((Array.isArray(next) ? next : []) as Rec[]).forEach((item, index) => {
           const id = docId(item[cfg.idField]);
           seen.add(id);
-          if (before.get(id) === stableStringify(item)) return; // لم يتغير
+          const old = before.get(id);
+          const current = clean(item);
+          if (old && stableStringify(old) === stableStringify(current)) return; // لم يتغير
           const path = `${cfg.col}/${id}`;
-          if (!order.has(path)) order.set(path, base + index / 1000);
-          const body = clean({ ...item, _o: order.get(path) });
-          ops.push(chain(path, () => setDoc(doc(db, cfg.col, id), body)));
+          if (!old) {
+            if (!order.has(path)) order.set(path, base + index / 1000);
+            const body = { ...current, _o: order.get(path) };
+            ops.push(chain(path, () => setDoc(doc(db, cfg.col, id), body)));
+            return;
+          }
+          // عنصر موجود: تُكتب الخانات المتغيرة فقط، فلا يمس التعديل ما غيّره مستخدم آخر في نفس المستند
+          const changes: Rec = {};
+          for (const field of Array.from(new Set([...Object.keys(old), ...Object.keys(current)]))) {
+            if (field === "_o") continue;
+            if (!(field in current)) changes[field] = deleteField();
+            else if (stableStringify(old[field]) !== stableStringify(current[field])) changes[field] = current[field];
+          }
+          ops.push(chain(path, () => updateDoc(doc(db, cfg.col, id), changes)));
         });
         for (const id of Array.from(before.keys())) {
           if (seen.has(id)) continue;

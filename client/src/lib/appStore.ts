@@ -98,9 +98,13 @@ export function loadState<T>(key: string, fallback: T): T {
   return readLocal(key, fallback);
 }
 
-export function saveState<T>(key: string, value: T) {
+/**
+ * يحفظ قيمة مفتاح. baseline هي القائمة التي عدّلها المستخدم كما رآها على الشاشة:
+ * تُكتب الفروق عنها فقط، فلا تُعاد كتابة عناصر لم يلمسها ولا تُمحى تغييرات وصلت للتو من غيره.
+ */
+export function saveState<T>(key: string, value: T, baseline?: T) {
   if (backend && isShared(key)) {
-    const previous = cache.get(key);
+    const previous = baseline !== undefined ? baseline : cache.get(key);
     cache.set(key, value);
     backend.write(key, value, previous).catch((error) => {
       console.error("[appStore] فشل الحفظ", error);

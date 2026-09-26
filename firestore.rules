@@ -108,27 +108,99 @@ service cloud.firestore {
         && request.resource.data.items.size() <= 50;
     }
 
-    // المواعيد: تضيفها العيادة، ويحدّث مشرف المبنى حالتها
-    // ملخص الإحصائيات السابقة المستورد من Excel (إجماليات فقط، بلا بيانات مرضى)
+    // ملخص الإحصائيات القديم المستورد من Excel (إجماليات فقط، بلا بيانات مرضى)
     match /meta/history {
       allow read: if isOffice();
       allow write: if isAdmin() && request.resource.data.keys().hasOnly(['data']);
     }
 
+    // رحلات ملفات Excel للإحصائيات: مستند لكل يوم، بلا أسماء أو أرقام مرضى
+    match /statsDays/{date} {
+      allow read: if hasRole(['admin', 'fleetSupervisor']);
+      allow create, update: if isAdmin()
+        && date.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+        && request.resource.data.keys().hasOnly(['date', 'source', 'importedAt', 'trips'])
+        && request.resource.data.date == date
+        && request.resource.data.source is string && request.resource.data.source.size() <= 200
+        && request.resource.data.trips is list && request.resource.data.trips.size() <= 3000;
+      allow delete: if isAdmin();
+    }
+
+    // الخانات التي تغيّرت في هذا التعديل
+    function changedKeys() { return request.resource.data.diff(resource.data).affectedKeys(); }
+    function changes(key) { return changedKeys().hasAny([key]); }
+
+    function appointmentStatuses() {
+      return ['بانتظار طلب السيارة', 'تم طلب السيارة', 'تم استلام المريض', 'طلب عودة', 'مكتملة'];
+    }
+    function appointmentFields() {
+      return ['id', 'patientName', 'clinic', 'buildingNumber', 'apartmentNumber', 'mobile', 'appointmentDate',
+        'appointmentAt', 'hospitalId', 'category', 'kind', 'assistance', 'status', '_o'];
+    }
+    function validAppointment(data, id) {
+      return data.keys().hasOnly(appointmentFields())
+        && data.keys().hasAll(['id', 'patientName', 'clinic', 'appointmentDate', 'appointmentAt', 'kind', 'status'])
+        && data.id == id
+        && data.patientName is string && data.patientName.size() <= 120
+        && data.clinic is string && data.clinic.size() <= 160
+        && data.appointmentDate is string && data.appointmentDate.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+        && data.appointmentAt is string && data.appointmentAt.matches('^[0-9]{2}:[0-9]{2}$')
+        && data.kind in ['عادي', 'احتياجات خاصة']
+        && data.status in appointmentStatuses()
+        && data.get('category', 'غير طبية') == 'غير طبية'
+        && data.get('assistance', []) is list && data.get('assistance', []).size() <= 4;
+    }
+
+    // المواعيد: تضيفها وتعدّلها العيادة، ومشرف المبنى يغيّر حالتها فقط
     match /appointments/{id} {
       allow read: if isOffice();
-      allow create: if reasonableSize() && (hasRole(['admin', 'clinic'])
+      allow create: if validAppointment(request.resource.data, id) && (hasRole(['admin', 'clinic'])
         // مشرف السيارات يضيف رحلات غير طبية فقط
         || (hasRole(['fleetSupervisor']) && request.resource.data.get('category', '') == 'غير طبية'));
-      allow update: if hasRole(['admin', 'clinic', 'buildingSupervisor']) && reasonableSize();
+      allow update: if reasonableSize() && (
+        (hasRole(['admin', 'clinic'])
+          && changedKeys().hasOnly(appointmentFields())
+          && !changes('id')
+          && request.resource.data.status in appointmentStatuses())
+        // مشرف المبنى لا يغيّر بيانات المريض ولا وقت الموعد، بل حالة الموعد فقط
+        || (hasRole(['buildingSupervisor'])
+          && changedKeys().hasOnly(['status'])
+          && request.resource.data.status in appointmentStatuses()));
       allow delete: if hasRole(['admin', 'clinic']);
+    }
+
+    function requestStatuses() { return ['بانتظار التوزيع', 'تم إرسال السيارة', 'وصلت السيارة', 'تم استلام المريض']; }
+    function requestFields() {
+      return ['id', 'appointmentId', 'vehiclePlate', 'driver', 'direction', 'status', 'notificationMethod',
+        'createdAt', 'groupId', 'notificationSentAt', '_o'];
     }
 
     // طلبات السيارات: ينشئها مشرف المبنى، ويوزعها مشرف السيارات
     match /requests/{id} {
       allow read: if isOffice();
-      allow create: if hasRole(['admin', 'buildingSupervisor', 'fleetSupervisor']) && reasonableSize();
-      allow update: if hasRole(['admin', 'buildingSupervisor', 'fleetSupervisor']) && reasonableSize();
+      // الطلب الجديد يبدأ دائمًا بانتظار التوزيع، والسيارة يحددها مشرف السيارات لاحقًا
+      allow create: if hasRole(['admin', 'buildingSupervisor', 'fleetSupervisor'])
+        && request.resource.data.keys().hasOnly(requestFields())
+        && request.resource.data.id == id
+        && request.resource.data.appointmentId is string
+        && request.resource.data.direction in ['ذهاب', 'عودة']
+        && request.resource.data.status == 'بانتظار التوزيع'
+        && request.resource.data.notificationMethod in ['whatsapp', 'call']
+        && !request.resource.data.keys().hasAny(['vehiclePlate', 'driver', 'groupId', 'notificationSentAt']);
+      allow update: if reasonableSize() && (
+          (hasRole(['admin'])
+            && changedKeys().hasOnly(requestFields())
+            && !changedKeys().hasAny(['id', 'appointmentId'])
+            && request.resource.data.status in requestStatuses())
+          // مشرف السيارات: إرسال السيارة وجمع الرحلات
+          || (hasRole(['fleetSupervisor'])
+            && changedKeys().hasOnly(['vehiclePlate', 'driver', 'status', 'groupId', 'notificationSentAt'])
+            && (!changes('status') || request.resource.data.status == 'تم إرسال السيارة'))
+          // مشرف المبنى: تأكيد وصول السيارة واستلام المريض فقط
+          || (hasRole(['buildingSupervisor'])
+            && changedKeys().hasOnly(['status'])
+            && request.resource.data.status in ['وصلت السيارة', 'تم استلام المريض'])
+        );
       allow delete: if hasRole(['admin', 'buildingSupervisor']);
     }
 
