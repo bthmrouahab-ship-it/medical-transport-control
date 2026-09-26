@@ -15,8 +15,8 @@ export type Hospital = {
   verified: boolean;
 };
 
-/** مجمع الثمامة: نقطة انطلاق الرحلات. */
-export const ORIGIN = { name: "مجمع الثمامة", lat: 25.2335, lng: 51.5435 };
+/** مجمع الثمامة: نقطة انطلاق الرحلات (Plus Code: 6HH9+FG الدوحة). */
+export const ORIGIN = { name: "مجمع الثمامة", lat: 25.228688, lng: 51.568813 };
 
 /** مركز خريطة الدوحة وما حولها. */
 export const DOHA_CENTER = { lat: 25.27, lng: 51.5, zoom: 11 };
