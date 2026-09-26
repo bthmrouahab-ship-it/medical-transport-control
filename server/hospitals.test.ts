@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_HOSPITALS, distanceKm, matchHospital, nearbyHospitals } from "../shared/hospitals";
+import { DEFAULT_HOSPITALS, ORIGIN, distanceKm, insideQatar, matchHospital, nearbyHospitals } from "../shared/hospitals";
 import { excelDate, excelMinutes, parseDriverList, summarizeHistory } from "../shared/history";
 
 describe("hospital catalog", () => {
@@ -18,6 +18,13 @@ describe("hospital catalog", () => {
     expect(near).toContain("heart");
     expect(near).not.toContain("wakra");
     expect(distanceKm(hgh, DEFAULT_HOSPITALS.find((hospital) => hospital.id === "cuban")!)).toBeGreaterThan(50);
+  });
+
+  it("keeps the complex and every hospital inside the Qatar map bounds", () => {
+    expect(insideQatar(ORIGIN)).toBe(true);
+    for (const hospital of DEFAULT_HOSPITALS) expect(insideQatar(hospital), hospital.id).toBe(true);
+    expect(insideQatar({ lat: 26.228, lng: 50.586 })).toBe(false); // المنامة
+    expect(insideQatar({ lat: 24.453, lng: 54.377 })).toBe(false); // أبوظبي
   });
 });
 

@@ -17,6 +17,10 @@ require __DIR__ . '/lib/rules.php';
 const LOGIN_MAX_FAILURES = ['u' => 10, 'ip' => 50];
 const LOGIN_WINDOW_SECONDS = 900;
 const INVALID_LOGIN = 'اسم المستخدم أو كلمة المرور غير صحيحة';
+/** السيارة تُعتبر واصلة إذا اقتربت من الوجهة هذه المسافة بالأمتار (نفس القيمة في shared/trips.ts). */
+const ARRIVAL_RADIUS_M = 300;
+/** موقع بدقة أسوأ من هذه (مثل تحديد الموقع من الشبكة بدل GPS) لا يُعتمد لاكتشاف الوصول. */
+const ARRIVAL_MAX_ACCURACY_M = 200;
 
 try {
     $route = (string)($_GET['r'] ?? '');
@@ -335,6 +339,40 @@ function route_write(PDO $pdo, array $body): array
     return ['rev' => $rev];
 }
 
+function distance_m(float $lat1, float $lng1, float $lat2, float $lng2): float
+{
+    $dlat = deg2rad($lat2 - $lat1);
+    $dlng = deg2rad($lng2 - $lng1);
+    $a = sin($dlat / 2) ** 2 + cos(deg2rad($lat1)) * cos(deg2rad($lat2)) * sin($dlng / 2) ** 2;
+    return 2 * 6371000 * asin(min(1.0, sqrt($a)));
+}
+
+/**
+ * الطلبات التي في الطريق إلى وجهتها بهذه السيارة تُعلَّم «وصلت الوجهة» عندما تقترب منها،
+ * فتظهر لمشرف السيارات وتصبح السيارة متاحة. يعيد عدد الطلبات التي وصلت.
+ */
+function detect_arrivals(PDO $pdo, string $plate, float $lat, float $lng, int $rev): int
+{
+    $like = fn(string $text) => '%' . addcslashes($text, '%_\\') . '%';
+    $candidates = $pdo->prepare("SELECT id FROM docs WHERE col = 'requests' AND data LIKE ? AND data LIKE ?");
+    $candidates->execute([$like('"vehiclePlate":' . json_encode($plate, JSON_UNESCAPED_UNICODE)), $like('"status":"تم استلام المريض"')]);
+    $arrived = 0;
+    foreach ($candidates->fetchAll(PDO::FETCH_COLUMN) as $id) {
+        $lock = $pdo->prepare("SELECT data FROM docs WHERE col = 'requests' AND id = ? FOR UPDATE");
+        $lock->execute([$id]);
+        $doc = decode_doc($lock->fetchColumn() ?: null);
+        if (!$doc || ($doc['vehiclePlate'] ?? null) !== $plate || ($doc['status'] ?? null) !== 'تم استلام المريض' || isset($doc['arrivedAt'])) continue;
+        if (!is_numeric($doc['destLat'] ?? null) || !is_numeric($doc['destLng'] ?? null)) continue;
+        if (distance_m($lat, $lng, (float)$doc['destLat'], (float)$doc['destLng']) > ARRIVAL_RADIUS_M) continue;
+        $doc['status'] = 'وصلت الوجهة';
+        $doc['arrivedAt'] = now_iso();
+        $doc['arrivalSource'] = 'gps';
+        save_doc($pdo, 'requests', (string)$id, $doc, $rev);
+        $arrived += 1;
+    }
+    return $arrived;
+}
+
 /** السائق يرسل موقع سيارته فقط (السيارة من حسابه، لا من الطلب). */
 function route_location(PDO $pdo, array $body): array
 {
@@ -372,12 +410,14 @@ function route_location(PDO $pdo, array $body): array
             return ['ok' => true];
         }
         save_doc($pdo, 'vehicleLocations', $plate, $after, $rev);
+        $precise = $sharing && ($after['accuracy'] === null || $after['accuracy'] <= ARRIVAL_MAX_ACCURACY_M);
+        $arrived = $precise ? detect_arrivals($pdo, $plate, (float)$after['lat'], (float)$after['lng'], $rev) : 0;
         $pdo->commit();
     } catch (Throwable $error) {
         $pdo->rollBack();
         throw $error;
     }
-    return ['ok' => true];
+    return ['ok' => true, 'arrived' => $arrived];
 }
 
 // ————— الإحصائيات: رحلات ملفات Excel يومًا بيوم (بلا بيانات مرضى) —————

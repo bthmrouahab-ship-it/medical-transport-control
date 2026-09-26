@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { ArrowRight, Languages, Loader2, MapPin } from "lucide-react";
+import { ArrowRight, Languages, Loader2 } from "lucide-react";
 import {
   DEFAULT_VEHICLES,
   buildDriverMessage,
@@ -16,7 +16,8 @@ import {
 import type { UserProfile } from "@shared/users";
 import { useHospitals } from "@/lib/useShared";
 import AppHeader from "@/components/AppHeader";
-import { byAppointmentTime, timeLabel } from "@/components/ui-kit";
+import { btn, byAppointmentTime, headerButton, timeLabel } from "@/components/ui-kit";
+import { pickupDetails } from "@shared/trips";
 import { CLINIC_TEXT, useLang } from "@/lib/i18n";
 import { ClinicForm, ClinicHome } from "./ClinicPages";
 import { SupervisorHome } from "./SupervisorPage";
@@ -34,7 +35,7 @@ const DriverPage = lazy(() => import("./DriverPage"));
 const FleetDashboard = lazy(() => import("@/components/FleetDashboard"));
 
 function PageLoading() {
-  return <div className="flex min-h-screen items-center justify-center bg-[#f5f7fb] text-slate-400" dir="rtl"><Loader2 className="h-6 w-6 animate-spin" /><span className="sr-only">جارٍ التحميل</span></div>;
+  return <div className="flex min-h-screen items-center justify-center bg-page text-slate-400" dir="rtl"><Loader2 className="h-6 w-6 animate-spin" /><span className="sr-only">جارٍ التحميل</span></div>;
 }
 
 type Role = "clinic" | "buildingSupervisor" | "fleetSupervisor";
@@ -176,12 +177,12 @@ export default function RolePortal() {
   if (gate.status === "signedOut") return <Login />;
   if (gate.status === "error") {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-[#f5f7fb] p-4" dir="rtl">
-        <div className="max-w-md rounded-2xl border border-slate-200 bg-white p-8 text-center">
-          <p className="font-bold text-slate-700">{gate.message}</p>
+      <div className="flex min-h-screen items-center justify-center bg-page p-4" dir="rtl">
+        <div className="max-w-md rounded-2xl bg-white p-8 text-center shadow-card ring-1 ring-slate-200/80">
+          <p className="font-semibold text-slate-700">{gate.message}</p>
           <div className="mt-5 flex justify-center gap-3">
-            <button onClick={() => window.location.reload()} className="rounded-xl bg-[#a61d2d] px-4 py-2 text-sm font-bold text-white">إعادة المحاولة</button>
-            <button onClick={() => signOutNow()} className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-bold text-slate-600">تسجيل الخروج</button>
+            <button onClick={() => window.location.reload()} className={btn("primary")}>إعادة المحاولة</button>
+            <button onClick={() => signOutNow()} className={btn("secondary")}>تسجيل الخروج</button>
           </div>
         </div>
       </div>
@@ -191,8 +192,8 @@ export default function RolePortal() {
   const profile = gate.profile;
   if (profile.mustChangePassword || changingPassword) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-[#f5f7fb] p-4">
-        <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 shadow-[0_24px_70px_rgba(16,35,63,.08)] sm:p-8">
+      <div className="flex min-h-screen items-center justify-center bg-page p-4">
+        <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-card ring-1 ring-slate-200/80 sm:p-8">
           <ChangePasswordForm
             required={profile.mustChangePassword}
             onDone={() => setChangingPassword(false)}
@@ -213,14 +214,14 @@ export default function RolePortal() {
 
   if (showManager && profile.role === "fleetSupervisor") {
     return (
-      <div className="min-h-screen bg-[#f5f7fb]" dir="rtl">
+      <div className="min-h-screen bg-page" dir="rtl">
         <AppHeader
           role="مشرف السيارات"
           name={profile.displayName}
-          actions={<button onClick={() => setShowManager(false)} className="flex h-10 items-center gap-1 rounded-xl border border-slate-200 bg-white px-3 text-sm font-bold text-slate-700"><ArrowRight className="h-4 w-4" /> التوزيع</button>}
+          actions={<button onClick={() => setShowManager(false)} className={headerButton}><ArrowRight className="h-4 w-4" /> التوزيع</button>}
           onLogout={() => signOutNow()}
         />
-        <main className="mx-auto max-w-7xl p-4 lg:p-8"><Suspense fallback={<div className="flex min-h-64 items-center justify-center text-slate-400"><Loader2 className="h-6 w-6 animate-spin" /></div>}><FleetDashboard actor={profile.displayName} /></Suspense></main>
+        <main className="mx-auto max-w-7xl p-4 lg:p-8"><Suspense fallback={<div className="flex min-h-64 items-center justify-center text-slate-400"><Loader2 className="h-6 w-6 animate-spin" /></div>}><FleetDashboard alerts actor={profile.displayName} /></Suspense></main>
       </div>
     );
   }
@@ -261,12 +262,18 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
   const t = CLINIC_TEXT[isClinic ? lang : "ar"];
 
   // تحديث الشاشة فورًا عند وصول تغييرات من مستخدمين آخرين
-  useEffect(() => subscribeState((key) => {
-    if (key === "fox_appointments") setAppointments(loadAppointments());
-    else if (key === "fox_requests") setRequests(loadRequests());
-    else if (key === "fox_fleet") setFleetVehicles(loadState("fox_fleet", DEFAULT_VEHICLES));
-    else if (key === "fox_audit") setAudit(loadState("fox_audit", []));
-  }), []);
+  useEffect(() => {
+    const refresh = (key: string) => {
+      if (key === "fox_appointments") setAppointments(loadAppointments());
+      else if (key === "fox_requests") setRequests(loadRequests());
+      else if (key === "fox_fleet") setFleetVehicles(loadState("fox_fleet", DEFAULT_VEHICLES));
+      else if (key === "fox_audit") setAudit(loadState("fox_audit", []));
+    };
+    const stop = subscribeState(refresh);
+    // تغييرات وصلت بين أول عرض للصفحة وبدء الاشتراك
+    ["fox_appointments", "fox_requests", "fox_fleet", "fox_audit"].forEach(refresh);
+    return stop;
+  }, []);
 
   // المقارنة مع ما يعرضه الموقع (بعد التوحيد) حتى لا تُكتب مواعيد أو طلبات لم تتغير
   function updateAppointments(next: ClinicAppointment[]) { saveState("fox_appointments", next, appointments); setAppointments(next); }
@@ -308,15 +315,32 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
   }
 
   function updateRequestStatus(requestId: string, status: VehicleRequest["status"]) {
-    updateRequests(requests.map((request) => request.id === requestId ? { ...request, status } : request));
     const request = requests.find((item) => item.id === requestId);
+    const appointment = request && appointments.find((item) => item.id === request.appointmentId);
+    // عند استلام المريض: وقت بداية الطريق، والوقت المتوقع للوصول، وإحداثيات الوجهة لاكتشاف الوصول عبر GPS
+    const passengers = request?.groupId ? requests.filter((item) => item.groupId === request.groupId).length : 1;
+    const pickup = status === "تم استلام المريض" && request && appointment
+      ? pickupDetails(request, appointment, hospitals, new Date(), passengers)
+      : {};
+    updateRequests(requests.map((item) => item.id === requestId ? { ...item, status, ...pickup } : item));
     if (request && status === "تم استلام المريض") {
       updateAppointments(appointments.map((appointment) => appointment.id === request.appointmentId
         ? { ...appointment, status: request.direction === "عودة" ? "مكتملة" : "تم استلام المريض" }
         : appointment));
     }
     logAudit(`${status} للطلب ${requestId}`);
-    toast.success(status === "وصلت السيارة" ? "تم تسجيل وصول السيارة" : "تم تأكيد استلام المريض");
+    toast.success(status === "وصلت السيارة" ? "تم تسجيل وصول السيارة" : "تم تأكيد استلام المريض", {
+      description: "etaAt" in pickup && pickup.etaAt ? `الوصول المتوقع إلى الوجهة ${timeLabel(new Date(pickup.etaAt))}` : undefined,
+    });
+  }
+
+  /** وصول السيارة إلى الوجهة: بتأكيد مشرف السيارات، أو بانتهاء المدة التقديرية لسيارة بلا GPS. */
+  function markArrived(requestIds: string[], source: "manual" | "estimate") {
+    const arrivedAt = new Date().toISOString();
+    updateRequests(requests.map((request) => requestIds.includes(request.id) && request.status === "تم استلام المريض"
+      ? { ...request, status: "وصلت الوجهة" as const, arrivedAt: source === "estimate" && request.etaAt ? request.etaAt : arrivedAt, arrivalSource: source }
+      : request));
+    if (source === "manual") logAudit(`تأكيد وصول ${requestIds.length} طلب إلى الوجهة`);
   }
 
   function openEditAppointment(appointment: ClinicAppointment) {
@@ -376,25 +400,25 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
   }
 
   return (
-    <div className="min-h-screen bg-[#f5f7fb]" dir={t.dir}>
+    <div className="min-h-screen bg-page" dir={t.dir}>
       <AppHeader
         role={isClinic ? t.workspace : ROLE_TITLES[session.role]}
         name={session.name}
         labels={isClinic ? { changePassword: t.changePassword, logout: t.logout, app: lang === "en" ? "Al Thumama Complex Transport" : undefined } : undefined}
         actions={(
           <>
-            {isClinic && <button onClick={() => setLang(lang === "ar" ? "en" : "ar")} className="flex h-10 items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 text-xs font-bold text-slate-600 hover:bg-slate-50"><Languages className="h-4 w-4" /> {t.switchLang}</button>}
-            {session.role === "fleetSupervisor" && <button onClick={onManager} className="hidden h-10 items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 text-xs font-bold text-slate-600 hover:bg-slate-50 sm:flex"><MapPin className="h-4 w-4" /> الخريطة</button>}
+            {isClinic && <button onClick={() => setLang(lang === "ar" ? "en" : "ar")} className={headerButton}><Languages className="h-4 w-4" /> {t.switchLang}</button>}
           </>
         )}
         onChangePassword={onChangePassword}
         onLogout={onLogout}
       />
 
-      <main className="mx-auto max-w-6xl p-4 lg:p-8">
+      <main className={`mx-auto p-4 lg:p-8 ${session.role === "fleetSupervisor" ? "max-w-7xl" : "max-w-6xl"}`}>
         {view === "home" && isClinic && (
           <ClinicHome
             t={t}
+            lang={lang}
             appointments={appointments.filter((appointment) => !isNonMedical(appointment))}
             date={selectedDate}
             onDateChange={setSelectedDate}
@@ -461,6 +485,7 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
             onManager={onManager}
             onUpdate={(next) => { updateFleet(next); logAudit("تغيير حالة سيارة"); }}
             onDispatch={dispatch}
+            onArrived={markArrived}
             onExport={exportStats}
             date={selectedDate}
             onDateChange={setSelectedDate}

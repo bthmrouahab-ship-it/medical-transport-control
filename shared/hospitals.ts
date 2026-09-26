@@ -21,6 +21,12 @@ export const ORIGIN = { name: "مجمع الثمامة", lat: 25.228688, lng: 51
 /** مركز خريطة الدوحة وما حولها. */
 export const DOHA_CENTER = { lat: 25.27, lng: 51.5, zoom: 11 };
 
+/** حدود دولة قطر مع هامش صغير (من أبو سمرة جنوبًا إلى رأس ركن شمالًا): الخريطة لا تخرج عنها. */
+export const QATAR_BOUNDS = { south: 24.4, west: 50.65, north: 26.25, east: 51.75 };
+
+export const insideQatar = (point: { lat: number; lng: number }) =>
+  point.lat >= QATAR_BOUNDS.south && point.lat <= QATAR_BOUNDS.north && point.lng >= QATAR_BOUNDS.west && point.lng <= QATAR_BOUNDS.east;
+
 const HMC = "مدينة حمد الطبية";
 
 // verified: true = إحداثيات من مصدر موثق (خرائط/رموز Plus Code للمبنى نفسه).

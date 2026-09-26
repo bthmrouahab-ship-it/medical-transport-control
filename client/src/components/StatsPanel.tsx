@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import { Building2, FileSpreadsheet, FilterX, Info, Loader2, Upload, X } from "lucide-react";
+import { AlertTriangle, Building2, FileSpreadsheet, Filter, FilterX, Info, Loader2, Upload, X } from "lucide-react";
 import type { Hospital } from "@shared/hospitals";
 import { parseDriverList, parseTripRows, type HistorySummary, type ImportedDriver } from "@shared/history";
 import {
@@ -21,7 +21,7 @@ import { localDateString, type ClinicAppointment, type Vehicle, type VehicleRequ
 import { saveState } from "@/lib/appStore";
 import { appendAudit } from "@/lib/audit";
 import { saveStatsDays, watchStatsDays } from "@/lib/statsStore";
-import { addDays } from "./ui-kit";
+import { EmptyState, Panel, Segmented, addDays, btn, cx, inputClass } from "./ui-kit";
 import HistoryCharts from "./HistoryCharts";
 
 type Preset = "all" | "today" | "7d" | "30d" | "month" | "lastMonth" | "year" | "custom";
@@ -53,13 +53,15 @@ function presetRange(preset: Preset, today: string): { from: string; to: string 
   }
 }
 
-const selectClass = "h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-bold text-slate-700 outline-none focus:border-[#d88994]";
+const selectClass = cx(inputClass, "h-10");
+const smallLabel = "mb-1 block text-xs font-medium text-slate-500";
 
+/** قائمة فلترة: تتلون بإطار أحمر الهلال عندما تكون مختارة. */
 function Select({ label, value, onChange, children }: { label: string; value: string; onChange: (value: string) => void; children: React.ReactNode }) {
   return (
     <label className="block">
-      <span className="mb-1 block text-[11px] font-bold text-slate-500">{label}</span>
-      <select value={value} onChange={(event) => onChange(event.target.value)} className={`${selectClass} ${value !== "all" ? "border-[#d88994] bg-[#fff7f8]" : ""}`}>{children}</select>
+      <span className={smallLabel}>{label}</span>
+      <select value={value} onChange={(event) => onChange(event.target.value)} className={cx(selectClass, value !== "all" && "border-brand-600 bg-brand-50 font-medium text-brand-700")}>{children}</select>
     </label>
   );
 }
@@ -116,23 +118,32 @@ export default function StatsPanel({ canEdit, actor, hospitals, fleet, appointme
   // القيمة المختارة تبقى في القائمة حتى لو لم تعد لها رحلات في الفترة الجديدة
   const withSelected = (values: string[], value: string) => (value !== "all" && !values.includes(value) ? [value, ...values] : values);
 
-  const chip = (active: boolean) => `h-9 shrink-0 rounded-xl px-3 text-xs font-bold transition ${active ? "bg-[#10233f] text-white" : "border border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`;
-
   return (
-    <div className="space-y-5">
+    <div className="space-y-6">
       {canEdit && <HistoryImport fleet={fleet} hospitals={hospitals} actor={actor} imported={imported ?? []} />}
 
-      <section className="rounded-2xl border border-slate-200 bg-white p-4 sm:p-5" aria-label="فلترة الإحصائيات">
-        <div className="flex gap-2 overflow-x-auto pb-1" role="group" aria-label="الفترة">
-          {PRESETS.map((item) => <button key={item.id} type="button" aria-pressed={preset === item.id} onClick={() => choosePreset(item.id)} className={chip(preset === item.id)}>{item.label}</button>)}
-        </div>
-        {preset === "custom" && (
-          <div className="mt-3 flex flex-wrap items-end gap-3">
-            <label className="block"><span className="mb-1 block text-[11px] font-bold text-slate-500">من</span><input type="date" value={filter.from} max={filter.to || undefined} onChange={(event) => update({ from: event.target.value })} className={selectClass} /></label>
-            <label className="block"><span className="mb-1 block text-[11px] font-bold text-slate-500">إلى</span><input type="date" value={filter.to} min={filter.from || undefined} onChange={(event) => update({ to: event.target.value })} className={selectClass} /></label>
-          </div>
+      <Panel
+        icon={Filter}
+        title="الفلاتر"
+        description={(
+          <>
+            {summary.totalTrips ? <>الفترة من <span dir="ltr">{summary.from}</span> إلى <span dir="ltr">{summary.to}</span> · </> : null}
+            {selected.days.excel} يوم من ملفات Excel · {selected.days.system} يوم من رحلات النظام{filter.source === "all" ? " (اليوم الذي له ملف Excel يُحسب من الملف فقط)" : ""}
+          </>
         )}
-        <div className="mt-4 grid grid-cols-2 gap-3 md:grid-cols-4">
+        actions={<button type="button" disabled={!filtersActive} onClick={() => { setPreset("all"); setFilter(EMPTY_FILTER); }} className={btn("ghost", "sm")}><FilterX className="h-4 w-4" /> مسح الفلاتر</button>}
+        bodyClassName="space-y-4 p-4 sm:p-5"
+      >
+        <div className="flex flex-wrap items-end gap-3">
+          <Segmented label="الفترة" size="sm" value={preset} onChange={choosePreset} options={PRESETS.map((item) => ({ value: item.id, label: item.label }))} />
+          {preset === "custom" && (
+            <div className="flex flex-wrap items-end gap-3">
+              <label className="block"><span className={smallLabel}>من</span><input type="date" value={filter.from} max={filter.to || undefined} onChange={(event) => update({ from: event.target.value })} className={cx(selectClass, "w-auto")} /></label>
+              <label className="block"><span className={smallLabel}>إلى</span><input type="date" value={filter.to} min={filter.from || undefined} onChange={(event) => update({ to: event.target.value })} className={cx(selectClass, "w-auto")} /></label>
+            </div>
+          )}
+        </div>
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-7">
           <Select label="المصدر" value={filter.source} onChange={(value) => update({ source: value as StatsFilter["source"] })}>
             <option value="all">الكل</option>
             <option value="excel">ملفات Excel</option>
@@ -164,35 +175,29 @@ export default function StatsPanel({ canEdit, actor, hospitals, fleet, appointme
             <option value="all">كل المباني</option>
             {withSelected(options.buildings, filter.building).map((building) => <option key={building} value={building}>مبنى {building}</option>)}
           </Select>
-          <div className="flex items-end">
-            <button type="button" disabled={!filtersActive} onClick={() => { setPreset("all"); setFilter(EMPTY_FILTER); }} className="flex h-10 w-full items-center justify-center gap-2 rounded-xl border border-slate-200 text-xs font-bold text-slate-600 hover:bg-slate-50 disabled:opacity-40"><FilterX className="h-4 w-4" /> مسح الفلاتر</button>
-          </div>
         </div>
-        <p className="mt-4 text-xs text-slate-500">
-          {summary.totalTrips ? <>الفترة من <b>{summary.from}</b> إلى <b>{summary.to}</b> · </> : null}
-          الأيام المحسوبة: {selected.days.excel} من ملفات Excel · {selected.days.system} من رحلات النظام
-          {filter.source === "all" && " (اليوم الذي له ملف Excel يُحسب من الملف فقط)"}
-        </p>
-      </section>
+      </Panel>
 
-      {loadError && <p className="rounded-xl bg-red-50 p-3 text-xs font-bold text-red-700">تعذر تحميل بيانات ملفات Excel المحفوظة. تظهر رحلات النظام والملخص القديم فقط.</p>}
+      {loadError && <p className="flex items-start gap-2 rounded-xl bg-red-50 p-3 text-sm text-red-700 ring-1 ring-inset ring-red-200"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" /> تعذر تحميل بيانات ملفات Excel المحفوظة. تظهر رحلات النظام والملخص القديم فقط.</p>}
 
       {Boolean(summary.withoutDetails) && selected.legacy && (
-        <p className="flex items-start gap-2 rounded-xl bg-amber-50 p-3 text-xs font-semibold text-amber-900">
-          <Info className="mt-0.5 h-4 w-4 shrink-0" />
+        <p className="flex items-start gap-2 rounded-xl bg-amber-50 p-3 text-sm leading-6 text-amber-900 ring-1 ring-inset ring-amber-200">
+          <Info className="mt-1 h-4 w-4 shrink-0" />
           <span>{summary.withoutDetails!.toLocaleString("en")} رحلة من الملخص القديم ({selected.legacy.from} إلى {selected.legacy.to}) محسوبة في الأعداد ونوع المركبة فقط، ولا تظهر في الساعات والوجهات والسيارات والمباني عند التصفية. {canEdit ? "لإظهار تفاصيلها أعد رفع ملف Excel لتلك الفترة." : "يستطيع مدير النظام إظهار تفاصيلها بإعادة رفع ملف Excel لتلك الفترة."}</span>
         </p>
       )}
 
       {imported === null ? (
-        <div className="flex min-h-64 items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-400"><Loader2 className="h-6 w-6 animate-spin" /><span className="sr-only">جارٍ التحميل</span></div>
+        <div className="flex min-h-64 items-center justify-center rounded-2xl bg-white text-slate-400 shadow-card ring-1 ring-slate-200/80"><Loader2 className="h-6 w-6 animate-spin" /><span className="sr-only">جارٍ التحميل</span></div>
       ) : summary.totalTrips ? (
         <HistoryCharts summary={summary} onFilter={update} />
       ) : (
-        <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-10 text-center">
-          <FileSpreadsheet className="mx-auto h-8 w-8 text-slate-300" />
-          <p className="mt-3 font-bold text-slate-600">{filtersActive ? "لا توجد رحلات مطابقة للفلاتر المختارة" : "لا توجد رحلات بعد"}</p>
-          {!filtersActive && <p className="mt-1 text-sm text-slate-400">{canEdit ? "ارفع ملف Excel لحركة السيارات من الزر أعلاه، وستظهر رحلات النظام هنا تلقائيًا." : "ستظهر رحلات النظام هنا تلقائيًا."}</p>}
+        <div className="rounded-2xl bg-white shadow-card ring-1 ring-slate-200/80">
+          <EmptyState
+            icon={FileSpreadsheet}
+            title={filtersActive ? "لا توجد رحلات مطابقة للفلاتر المختارة" : "لا توجد رحلات بعد"}
+            hint={filtersActive ? undefined : canEdit ? "ارفع ملف Excel لحركة السيارات من الزر أعلاه، وستظهر رحلات النظام هنا تلقائيًا." : "ستظهر رحلات النظام هنا تلقائيًا."}
+          />
         </div>
       )}
     </div>
@@ -273,33 +278,39 @@ function HistoryImport({ fleet, hospitals, actor, imported }: { fleet: Vehicle[]
   const completed = preview?.trips?.filter((trip) => trip.kind).length ?? 0;
 
   return (
-    <section className="rounded-2xl border border-blue-100 bg-white p-5">
-      <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
-        <div>
-          <h3 className="flex items-center gap-2 font-bold"><Upload className="h-4 w-4 text-[#a61d2d]" /> إضافة ملف حركة السيارات (Excel)</h3>
-          <p className="mt-1 text-xs text-slate-500">أيام الملف تُضاف إلى الإحصائيات، واليوم المرفوع سابقًا يُستبدل بالملف الجديد. {imported.length ? `المحفوظ حاليًا: ${imported.length} يوم.` : ""}</p>
-        </div>
-        <input ref={input} type="file" accept=".xlsx,.xls" className="hidden" onChange={(event) => read(event.target.files?.[0])} />
-        <button disabled={busy} onClick={() => input.current?.click()} className="flex min-h-11 shrink-0 items-center gap-2 rounded-xl bg-[#a61d2d] px-4 text-sm font-bold text-white disabled:opacity-60"><FileSpreadsheet className="h-4 w-4" /> {busy ? "جارٍ المعالجة..." : "اختيار الملف"}</button>
-      </div>
-      {preview && (
-        <div className="mt-4 space-y-3 rounded-xl bg-slate-50 p-4 text-sm">
-          <div className="flex items-center justify-between"><b>{preview.fileName}</b><button onClick={() => setPreview(null)} aria-label="إغلاق"><X className="h-4 w-4 text-slate-400" /></button></div>
-          {preview.error && <p className="font-bold text-red-700">{preview.error}</p>}
+    <Panel
+      tone="blue"
+      icon={Upload}
+      title="إضافة ملف حركة السيارات (Excel)"
+      description={`أيام الملف تُضاف إلى الإحصائيات، واليوم المرفوع سابقًا يُستبدل بالملف الجديد.${imported.length ? ` المحفوظ حاليًا: ${imported.length} يوم.` : ""}`}
+      actions={(
+        <>
+          <input ref={input} type="file" accept=".xlsx,.xls" className="hidden" onChange={(event) => read(event.target.files?.[0])} />
+          <button disabled={busy} onClick={() => input.current?.click()} className={btn("primary", "sm")}><FileSpreadsheet className="h-4 w-4" /> {busy ? "جارٍ المعالجة..." : "اختيار الملف"}</button>
+        </>
+      )}
+    >
+      {preview ? (
+        <div className="space-y-3 p-4 text-sm sm:p-5">
+          <div className="flex items-center justify-between gap-2">
+            <p className="flex min-w-0 items-center gap-2 font-semibold text-ink"><FileSpreadsheet className="h-4 w-4 shrink-0 text-emerald-600" /><span className="truncate">{preview.fileName}</span></p>
+            <button onClick={() => setPreview(null)} aria-label="إغلاق" className={btn("ghost", "sm")}><X className="h-4 w-4" /></button>
+          </div>
+          {preview.error && <p className="rounded-xl bg-red-50 p-3 font-medium text-red-700 ring-1 ring-inset ring-red-200">{preview.error}</p>}
           {preview.trips && (
-            <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
-              <p>{preview.trips.length.toLocaleString("en")} موعد ({completed.toLocaleString("en")} منجز) · {fileDays.length} يوم من {fileDays[0]} إلى {fileDays[fileDays.length - 1]}{replacedDays ? ` · ${replacedDays} يوم مرفوع سابقًا سيُستبدل` : ""} · {preview.trips.filter((trip) => trip.kind && !trip.hospitalId).length} رحلة لوجهات خارج الدليل</p>
-              <button disabled={busy} onClick={saveTrips} className="shrink-0 rounded-xl bg-[#10233f] px-4 py-2 text-xs font-bold text-white disabled:opacity-60">إضافة إلى الإحصائيات</button>
+            <div className="flex flex-col justify-between gap-3 rounded-xl bg-slate-50 p-3 sm:flex-row sm:items-center">
+              <p className="text-slate-700">{preview.trips.length.toLocaleString("en")} موعد ({completed.toLocaleString("en")} منجز) · {fileDays.length} يوم من {fileDays[0]} إلى {fileDays[fileDays.length - 1]}{replacedDays ? ` · ${replacedDays} يوم مرفوع سابقًا سيُستبدل` : ""} · {preview.trips.filter((trip) => trip.kind && !trip.hospitalId).length} رحلة لوجهات خارج الدليل</p>
+              <button disabled={busy} onClick={saveTrips} className={btn("dark", "sm")}>إضافة إلى الإحصائيات</button>
             </div>
           )}
           {preview.drivers.length > 0 && (
-            <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
-              <p className="flex items-center gap-2"><Building2 className="h-4 w-4 text-slate-400" /> قائمة السائقين: {preview.drivers.length} سيارة ({newPlates} جديدة). السيارة التي يتناوب عليها أكثر من سائق تُحفظ بأسمائهم معًا.</p>
-              <button onClick={updateFleet} className="shrink-0 rounded-xl border border-slate-300 bg-white px-4 py-2 text-xs font-bold text-slate-700">تحديث السيارات</button>
+            <div className="flex flex-col justify-between gap-3 rounded-xl bg-slate-50 p-3 sm:flex-row sm:items-center">
+              <p className="flex items-start gap-2 text-slate-700"><Building2 className="mt-0.5 h-4 w-4 shrink-0 text-slate-400" /> قائمة السائقين: {preview.drivers.length} سيارة ({newPlates} جديدة). السيارة التي يتناوب عليها أكثر من سائق تُحفظ بأسمائهم معًا.</p>
+              <button onClick={updateFleet} className={btn("secondary", "sm")}>تحديث السيارات</button>
             </div>
           )}
         </div>
-      )}
-    </section>
+      ) : <p className="px-5 py-3.5 text-sm text-slate-500">اختر ملف Excel لحركة السيارات، ثم راجع ملخصه قبل إضافته.</p>}
+    </Panel>
   );
 }
