@@ -106,6 +106,6 @@ temp/
 *.sqlite
 *.sqlite3
 
-# Firebase
-.firebase/
-firebase-debug.log
+# إعداد قاعدة البيانات على Hostinger (فيه كلمة المرور)
+api/config.php
+althumama-config.php

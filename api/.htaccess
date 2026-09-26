@@ -1,0 +1,11 @@
+# واجهة الخادم: لا عرض لمحتوى المجلد، وملف الإعداد لا يُطلب من المتصفح
+Options -Indexes
+
+<FilesMatch "^config(\.sample)?\.php$">
+  <IfModule mod_authz_core.c>
+    Require all denied
+  </IfModule>
+  <IfModule !mod_authz_core.c>
+    Deny from all
+  </IfModule>
+</FilesMatch>

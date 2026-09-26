@@ -24,16 +24,6 @@ export const ROLE_LABELS: Record<UserRole, string> = {
   driver: "سائق",
 };
 
-/**
- * حساب المدير الأول يُنشأ تلقائيًا عند أول دخول بهذه البيانات فقط، ثم يُطلب تغيير كلمة المرور فورًا.
- * بعد إنشائه (مستند meta/setup) لا تعود هذه الكلمة صالحة لإنشاء أي حساب.
- */
-export const BOOTSTRAP_ADMIN_USERNAME = "admin";
-export const BOOTSTRAP_ADMIN_PASSWORD = "Admin123";
-
-/** Firebase Auth يحتاج بريدًا؛ نولّد بريدًا داخليًا لا يُرسل إليه شيء. */
-export const INTERNAL_EMAIL_DOMAIN = "althumama-complex-car.firebaseapp.com";
-
 export function normalizeUsername(value: string) {
   return value.trim().toLowerCase();
 }
@@ -52,11 +42,6 @@ export function validatePassword(value: string): string | null {
   if (value.length > 128) return "كلمة المرور طويلة جدًا";
   if (!/[A-Za-z]/.test(value) || !/\d/.test(value)) return "كلمة المرور يجب أن تحتوي على أحرف وأرقام";
   return null;
-}
-
-/** بريد داخلي فريد لكل حساب؛ اللاحقة تسمح بإعادة تعيين كلمة المرور بحساب جديد لنفس الاسم. */
-export function internalEmail(username: string, suffix: string) {
-  return `${normalizeUsername(username)}.${suffix}@${INTERNAL_EMAIL_DOMAIN}`;
 }
 
 function secureRandom() {

@@ -5,14 +5,14 @@
   "license": "MIT",
   "scripts": {
     "dev": "vite",
+    "dev:api": "php -S 127.0.0.1:8000 -t .",
     "build": "vite build",
     "check": "tsc --noEmit",
     "format": "prettier --write .",
     "test": "vitest run",
-    "deploy": "vite build && firebase deploy --only hosting,firestore"
+    "deploy": "vite build && node scripts/package-hostinger.mjs"
   },
   "dependencies": {
-    "firebase": "^12.3.0",
     "leaflet": "^1.9.4",
     "lucide-react": "^0.453.0",
     "react": "^19.2.1",
@@ -28,6 +28,7 @@
     "@types/react": "^19.2.1",
     "@types/react-dom": "^19.2.1",
     "@vitejs/plugin-react": "^5.0.4",
+    "fflate": "^0.8.3",
     "prettier": "^3.6.2",
     "tailwindcss": "^4.1.14",
     "typescript": "5.9.3",
