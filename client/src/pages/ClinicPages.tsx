@@ -3,6 +3,7 @@ import { toast } from "sonner";
 import {
   Accessibility,
   ArrowLeft,
+  Ban,
   ArrowRight,
   CalendarDays,
   CheckCircle2,
@@ -101,6 +102,7 @@ export function ClinicHome({ t, lang, appointments, date, onDateChange, onNew, o
   const today = localDateString(now);
   const dayAppointments = appointments.filter((appointment) => appointment.appointmentDate === date);
   const waiting = dayAppointments.filter((appointment) => appointment.status === WAITING).length;
+  const cancelled = dayAppointments.filter((appointment) => appointment.status === "ملغي").length;
   return (
     <>
       <PageHeader
@@ -118,10 +120,11 @@ export function ClinicHome({ t, lang, appointments, date, onDateChange, onNew, o
 
       <div className="mb-6"><DateChooser value={date} onChange={onDateChange} labels={t.dateChoice} /></div>
 
-      <div className="mb-6 grid grid-cols-1 gap-3 sm:grid-cols-3 sm:gap-4">
+      <div className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4 lg:gap-4">
         <Stat icon={CalendarDays} tone="neutral" label={date === today ? t.statToday : t.statDate} value={dayAppointments.length} />
         <Stat icon={Clock3} tone="amber" label={t.statWaiting} value={waiting} />
-        <Stat icon={Truck} tone="blue" label={t.statLinked} value={dayAppointments.length - waiting} />
+        <Stat icon={Truck} tone="blue" label={t.statLinked} value={dayAppointments.length - waiting - cancelled} />
+        <Stat icon={Ban} tone="red" label={t.statCancelled} value={cancelled} />
       </div>
 
       <Panel icon={UsersRound} title={t.list} count={dayAppointments.length} description={longDate(date, lang)}>
@@ -160,6 +163,12 @@ function AppointmentCard({ t, appointment, now, onEdit, onDelete }: {
             {appointment.mobile && <span className="inline-flex items-center gap-1"><Phone className="h-3.5 w-3.5" /><span dir="ltr">{appointment.mobile}</span></span>}
             {appointment.assistance.length > 0 && <span className="inline-flex items-center gap-1"><Accessibility className="h-3.5 w-3.5" />{appointment.assistance.map(t.need).join(separator)}</span>}
           </p>
+          {appointment.status === "ملغي" && (
+            <p className="mt-2 w-fit rounded-lg bg-red-50 px-2.5 py-1.5 text-xs text-red-800 ring-1 ring-inset ring-red-200">
+              <span className="font-semibold">{t.cancelReason}:</span> {appointment.cancelReason || "—"}
+              {appointment.cancelledBy && <span className="text-red-700/80"> · {t.cancelledBy(appointment.cancelledBy)}</span>}
+            </p>
+          )}
         </div>
       </div>
       <div className="flex flex-wrap items-center gap-2 lg:justify-end">

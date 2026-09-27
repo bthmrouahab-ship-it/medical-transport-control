@@ -4,8 +4,11 @@ import {
   assignVehicle,
   buildDriverMessage,
   calculateTripGroupingScore,
+  canCancelAppointment,
   canRequestVehicle,
+  followsRequest,
   migrateAppointment,
+  migrateRequest,
   parseImportedAppointments,
   buildTripGroups,
   findUnrequestedMatches,
@@ -231,5 +234,26 @@ describe("medical transport rules", () => {
     const migrated = migrateAppointment({ ...trip, clinic: "Hamad General Hospital" });
     expect(migrated?.category).toBe("غير طبية");
     expect(migrated?.hospitalId).toBeUndefined();
+  });
+
+  it("cancels an appointment only before the patient is picked up, and keeps the reason", () => {
+    expect(canCancelAppointment(appointment)).toBe(true);
+    expect(canCancelAppointment({ ...appointment, status: "تم طلب السيارة" }, { ...request, status: "وصلت السيارة" })).toBe(true);
+    expect(canCancelAppointment({ ...appointment, status: "تم استلام المريض" }, { ...request, status: "تم استلام المريض" })).toBe(false);
+    expect(canCancelAppointment({ ...appointment, status: "طلب عودة" }, { ...request, direction: "عودة" })).toBe(false);
+    const cancelled = migrateAppointment({ ...appointment, status: "ملغي", cancelReason: "المريض لا يرغب في الذهاب", cancelledBy: "مشرف 17", cancelledAt: "2026-09-24T06:00:00.000Z" });
+    expect(cancelled).toMatchObject({ status: "ملغي", cancelReason: "المريض لا يرغب في الذهاب", cancelledBy: "مشرف 17" });
+    expect(canCancelAppointment(cancelled!)).toBe(false);
+    expect(canRequestVehicle(cancelled!, undefined, new Date(2026, 8, 24, 8, 0))).toBe(false);
+  });
+
+  it("lets only the supervisor who requested the car follow the request", () => {
+    const owned = migrateRequest({ ...request, requestedBy: "7" })!;
+    expect(owned.requestedBy).toBe("7");
+    expect(followsRequest(owned, "7")).toBe(true);
+    expect(followsRequest(owned, "8")).toBe(false);
+    // طلب قديم أو رحلة غير طبية بلا مالك يتابعها الجميع، والموعد بلا طلب كذلك
+    expect(followsRequest(request, "8")).toBe(true);
+    expect(followsRequest(undefined, "8")).toBe(true);
   });
 });

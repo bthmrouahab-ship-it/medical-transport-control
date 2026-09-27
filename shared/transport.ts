@@ -9,7 +9,8 @@ export type AppointmentStatus =
   | "تم طلب السيارة"
   | "تم استلام المريض"
   | "طلب عودة"
-  | "مكتملة";
+  | "مكتملة"
+  | "ملغي";
 
 export type ClinicAppointment = {
   id: string;
@@ -28,6 +29,10 @@ export type ClinicAppointment = {
   kind: AppointmentKind;
   assistance: AssistanceNeed[];
   status: AppointmentStatus;
+  /** إلغاء الموعد من مشرف المبنى: السبب (إلزامي)، ومن ألغاه، ومتى (ISO) */
+  cancelReason?: string;
+  cancelledBy?: string;
+  cancelledAt?: string;
 };
 
 export type Vehicle = {
@@ -53,6 +58,8 @@ export type VehicleRequest = {
   createdAt: string;
   groupId?: string;
   notificationSentAt?: string;
+  /** رقم حساب مشرف المبنى الذي طلب السيارة: هو وحده يتابع الطلب (الطلبات القديمة بلا مالك يتابعها الجميع) */
+  requestedBy?: string;
   /** وقت استلام المريض، أي بداية الطريق إلى الوجهة (ISO) */
   pickedUpAt?: string;
   /** الوقت التقديري للوصول إلى الوجهة (ISO) */
@@ -83,6 +90,7 @@ const appointmentStatuses = new Set<AppointmentStatus>([
   "تم استلام المريض",
   "طلب عودة",
   "مكتملة",
+  "ملغي",
 ]);
 
 function toText(value: unknown) {
@@ -226,6 +234,9 @@ export function migrateAppointment(value: unknown, index = 0): ClinicAppointment
     kind,
     assistance: normalizeAssistance(raw.assistance ?? raw.notes),
     status,
+    ...(status === "ملغي"
+      ? { cancelReason: toText(raw.cancelReason) || undefined, cancelledBy: toText(raw.cancelledBy) || undefined, cancelledAt: toText(raw.cancelledAt) || undefined }
+      : {}),
   };
 }
 
@@ -305,8 +316,29 @@ export function parseImportedAppointments(
 }
 
 export function canRequestVehicle(appointment: ClinicAppointment | undefined, existingRequest?: VehicleRequest, now = new Date()) {
-  return Boolean(appointment && !existingRequest && appointment.status !== "مكتملة" && requestWindow(appointment, now).open);
+  return Boolean(appointment && !existingRequest && appointment.status !== "مكتملة" && appointment.status !== "ملغي" && requestWindow(appointment, now).open);
 }
+
+/** أسباب جاهزة لإلغاء الموعد (ويمكن كتابة سبب آخر). */
+export const CANCEL_REASONS = [
+  "المريض لا يرغب في الذهاب",
+  "المريض غير موجود في الشقة",
+  "أُلغي الموعد من المستشفى",
+  "ذهب المريض بوسيلة أخرى",
+  "حالة المريض لا تسمح بالنقل",
+];
+
+/**
+ * مشرف المبنى يلغي الموعد قبل استلام المريض فقط: بلا طلب، أو طلب ذهاب لم يُستلم مريضه بعد.
+ * (بعد الاستلام تكون الرحلة قد بدأت، والعودة تُلغى بإلغاء طلبها.)
+ */
+export function canCancelAppointment(appointment: ClinicAppointment, request?: VehicleRequest) {
+  if (appointment.status !== "بانتظار طلب السيارة" && appointment.status !== "تم طلب السيارة") return false;
+  return !request || (request.direction === "ذهاب" && ["بانتظار التوزيع", "تم إرسال السيارة", "وصلت السيارة"].includes(request.status));
+}
+
+/** هل يتابع هذا المستخدم الطلب؟ صاحب الطلب فقط، والطلبات القديمة أو التي أضافها مشرف السيارات بلا مالك يتابعها الجميع. */
+export const followsRequest = (request: VehicleRequest | undefined, uid: string) => !request?.requestedBy || request.requestedBy === uid;
 
 export function migrateRequest(value: unknown): VehicleRequest | null {
   if (!value || typeof value !== "object") return null;
@@ -337,6 +369,7 @@ export function migrateRequest(value: unknown): VehicleRequest | null {
     createdAt: toText(raw.createdAt),
     groupId: toText(raw.groupId) || undefined,
     notificationSentAt: toText(raw.notificationSentAt) || undefined,
+    requestedBy: toText(raw.requestedBy) || undefined,
     pickedUpAt: isoTime(raw.pickedUpAt),
     etaAt: isoTime(raw.etaAt),
     destLat: coordinate(raw.destLat),

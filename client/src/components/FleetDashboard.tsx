@@ -4,7 +4,7 @@ import type { Hospital } from "@shared/hospitals";
 import type { HistorySummary } from "@shared/history";
 import { DEFAULT_VEHICLES, localDateString, migrateAppointment, migrateRequest, type ClinicAppointment, type Vehicle, type VehicleRequest } from "@shared/transport";
 import { arrivalsOn, tripEndpoints, tripPhase } from "@shared/trips";
-import { useArrivalAlerts } from "@/lib/arrivalAlerts";
+import { useArrivalAlerts, useCancellationAlerts } from "@/lib/arrivalAlerts";
 import { saveState } from "@/lib/appStore";
 import { appendAudit } from "@/lib/audit";
 import { useHospitals, useNow, useSharedState } from "@/lib/useShared";
@@ -78,6 +78,7 @@ export default function FleetDashboard({ canEdit = false, alerts = false, actor 
   }), [requests, appointments, hospitals, now, freshness]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useArrivalAlerts({ arrivals: arrivalsOn(localDateString(now), requests, now, isLive), appointments, hospitals, driverOf, enabled: alerts });
+  useCancellationAlerts({ requests, appointments, enabled: alerts });
 
   const liveCount = fleet.filter((vehicle) => isLive(vehicle.plate)).length;
   const busyPlates = new Set(trips.map((trip) => trip.plate));

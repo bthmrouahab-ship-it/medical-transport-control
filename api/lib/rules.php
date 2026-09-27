@@ -6,12 +6,14 @@ declare(strict_types=1);
  * كل عملية تُفحص قبل الحفظ: $before المستند الحالي أو null، و$after المستند بعد التعديل أو null عند الحذف.
  */
 
-const APPOINTMENT_STATUSES = ['بانتظار طلب السيارة', 'تم طلب السيارة', 'تم استلام المريض', 'طلب عودة', 'مكتملة'];
+const APPOINTMENT_STATUSES = ['بانتظار طلب السيارة', 'تم طلب السيارة', 'تم استلام المريض', 'طلب عودة', 'مكتملة', 'ملغي'];
 const APPOINTMENT_FIELDS = ['id', 'patientName', 'clinic', 'buildingNumber', 'apartmentNumber', 'mobile', 'appointmentDate',
-    'appointmentAt', 'hospitalId', 'category', 'kind', 'assistance', 'status', '_o'];
+    'appointmentAt', 'hospitalId', 'category', 'kind', 'assistance', 'status', 'cancelReason', 'cancelledBy', 'cancelledAt', '_o'];
+/** خانات إلغاء الموعد (السبب إلزامي، ومن ألغاه، ومتى) */
+const CANCEL_FIELDS = ['cancelReason', 'cancelledBy', 'cancelledAt'];
 const REQUEST_STATUSES = ['بانتظار التوزيع', 'تم إرسال السيارة', 'وصلت السيارة', 'تم استلام المريض', 'وصلت الوجهة'];
 const REQUEST_FIELDS = ['id', 'appointmentId', 'vehiclePlate', 'driver', 'direction', 'status', 'notificationMethod',
-    'createdAt', 'groupId', 'notificationSentAt', 'pickedUpAt', 'etaAt', 'destLat', 'destLng', 'arrivedAt', 'arrivalSource', '_o'];
+    'createdAt', 'groupId', 'notificationSentAt', 'requestedBy', 'pickedUpAt', 'etaAt', 'destLat', 'destLng', 'arrivedAt', 'arrivalSource', '_o'];
 /** خانات مرحلة الطريق إلى الوجهة (تُكتب عند استلام المريض وعند الوصول) */
 const TRIP_FIELDS = ['pickedUpAt', 'etaAt', 'destLat', 'destLng', 'arrivedAt', 'arrivalSource'];
 const VEHICLE_FIELDS = ['plate', 'driver', 'phone', 'kind', 'available', '_o'];
@@ -43,6 +45,13 @@ function is_text($value, int $max): bool
 function has_role(array $user, array $roles): bool
 {
     return in_array($user['role'], $roles, true);
+}
+
+/** الطلب يتابعه مشرف المبنى الذي طلبه فقط؛ الطلب القديم أو الذي أضافه مشرف السيارات بلا مالك يتابعه أي مشرف مبنى. */
+function follows_request(array $user, ?array $request): bool
+{
+    $owner = $request['requestedBy'] ?? null;
+    return $owner === null || $owner === (string)$user['id'];
 }
 
 /** أوقات بصيغة ISO، وإحداثيات الوجهة داخل قطر، ومصدر وصول معروف. */
@@ -92,17 +101,33 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
                 return only($changed, APPOINTMENT_FIELDS) && !in_array('id', $changed, true)
                     && in_array($after['status'] ?? null, APPOINTMENT_STATUSES, true) ? null : $denied;
             }
-            // مشرف المبنى لا يغيّر بيانات المريض ولا وقت الموعد، بل حالة الموعد فقط
+            // مشرف المبنى لا يغيّر بيانات المريض ولا وقت الموعد، بل حالة الموعد فقط، أو يلغيه قبل استلام المريض مع ذكر السبب
             if ($role === 'buildingSupervisor') {
+                if (($before['status'] ?? null) === 'ملغي') return $denied;
+                if (($after['status'] ?? null) === 'ملغي') {
+                    $reason = trim((string)($after['cancelReason'] ?? ''));
+                    return only($changed, ['status', ...CANCEL_FIELDS])
+                        && in_array($before['status'] ?? null, ['بانتظار طلب السيارة', 'تم طلب السيارة'], true)
+                        && is_text($after['cancelReason'] ?? null, 300) && mb_strlen($reason) >= 3
+                        && ($after['cancelledBy'] ?? null) === $user['display_name']
+                        && is_text($after['cancelledAt'] ?? null, 40) && strtotime($after['cancelledAt']) !== false ? null : $denied;
+                }
                 return only($changed, ['status']) && in_array($after['status'] ?? null, APPOINTMENT_STATUSES, true) ? null : $denied;
             }
             return $denied;
 
         case 'requests':
-            if ($after === null) return has_role($user, ['admin', 'buildingSupervisor']) ? null : $denied;
+            if ($after === null) {
+                if ($role === 'admin') return null;
+                return $role === 'buildingSupervisor' && follows_request($user, $before) ? null : $denied;
+            }
             if ($before === null) {
                 // الطلب الجديد يبدأ دائمًا بانتظار التوزيع، والسيارة يحددها مشرف السيارات لاحقًا
                 if (!has_role($user, ['admin', 'buildingSupervisor', 'fleetSupervisor'])) return $denied;
+                // طلب مشرف المبنى يُسجَّل باسمه (حتى يتابعه وحده)، والرحلة غير الطبية من مشرف السيارات بلا مالك
+                $owner = $after['requestedBy'] ?? null;
+                if ($role === 'buildingSupervisor' && $owner !== (string)$user['id']) return 'بيانات الطلب غير صالحة';
+                if ($role === 'fleetSupervisor' && $owner !== null) return 'بيانات الطلب غير صالحة';
                 $valid = only(array_keys($after), REQUEST_FIELDS)
                     && ($after['id'] ?? null) === $id
                     && is_text($after['appointmentId'] ?? null, 160)
@@ -128,6 +153,7 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
             }
             // مشرف المبنى: تأكيد وصول السيارة واستلام المريض، ومعه وقت الاستلام والوقت المتوقع للوصول
             if ($role === 'buildingSupervisor') {
+                if (!follows_request($user, $before)) return $denied;
                 return only($changed, ['status', 'pickedUpAt', 'etaAt', 'destLat', 'destLng'])
                     && in_array($after['status'] ?? null, ['وصلت السيارة', 'تم استلام المريض'], true) ? null : $denied;
             }

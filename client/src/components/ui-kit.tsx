@@ -1,4 +1,5 @@
-import { useState, type ComponentType, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ComponentType, type ReactNode } from "react";
+import { X } from "lucide-react";
 import { localDateString, type ClinicAppointment } from "@shared/transport";
 
 /**
@@ -165,6 +166,7 @@ export const STATUS_TONE: Record<string, Tone> = {
   "وصلت الوجهة": "green",
   "طلب عودة": "amber",
   "مكتملة": "green",
+  "ملغي": "red",
 };
 
 export function StatusBadge({ status, label }: { status: string; label?: string }) {
@@ -250,6 +252,52 @@ export function Steps({ steps, current, tone = "blue" }: { steps: string[]; curr
         );
       })}
     </ol>
+  );
+}
+
+/** نافذة حوار فوق الصفحة: تُغلق بزر الإغلاق أو Esc أو النقر خارجها، ويعود التركيز بعدها إلى ما كان عليه. */
+export function Modal({ title, description, icon: IconComponent, tone = "neutral", onClose, children, footer }: {
+  title: ReactNode;
+  description?: ReactNode;
+  icon?: Icon;
+  tone?: Tone;
+  onClose: () => void;
+  children: ReactNode;
+  footer?: ReactNode;
+}) {
+  const titleId = useId();
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+  useEffect(() => {
+    const previous = document.activeElement as HTMLElement | null;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") closeRef.current();
+    };
+    window.addEventListener("keydown", onKey);
+    const overflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = overflow;
+      previous?.focus?.();
+    };
+  }, []);
+  return (
+    <div className="fixed inset-0 z-[1100] flex items-end justify-center bg-ink/40 p-3 sm:items-center sm:p-6" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+      <div role="dialog" aria-modal="true" aria-labelledby={titleId} className="flex max-h-[92vh] w-full max-w-lg flex-col overflow-hidden rounded-2xl bg-white shadow-2xl ring-1 ring-slate-200">
+        {TONES[tone].bar && <div className={cx("h-[3px] shrink-0", TONES[tone].bar)} />}
+        <header className="flex items-start gap-3 border-b border-slate-100 px-5 py-4">
+          {IconComponent && <span className={cx("flex h-9 w-9 shrink-0 items-center justify-center rounded-xl", TONES[tone].icon)}><IconComponent className="h-[18px] w-[18px]" /></span>}
+          <div className="min-w-0 flex-1">
+            <h2 id={titleId} className="text-base font-semibold text-ink">{title}</h2>
+            {description && <p className="mt-0.5 text-xs leading-5 text-slate-500">{description}</p>}
+          </div>
+          <button type="button" onClick={onClose} aria-label="إغلاق" className={cx(btn("ghost", "sm"), "w-9 px-0")}><X className="h-4 w-4" /></button>
+        </header>
+        <div className="overflow-y-auto px-5 py-4">{children}</div>
+        {footer && <footer className="flex flex-wrap justify-end gap-2 border-t border-slate-100 bg-slate-50/70 px-5 py-3">{footer}</footer>}
+      </div>
+    </div>
   );
 }
 

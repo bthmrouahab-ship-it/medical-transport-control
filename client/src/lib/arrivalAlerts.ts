@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import { toast } from "sonner";
 import type { Hospital } from "@shared/hospitals";
-import type { ClinicAppointment } from "@shared/transport";
+import type { ClinicAppointment, VehicleRequest } from "@shared/transport";
 import { tripEndpoints, type Arrival } from "@shared/trips";
 
 /** تنبيه الجهاز عند الوصول (يفعّله مشرف السيارات من صفحته، ويُحفظ على هذا الجهاز). */
@@ -86,4 +86,54 @@ export function useArrivalAlerts({ arrivals, appointments, hospitals, driverOf, 
       }
     }
   }, [arrivals, enabled]);
+}
+
+function notifyDevice(title: string, body: string, tag: string) {
+  if (!document.hidden || !deviceNotificationsOn()) return;
+  try {
+    new Notification(title, { body, icon: "/favicon.svg", tag });
+  } catch {
+    /* المتصفح لا يدعم التنبيه هنا */
+  }
+}
+
+/**
+ * رسالة لمشرف السيارات عندما يلغي مشرف المبنى طلبًا في طريق سيارته إلى الاستلام (أو يلغي الموعد نفسه)،
+ * حتى يبلغ السائق. تنتظر بضع ثوانٍ ليصل سبب إلغاء الموعد مع المزامنة.
+ */
+export function useCancellationAlerts({ requests, appointments, enabled = true }: {
+  requests: VehicleRequest[];
+  appointments: ClinicAppointment[];
+  enabled?: boolean;
+}) {
+  const tracked = useRef<Map<string, VehicleRequest> | null>(null);
+  const latestAppointments = useRef(appointments);
+  latestAppointments.current = appointments;
+  const timers = useRef<number[]>([]);
+
+  useEffect(() => () => timers.current.forEach((timer) => window.clearTimeout(timer)), []);
+
+  useEffect(() => {
+    if (!enabled) return;
+    const onTheWay = new Map(requests
+      .filter((request) => request.vehiclePlate && (request.status === "تم إرسال السيارة" || request.status === "وصلت السيارة"))
+      .map((request) => [request.id, request]));
+    const previous = tracked.current;
+    tracked.current = onTheWay;
+    if (!previous) return;
+    const remaining = new Set(requests.map((request) => request.id));
+    for (const request of Array.from(previous.values())) {
+      if (remaining.has(request.id)) continue;
+      timers.current.push(window.setTimeout(() => {
+        const appointment = latestAppointments.current.find((item) => item.id === request.appointmentId);
+        const title = `أُلغي طلب السيارة ${request.vehiclePlate}`;
+        const reason = appointment?.status === "ملغي"
+          ? `أُلغي موعد ${appointment.patientName}${appointment.cancelReason ? `: ${appointment.cancelReason}` : ""}`
+          : `ألغى مشرف المبنى طلب ${appointment?.patientName ?? "الموعد"}`;
+        const body = `${reason} · أبلغ السائق${request.driver ? ` ${request.driver}` : ""}، والسيارة متاحة الآن`;
+        toast.warning(title, { description: body, duration: 20000 });
+        notifyDevice(title, body, `cancel-${request.id}`);
+      }, 5000));
+    }
+  }, [requests, enabled]);
 }
