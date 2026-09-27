@@ -12,6 +12,7 @@ import {
   Link2,
   MapPin,
   MessageCircle,
+  Navigation,
   PauseCircle,
   Phone,
   Plus,
@@ -43,7 +44,7 @@ import {
   type VehicleRequest,
 } from "@shared/transport";
 import type { Hospital } from "@shared/hospitals";
-import { arrivalsOn, tripEndpoints, tripPhase, vehicleAvailability, type TripPhase } from "@shared/trips";
+import { arrivalsOn, suggestReturnRedirects, tripEndpoints, tripPhase, vehicleAvailability, vehicleLocationState, type TripPhase } from "@shared/trips";
 import {
   Badge,
   DateChooser,
@@ -68,10 +69,10 @@ import {
 import NonMedicalTripForm from "./NonMedicalTripForm";
 import { RecentActivity } from "@/components/ActivityLog";
 import { useHospitals, useLiveVehicles, useNow } from "@/lib/useShared";
-import { NOTIFY_KEY, deviceNotificationsOn, useArrivalAlerts, useCancellationAlerts } from "@/lib/arrivalAlerts";
+import { NOTIFY_KEY, deviceNotificationsOn, useArrivalAlerts, useCancellationAlerts, useRedirectAlerts } from "@/lib/arrivalAlerts";
 
 type Trip = { request: VehicleRequest; appointment: ClinicAppointment };
-type VehicleFilter = "all" | "available" | "busy" | "off";
+type VehicleFilter = "all" | "inside" | "outside" | "busy" | "off";
 
 /** مرحلة رحلة سيارة كاملة (قد تحمل أكثر من مريض). */
 function groupPhase(phases: TripPhase[]): TripPhase {
@@ -135,6 +136,29 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
   const dispatchable = vehicles.filter((vehicle) => vehicle.available && !isBusy(vehicle.plate));
   // رحلات كل سيارة في اليوم المختار: السيارة الأقل رحلات تُقترح أولًا حتى يتوزع العمل
   const load = vehicleLoad(requests, appointments, date);
+
+  // مكان كل سيارة: في رحلة، أو متاحة داخل المجمع، أو متاحة خارجه (عائدة من الوجهة)
+  const locationStates = new Map(vehicles.map((vehicle) => {
+    const gps = liveGps.get(vehicle.plate);
+    return [vehicle.plate, vehicleLocationState(vehicle.plate, requests, appointments, hospitals, now, gps ? { lat: gps.lat, lng: gps.lng } : null)] as const;
+  }));
+  const isOutside = (plate: string) => locationStates.get(plate)?.kind === "outside";
+  const placeText = (plate: string) => {
+    const place = locationStates.get(plate);
+    return place?.kind === "outside" ? `خارج المجمع${place.from ? ` (${place.from})` : ""}` : "داخل المجمع";
+  };
+  // سيارة خارج المجمع لم تقطع نصف طريق العودة تُوجَّه إلى أقرب ضيف ينتظر العودة (أي تاريخ)
+  const pendingReturns = requests
+    .filter((request) => request.status === "بانتظار التوزيع" && request.direction === "عودة")
+    .map(withAppointment)
+    .filter(isTrip);
+  const redirects = suggestReturnRedirects(pendingReturns, dispatchable, locationStates, hospitals);
+  const redirectFor = new Map(redirects.map((item) => [item.request.id, item]));
+  // تفضيل السيارة حسب مكانها: رحلة الذهاب تبدأ من المجمع (السيارات داخله أولًا)، والعودة تأخذ السيارة الموجَّهة إليها
+  const locationRank = (direction: VehicleRequest["direction"], requestIds: string[]) => (vehicle: Vehicle) => {
+    if (direction === "عودة") return requestIds.some((id) => redirectFor.get(id)?.vehicle.plate === vehicle.plate) ? 0 : 1;
+    return isOutside(vehicle.plate) ? 1 : 0;
+  };
   const toPickupTrips = active.filter((trip) => phases.get(trip.request.id)!.kind === "toPickup");
 
   const groups = buildTripGroups(pending.map((trip) => ({ appointment: trip.appointment, direction: trip.request.direction })), hospitals);
@@ -165,6 +189,7 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
   // رسالة لمشرف السيارات عند وصول سيارة، وتنبيه على الجهاز إن فعّله
   useArrivalAlerts({ arrivals, appointments, hospitals, driverOf });
   useCancellationAlerts({ requests, appointments });
+  useRedirectAlerts({ redirects, driverOf, onDispatch: redirectVehicle });
   const [notifyDevice, setNotifyDevice] = useState(deviceNotificationsOn);
 
   async function toggleDeviceNotifications() {
@@ -188,7 +213,7 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
   }
 
   function dispatchSingle(trip: Trip) {
-    const suggested = assignVehicleForTrips(dispatchable, [trip.appointment], load);
+    const suggested = assignVehicleForTrips(dispatchable, [trip.appointment], load, locationRank(trip.request.direction, [trip.request.id]));
     const plate = selectedVehicles[trip.request.id] || suggested?.plate;
     const vehicle = dispatchable.find((item) => item.plate === plate);
     if (!vehicle) {
@@ -200,12 +225,22 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
 
   function dispatchGroup(appointmentIds: string[]) {
     const members = pending.filter((trip) => appointmentIds.includes(trip.appointment.id));
-    const vehicle = assignVehicleForTrips(dispatchable, members.map((trip) => trip.appointment), load);
+    const vehicle = assignVehicleForTrips(dispatchable, members.map((trip) => trip.appointment), load, locationRank(members[0]?.request.direction ?? "ذهاب", members.map((trip) => trip.request.id)));
     if (!vehicle || members.length < 2) {
       toast.error("لا توجد سيارة مناسبة ومتاحة لجمع هذه الرحلات");
       return;
     }
     onDispatch(members.map((trip) => trip.request.id), vehicle);
+  }
+
+  /** توجيه سيارة خارج المجمع إلى ضيف ينتظر العودة (من القائمة أو من زر التنبيه). */
+  function redirectVehicle(redirect: { request: VehicleRequest; vehicle: Vehicle }) {
+    const stillPending = requests.some((request) => request.id === redirect.request.id && request.status === "بانتظار التوزيع");
+    if (!stillPending || !dispatchable.some((vehicle) => vehicle.plate === redirect.vehicle.plate)) {
+      toast.error("تغيّر الطلب أو السيارة منذ التنبيه، راجع القائمة");
+      return;
+    }
+    onDispatch([redirect.request.id], redirect.vehicle);
   }
 
   function joinTrip(requestId: string, plate: string, groupId?: string) {
@@ -243,18 +278,26 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
   const availabilityText = (vehicle: Vehicle) => {
     if (!vehicle.available) return { tone: "neutral" as const, text: "خارج الخدمة" };
     const state = availability.get(vehicle.plate);
-    if (!state?.busy) return { tone: "green" as const, text: "متاحة" };
+    if (!state?.busy) {
+      const place = locationStates.get(vehicle.plate);
+      if (place?.kind === "outside") {
+        return { tone: "cyan" as const, text: `متاحة خارج المجمع · عائدة من ${place.from || "الوجهة"} · تصل ${timeLabel(place.backAt)}${place.canRedirect ? "" : " · قطعت نصف الطريق"}` };
+      }
+      return { tone: "green" as const, text: "متاحة داخل المجمع" };
+    }
     if (state.toPickup) return { tone: "blue" as const, text: "في الطريق إلى الاستلام" };
     return { tone: "blue" as const, text: state.until ? `في رحلة · تتفرغ ${timeLabel(state.until)}` : "في رحلة" };
   };
   const vehicleCounts = {
     all: vehicles.length,
-    available: dispatchable.length,
+    inside: dispatchable.filter((vehicle) => !isOutside(vehicle.plate)).length,
+    outside: dispatchable.filter((vehicle) => isOutside(vehicle.plate)).length,
     busy: vehicles.filter((vehicle) => vehicle.available && isBusy(vehicle.plate)).length,
     off: vehicles.filter((vehicle) => !vehicle.available).length,
   };
   const shownVehicles = vehicles.filter((vehicle) => vehicleFilter === "all"
-    || (vehicleFilter === "available" && vehicle.available && !isBusy(vehicle.plate))
+    || (vehicleFilter === "inside" && vehicle.available && !isBusy(vehicle.plate) && !isOutside(vehicle.plate))
+    || (vehicleFilter === "outside" && vehicle.available && !isBusy(vehicle.plate) && isOutside(vehicle.plate))
     || (vehicleFilter === "busy" && vehicle.available && isBusy(vehicle.plate))
     || (vehicleFilter === "off" && !vehicle.available));
   const trackingCount = activeGroups.filter((trips) => trips.some((trip) => {
@@ -283,12 +326,31 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
       <div className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4 lg:gap-4">
         <Stat icon={BellRing} tone="amber" label="بانتظار التوزيع" value={pending.length} hint={date === today ? "طلبات اليوم" : "طلبات التاريخ المحدد"} />
         <Stat icon={Truck} tone="blue" label="رحلات جارية" value={activeGroups.length} hint={trackingCount ? `${trackingCount} بمتابعة GPS` : "الآن"} />
-        <Stat icon={CheckCircle2} tone="green" label="سيارات متاحة" value={dispatchable.length} hint={`من ${vehicles.length} سيارة`} />
+        <Stat icon={CheckCircle2} tone="green" label="سيارات متاحة" value={dispatchable.length} hint={`${vehicleCounts.inside} داخل المجمع · ${vehicleCounts.outside} خارجه`} />
         <Stat icon={PauseCircle} tone="neutral" label="خارج الخدمة" value={vehicleCounts.off} />
       </div>
 
       <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_380px]">
         <div className="min-w-0 space-y-6">
+          {redirects.length > 0 && (
+            <Panel tone="violet" icon={Navigation} title="توجيه سيارات خارج المجمع" count={redirects.length} description="سيارة عائدة من وجهتها لم تقطع نصف الطريق إلى المجمع، وهي أقرب إلى ضيف ينتظر العودة من المجمع">
+              <div className="divide-y divide-slate-100">
+                {redirects.map((item) => (
+                  <div key={item.request.id} className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:p-5">
+                    <div className="min-w-0 flex-1">
+                      <p className="font-medium text-ink">
+                        <span dir="ltr">{item.vehicle.plate}</span> · {driverOf(item.vehicle.plate, item.vehicle.driver)} ← {item.appointment.patientName}
+                        {item.appointment.kind === "احتياجات خاصة" && <Badge tone="amber" className="ms-2">احتياجات خاصة</Badge>}
+                      </p>
+                      <p className="mt-0.5 text-sm text-slate-600">عائدة من {item.from || "الوجهة"} · الضيف في {item.pickup} على بعد {item.distanceKm} كم</p>
+                    </div>
+                    <button onClick={() => redirectVehicle(item)} className={btn("primary")}><Navigation className="h-4 w-4" /> توجيه السيارة</button>
+                  </div>
+                ))}
+              </div>
+            </Panel>
+          )}
+
           <Panel
             tone="amber"
             icon={BellRing}
@@ -298,7 +360,7 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
             actions={pending.length > 0 && (
               <button
                 disabled={!dispatchable.length}
-                onClick={() => setPlan(planDispatch(pending, dispatchable, load, hospitals))}
+                onClick={() => setPlan(planDispatch(pending, dispatchable, load, hospitals, (unit, vehicle) => locationRank(unit.direction, unit.requestIds)(vehicle)))}
                 title={dispatchable.length ? "توزيع الطلبات على السيارات المتاحة بالتساوي" : "لا توجد سيارة متاحة الآن"}
                 className={btn("primary", "sm")}
               >
@@ -309,7 +371,8 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
             {pending.length ? (
               <div className="divide-y divide-slate-100">
                 {pending.map((trip) => {
-                  const suggested = assignVehicleForTrips(dispatchable, [trip.appointment], load);
+                  const suggested = assignVehicleForTrips(dispatchable, [trip.appointment], load, locationRank(trip.request.direction, [trip.request.id]));
+                  const redirect = redirectFor.get(trip.request.id);
                   const selectedPlate = selectedVehicles[trip.request.id] || suggested?.plate || "";
                   // الرحلة العادية تقبل أي سيارة (سيدان وباص أولًا)، واحتياجات خاصة تحتاج سيارة مجهزة
                   const compatible = (trip.appointment.kind === "احتياجات خاصة" ? vehicles.filter((vehicle) => vehicle.kind === "احتياجات خاصة") : [...vehicles]
@@ -327,6 +390,7 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
                             <Badge tone={trip.request.direction === "عودة" ? "amber" : "neutral"}>{trip.request.direction}</Badge>
                             {isNonMedical(trip.appointment) && <Badge tone="violet">غير طبية</Badge>}
                             {groupedIds.has(trip.appointment.id) && <Badge tone="violet" icon={Sparkles}>قابلة للجمع</Badge>}
+                            {redirect && <Badge tone="cyan" icon={Navigation}>سيارة قريبة {redirect.vehicle.plate} · {redirect.distanceKm} كم</Badge>}
                           </div>
                           <p className="mt-1 text-sm text-slate-600">{appointmentPickupLabel(trip.appointment)} ← {trip.appointment.clinic}{zone && <span className="text-slate-400"> · {zone}</span>}</p>
                           <p className="mt-0.5 text-xs text-slate-500">{trip.appointment.kind}{trip.appointment.assistance.length ? ` · ${trip.appointment.assistance.join("، ")}` : ""}</p>
@@ -335,7 +399,7 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
                       <div className="flex flex-col gap-2 sm:flex-row lg:w-[360px]">
                         <select aria-label="السيارة" value={ready.some((vehicle) => vehicle.plate === selectedPlate) ? selectedPlate : ""} onChange={(event) => setSelectedVehicles((current) => ({ ...current, [trip.request.id]: event.target.value }))} className={cx(inputClass, "h-10 min-w-0 flex-1")}>
                           {!ready.length && <option value="">لا توجد سيارة متاحة</option>}
-                          {ready.map((vehicle) => <option key={vehicle.plate} value={vehicle.plate}>{vehicle.plate} · {driverOf(vehicle.plate)} · {vehicle.kind} · {tripsText(load.get(vehicle.plate) ?? 0)}</option>)}
+                          {ready.map((vehicle) => <option key={vehicle.plate} value={vehicle.plate}>{vehicle.plate} · {driverOf(vehicle.plate)} · {vehicle.kind} · {placeText(vehicle.plate)} · {tripsText(load.get(vehicle.plate) ?? 0)}</option>)}
                           {compatible.filter((vehicle) => isBusy(vehicle.plate)).map((vehicle) => {
                             const until = availability.get(vehicle.plate)?.until;
                             return <option key={vehicle.plate} value={vehicle.plate} disabled>{vehicle.plate} · مشغولة{until ? ` حتى ${timeLabel(until)}` : ""}</option>;
@@ -355,7 +419,7 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
               <div className="grid gap-4 p-4 sm:p-5 lg:grid-cols-2">
                 {groups.map((group) => {
                   const members = pending.filter((trip) => group.appointmentIds.includes(trip.appointment.id));
-                  const vehicle = assignVehicleForTrips(dispatchable, members.map((trip) => trip.appointment), load);
+                  const vehicle = assignVehicleForTrips(dispatchable, members.map((trip) => trip.appointment), load, locationRank(members[0]?.request.direction ?? "ذهاب", members.map((trip) => trip.request.id)));
                   return (
                     <div key={group.appointmentIds.join("-")} className="flex flex-col rounded-xl bg-violet-50/50 p-4 ring-1 ring-violet-100">
                       <div className="flex items-start justify-between gap-3">
@@ -468,9 +532,10 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
                 onChange={setVehicleFilter}
                 options={[
                   { value: "all", label: `الكل ${vehicleCounts.all}` },
-                  { value: "available", label: `متاحة ${vehicleCounts.available}` },
-                  { value: "busy", label: `في رحلة ${vehicleCounts.busy}` },
-                  { value: "off", label: `موقوفة ${vehicleCounts.off}` },
+                  { value: "inside", label: `داخل ${vehicleCounts.inside}` },
+                  { value: "outside", label: `خارج ${vehicleCounts.outside}` },
+                  { value: "busy", label: `رحلة ${vehicleCounts.busy}` },
+                  { value: "off", label: `موقوف ${vehicleCounts.off}` },
                 ]}
               />
             </div>
@@ -483,7 +548,7 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
                     <Dot tone={state.tone} />
                     <div className="min-w-0 flex-1">
                       <p className="truncate text-sm font-medium text-ink"><span dir="ltr">{vehicle.plate}</span> · {live?.driver ?? vehicle.driver}</p>
-                      <p className="truncate text-xs text-slate-500">{vehicle.kind} · {state.text}{live ? " · GPS مباشر" : ""}</p>
+                      <p className="text-xs leading-5 text-slate-500">{vehicle.kind} · {state.text}{live ? " · GPS مباشر" : ""}</p>
                     </div>
                     <div className="shrink-0 text-center" title="رحلات اليوم المختار">
                       <p className="text-sm font-semibold text-ink tabular">{load.get(vehicle.plate) ?? 0}</p>
@@ -507,7 +572,7 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
         </aside>
       </div>
 
-      {plan && <AutoDispatchDialog plan={plan} free={dispatchable} load={load} driverOf={driverOf} nextFree={nextFree} onConfirm={confirmPlan} onClose={() => setPlan(null)} />}
+      {plan && <AutoDispatchDialog plan={plan} free={dispatchable} load={load} driverOf={driverOf} placeText={placeText} nextFree={nextFree} onConfirm={confirmPlan} onClose={() => setPlan(null)} />}
       {driverMessages && <DriverMessagesDialog messages={driverMessages} driverOf={driverOf} onClose={() => setDriverMessages(null)} />}
     </>
   );
@@ -598,11 +663,12 @@ function ActiveTrip({ trips, phase, vehicle, driver, hospitals, onArrived }: {
  * خطة التوزيع التلقائي قبل الإرسال: كل رحلة وسيارتها المقترحة (الأقل رحلات اليوم)، ويمكن تغيير السيارة
  * أو استبعاد رحلة، ثم تُرسل كل السيارات معًا.
  */
-function AutoDispatchDialog({ plan, free, load, driverOf, nextFree, onConfirm, onClose }: {
+function AutoDispatchDialog({ plan, free, load, driverOf, placeText, nextFree, onConfirm, onClose }: {
   plan: DispatchPlan;
   free: Vehicle[];
   load: Map<string, number>;
   driverOf: (plate?: string, fallback?: string) => string;
+  placeText: (plate: string) => string;
   nextFree: (appointments: ClinicAppointment[]) => string;
   onConfirm: (items: { requestIds: string[]; vehicle: Vehicle }[]) => void;
   onClose: () => void;
@@ -667,7 +733,7 @@ function AutoDispatchDialog({ plan, free, load, driverOf, nextFree, onConfirm, o
                     className={cx(inputClass, "h-10 w-full", row.include && (used.get(row.plate) ?? 0) > 1 && "border-red-400 bg-red-50")}
                   >
                     {options.map((vehicle) => (
-                      <option key={vehicle.plate} value={vehicle.plate}>{vehicle.plate} · {driverOf(vehicle.plate, vehicle.driver)} · {vehicle.kind} · {tripsText(load.get(vehicle.plate) ?? 0)}</option>
+                      <option key={vehicle.plate} value={vehicle.plate}>{vehicle.plate} · {driverOf(vehicle.plate, vehicle.driver)} · {vehicle.kind} · {placeText(vehicle.plate)} · {tripsText(load.get(vehicle.plate) ?? 0)}</option>
                     ))}
                   </select>
                 </li>

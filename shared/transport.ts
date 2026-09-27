@@ -407,13 +407,14 @@ const KIND_ORDER: Record<VehicleKind, number> = { "سيدان": 0, "باص": 1, 
 /**
  * السيارة المناسبة من السيارات المتاحة: رحلة الاحتياجات الخاصة تحتاج سيارة مجهزة، والرحلة العادية تأخذ
  * سيارة عادية أولًا (تبقى المجهزة لمن يحتاجها). وبين المناسبة: الأقل رحلات اليوم (load) حتى يتوزع العمل،
- * ثم السيدان قبل الباص، ثم ترتيب الأسطول.
+ * ثم السيدان قبل الباص، ثم ترتيب الأسطول. rank (اختياري): تفضيل حسب مكان السيارة (الأقل أولًا) قبل عدد الرحلات.
  */
-export function assignVehicle(vehicles: Vehicle[], kind: AppointmentKind, load: Map<string, number> = new Map()) {
+export function assignVehicle(vehicles: Vehicle[], kind: AppointmentKind, load: Map<string, number> = new Map(), rank?: (vehicle: Vehicle) => number) {
   const candidates = vehicles
     .map((vehicle, index) => ({ vehicle, index }))
     .filter(({ vehicle }) => vehicle.available && (kind !== "احتياجات خاصة" || vehicle.kind === "احتياجات خاصة"));
   candidates.sort((a, b) => Number(a.vehicle.kind === "احتياجات خاصة") - Number(b.vehicle.kind === "احتياجات خاصة")
+    || (rank ? rank(a.vehicle) - rank(b.vehicle) : 0)
     || (load.get(a.vehicle.plate) ?? 0) - (load.get(b.vehicle.plate) ?? 0)
     || KIND_ORDER[a.vehicle.kind] - KIND_ORDER[b.vehicle.kind]
     || a.index - b.index);
@@ -422,11 +423,11 @@ export function assignVehicle(vehicles: Vehicle[], kind: AppointmentKind, load: 
 
 export const needsAccessibleVehicle = (appointments: ClinicAppointment[]) => appointments.some((appointment) => appointment.kind === "احتياجات خاصة");
 
-export function assignVehicleForTrips(vehicles: Vehicle[], appointments: ClinicAppointment[], load?: Map<string, number>) {
-  return assignVehicle(vehicles, needsAccessibleVehicle(appointments) ? "احتياجات خاصة" : "عادي", load);
+export function assignVehicleForTrips(vehicles: Vehicle[], appointments: ClinicAppointment[], load?: Map<string, number>, rank?: (vehicle: Vehicle) => number) {
+  return assignVehicle(vehicles, needsAccessibleVehicle(appointments) ? "احتياجات خاصة" : "عادي", load, rank);
 }
 
-export type PlannedTrip = { requestIds: string[]; appointments: ClinicAppointment[] };
+export type PlannedTrip = { requestIds: string[]; appointments: ClinicAppointment[]; direction: VehicleRequest["direction"] };
 export type DispatchPlan = {
   /** رحلة (ضيف أو أكثر مجمّعين) وسيارتها */
   assignments: (PlannedTrip & { vehicle: Vehicle })[];
@@ -439,12 +440,14 @@ export type DispatchPlan = {
  * - الرحلات القابلة للجمع (buildTripGroups) تذهب في سيارة واحدة.
  * - رحلات الاحتياجات الخاصة أولًا لأن سياراتها أقل، ثم الأقرب موعدًا.
  * - كل رحلة تأخذ السيارة المناسبة الأقل رحلات اليوم، فيتوزع العمل على كل السيارات.
+ * - rank (اختياري): تفضيل حسب مكان السيارة لكل رحلة (مثل سيارة خارج المجمع قريبة من ضيف العودة).
  */
 export function planDispatch(
   trips: { request: VehicleRequest; appointment: ClinicAppointment }[],
   vehicles: Vehicle[],
   load: Map<string, number> = new Map(),
   hospitals: Hospital[] = DEFAULT_HOSPITALS,
+  rank?: (trip: PlannedTrip, vehicle: Vehicle) => number,
 ): DispatchPlan {
   const byAppointment = new Map(trips.map((trip) => [trip.appointment.id, trip]));
   const units: PlannedTrip[] = [];
@@ -453,10 +456,10 @@ export function planDispatch(
     const members = group.appointmentIds.map((id) => byAppointment.get(id)).filter((trip): trip is NonNullable<typeof trip> => Boolean(trip));
     if (members.length < 2) continue;
     members.forEach((trip) => grouped.add(trip.appointment.id));
-    units.push({ requestIds: members.map((trip) => trip.request.id), appointments: members.map((trip) => trip.appointment) });
+    units.push({ requestIds: members.map((trip) => trip.request.id), appointments: members.map((trip) => trip.appointment), direction: group.direction });
   }
   for (const trip of trips) {
-    if (!grouped.has(trip.appointment.id)) units.push({ requestIds: [trip.request.id], appointments: [trip.appointment] });
+    if (!grouped.has(trip.appointment.id)) units.push({ requestIds: [trip.request.id], appointments: [trip.appointment], direction: trip.request.direction });
   }
   const startOf = (unit: PlannedTrip) => unit.appointments.map((appointment) => `${appointment.appointmentDate} ${appointment.appointmentAt}`).sort()[0];
   units.sort((a, b) => Number(needsAccessibleVehicle(b.appointments)) - Number(needsAccessibleVehicle(a.appointments)) || startOf(a).localeCompare(startOf(b)));
@@ -464,7 +467,7 @@ export function planDispatch(
   const free = vehicles.filter((vehicle) => vehicle.available);
   const plan: DispatchPlan = { assignments: [], waiting: [] };
   for (const unit of units) {
-    const vehicle = assignVehicleForTrips(free, unit.appointments, load);
+    const vehicle = assignVehicleForTrips(free, unit.appointments, load, rank && ((candidate) => rank(unit, candidate)));
     if (!vehicle) {
       plan.waiting.push(unit);
       continue;

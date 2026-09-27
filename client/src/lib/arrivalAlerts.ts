@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import { toast } from "sonner";
 import type { Hospital } from "@shared/hospitals";
 import type { ClinicAppointment, VehicleRequest } from "@shared/transport";
-import { tripEndpoints, type Arrival } from "@shared/trips";
+import { tripEndpoints, type Arrival, type ReturnRedirect } from "@shared/trips";
 
 /** تنبيه الجهاز عند الوصول (يفعّله مشرف السيارات من صفحته، ويُحفظ على هذا الجهاز). */
 export const NOTIFY_KEY = "fox_arrival_notify";
@@ -75,7 +75,9 @@ export function useArrivalAlerts({ arrivals, appointments, hospitals, driverOf, 
       }).filter(Boolean))).join("، ");
       const driver = driverOf(plate, items[0].request.driver);
       const title = source === "estimate" ? `انتهت المدة التقديرية لرحلة السيارة ${plate}` : `وصلت السيارة ${plate} إلى وجهتها`;
-      const body = `${driver ? `السائق ${driver} · ` : ""}${destinations ? `${destinations} · ` : ""}السيارة متاحة الآن لرحلة جديدة${source === "gps" ? " (GPS)" : source === "estimate" ? " (بلا GPS)" : ""}`;
+      // بعد الذهاب تكون السيارة متاحة خارج المجمع (عائدة)، وبعد العودة متاحة داخله
+      const place = items.some((item) => item.request.direction === "ذهاب") ? "السيارة متاحة خارج المجمع (عائدة إليه)" : "السيارة عادت إلى المجمع ومتاحة";
+      const body = `${driver ? `السائق ${driver} · ` : ""}${destinations ? `${destinations} · ` : ""}${place}${source === "gps" ? " (GPS)" : source === "estimate" ? " (بلا GPS)" : ""}`;
       toast.success(title, { description: body, duration: 15000 });
       if (document.hidden && deviceNotificationsOn()) {
         try {
@@ -136,4 +138,48 @@ export function useCancellationAlerts({ requests, appointments, enabled = true }
       }, 5000));
     }
   }, [requests, enabled]);
+}
+
+/** اقتراحات التوجيه التي ظهر تنبيهها في هذه الجلسة. */
+const SEEN_REDIRECTS_KEY = "fox_seen_redirects";
+
+/**
+ * تنبيه لمشرف السيارات عندما يمكن توجيه سيارة خارج المجمع إلى ضيف ينتظر العودة: في الصفحة مع زر
+ * «توجيه»، وعلى الجهاز إن فعّله والصفحة في الخلفية. كل اقتراح (ضيف وسيارة) يُنبَّه له مرة واحدة.
+ */
+export function useRedirectAlerts({ redirects, driverOf, onDispatch, enabled = true }: {
+  redirects: ReturnRedirect[];
+  driverOf: (plate: string | undefined, fallback?: string) => string;
+  onDispatch: (redirect: ReturnRedirect) => void;
+  enabled?: boolean;
+}) {
+  const latest = useRef({ driverOf, onDispatch });
+  latest.current = { driverOf, onDispatch };
+  const key = (item: ReturnRedirect) => `${item.request.id}:${item.vehicle.plate}`;
+  const signature = redirects.map(key).join("|");
+
+  useEffect(() => {
+    if (!enabled || !redirects.length) return;
+    let seen: Set<string>;
+    try {
+      seen = new Set(JSON.parse(sessionStorage.getItem(SEEN_REDIRECTS_KEY) ?? "[]") as string[]);
+    } catch {
+      seen = new Set();
+    }
+    const fresh = redirects.filter((item) => !seen.has(key(item)));
+    if (!fresh.length) return;
+    fresh.forEach((item) => seen.add(key(item)));
+    try {
+      sessionStorage.setItem(SEEN_REDIRECTS_KEY, JSON.stringify(Array.from(seen).slice(-300)));
+    } catch {
+      /* التخزين غير متاح */
+    }
+    for (const item of fresh) {
+      const driver = latest.current.driverOf(item.vehicle.plate, item.vehicle.driver);
+      const title = `وجّه السيارة ${item.vehicle.plate} إلى ${item.appointment.patientName}`;
+      const body = `${driver ? `السائق ${driver} · ` : ""}عائدة من ${item.from || "الوجهة"} ولم تقطع نصف الطريق، والضيف ينتظر العودة من ${item.pickup} على بعد ${item.distanceKm} كم`;
+      toast.info(title, { description: body, duration: 30000, action: { label: "توجيه", onClick: () => latest.current.onDispatch(item) } });
+      notifyDevice(title, body, `redirect-${item.request.id}`);
+    }
+  }, [signature, enabled]); // eslint-disable-line react-hooks/exhaustive-deps
 }
