@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { Accessibility, Ban, BellRing, Building2, CheckCircle2, Hospital, Link2, MessageCircle, Phone, RotateCcw, Timer, Truck, XCircle } from "lucide-react";
+import { Accessibility, Ban, BellRing, Building2, Check, CheckCircle2, ChevronDown, Hospital, Link2, MessageCircle, Phone, RotateCcw, Timer, Truck, XCircle } from "lucide-react";
 import {
   CANCEL_REASONS,
   appointmentPickupLabel,
@@ -105,12 +105,13 @@ export function SupervisorHome({ uid, appointments, requests, onRequest, onUpdat
   /**
    * أين يظهر الموعد الآن، أو null إن لم يكن لهذا المشرف:
    * - متابعة طلب الذهاب حتى وصول السيارة إلى الوجهة لمن طلبها فقط.
-   * - بعد وصول الوجهة (مرضى في الموعد) وطلب العودة ومتابعته: لكل مشرفي المباني.
+   * - بعد وصول الوجهة (مرضى في الموعد): لكل مشرفي المباني، وأي مشرف يطلب العودة.
+   * - متابعة طلب العودة (وصول السيارة واستلام المريض) لمن طلبها فقط.
    */
   const stageOf = (appointment: ClinicAppointment): Stage | null => {
     const request = latest.get(appointment.id);
     if (!request) return requestWindow(appointment, now).open ? "request" : "expired";
-    if (request.direction === "عودة") return "progress";
+    if (request.direction === "عودة") return followsRequest(request, uid) ? "progress" : null;
     if (BEFORE_PICKUP.includes(request.status)) return followsRequest(request, uid) ? "progress" : null;
     if (phaseOf(request).kind === "arrived") return "atAppointment";
     return followsRequest(request, uid) ? "progress" : null;
@@ -159,9 +160,11 @@ export function SupervisorHome({ uid, appointments, requests, onRequest, onUpdat
 
   return (
     <>
-      <PageHeader title="طلبات السيارات" subtitle={`${longDate(today)} · مواعيد اليوم`} />
-
-      <BuildingFilter all={visible.length} counts={buildingCounts} buildings={buildingNumbers} selected={buildings} onChange={chooseBuildings} />
+      <PageHeader
+        title="طلبات السيارات"
+        subtitle={`${longDate(today)} · مواعيد اليوم`}
+        actions={<BuildingFilter all={visible.length} counts={buildingCounts} buildings={buildingNumbers} selected={buildings} onChange={chooseBuildings} />}
+      />
 
       <div className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4 lg:gap-4">
         <Stat icon={BellRing} tone="amber" label="تحتاج طلب سيارة" value={toRequest.length} hint={matchCount ? `${matchCount} لنفس وجهة رحلة قائمة` : `حتى ${REQUEST_GRACE_MINUTES} د بعد الموعد`} />
@@ -181,7 +184,7 @@ export function SupervisorHome({ uid, appointments, requests, onRequest, onUpdat
           ) : <EmptyState icon={CheckCircle2} title="لا توجد مواعيد بانتظار طلب سيارة" hint="تظهر هنا مواعيد العيادات لليوم حتى يُطلب لها سيارة" />}
         </Panel>
 
-        <Panel tone="blue" icon={Truck} title="طلبات جارية" count={inProgress.length} description="الذهاب حتى الوصول إلى الوجهة، ورحلات العودة لكل المشرفين">
+        <Panel tone="blue" icon={Truck} title="طلبات جارية" count={inProgress.length} description="طلباتك حتى وصول السيارة إلى الوجهة">
           {inProgress.length ? (
             <div className="divide-y divide-slate-100">
               {inProgress.map(({ appointment, request }) => (
@@ -273,7 +276,7 @@ export function SupervisorHome({ uid, appointments, requests, onRequest, onUpdat
   );
 }
 
-/** فلتر المباني: «كل المباني» أو مبنى واحد أو أكثر. */
+/** فلتر المباني: قائمة منسدلة مخفية حتى يُضغط زرها، تختار «كل المباني» أو مبنى واحدًا أو أكثر. */
 function BuildingFilter({ all, counts, buildings, selected, onChange }: {
   all: number;
   counts: Map<string, number>;
@@ -281,30 +284,72 @@ function BuildingFilter({ all, counts, buildings, selected, onChange }: {
   selected: string[];
   onChange: (next: string[]) => void;
 }) {
+  const [open, setOpen] = useState(false);
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const close = (event: MouseEvent | KeyboardEvent) => {
+      if (event instanceof KeyboardEvent ? event.key === "Escape" : !box.current?.contains(event.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", close);
+    document.addEventListener("keydown", close);
+    return () => {
+      document.removeEventListener("mousedown", close);
+      document.removeEventListener("keydown", close);
+    };
+  }, [open]);
   if (!buildings.length) return null;
-  const chip = (active: boolean) => cx(
-    "inline-flex h-9 items-center gap-1.5 rounded-full px-3.5 text-sm font-medium ring-1 ring-inset transition",
-    active ? "bg-navy-900 text-white ring-navy-900" : "bg-white text-slate-600 ring-slate-300 hover:bg-slate-50 hover:text-ink",
+  const label = selected.length ? `مبنى ${selected.join("، ")}` : "كل المباني";
+  const row = (active: boolean) => cx(
+    "flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-start text-sm transition",
+    active ? "bg-brand-50 font-medium text-brand-700" : "text-slate-700 hover:bg-slate-50",
   );
-  const count = (value: number, active: boolean) => <span className={cx("rounded-full px-1.5 text-xs tabular", active ? "bg-white/15" : "bg-slate-100 text-slate-500")}>{value}</span>;
+  const check = (active: boolean) => (
+    <span className={cx("flex h-4 w-4 shrink-0 items-center justify-center rounded ring-1 ring-inset", active ? "bg-brand-600 text-white ring-brand-600" : "bg-white ring-slate-300")}>
+      {active && <Check className="h-3 w-3" strokeWidth={3} />}
+    </span>
+  );
   return (
-    <div className="mb-6 flex flex-wrap items-center gap-2" role="group" aria-label="فلتر المباني">
-      <span className="me-1 inline-flex items-center gap-1.5 text-sm font-medium text-slate-500"><Building2 className="h-4 w-4" /> المباني</span>
-      <button type="button" aria-pressed={!selected.length} onClick={() => onChange([])} className={chip(!selected.length)}>الكل {count(all, !selected.length)}</button>
-      {buildings.map((building) => {
-        const active = selected.includes(building);
-        return (
-          <button
-            key={building}
-            type="button"
-            aria-pressed={active}
-            onClick={() => onChange(active ? selected.filter((item) => item !== building) : [...selected, building])}
-            className={chip(active)}
-          >
-            مبنى {building} {count(counts.get(building) ?? 0, active)}
+    <div ref={box} className="relative">
+      <button
+        type="button"
+        aria-haspopup="true"
+        aria-expanded={open}
+        onClick={() => setOpen(!open)}
+        className={cx(btn("secondary"), "max-w-[16rem]", selected.length > 0 && "ring-brand-600 text-brand-700")}
+      >
+        <Building2 className="h-4 w-4 shrink-0" />
+        <span className="truncate">{label}</span>
+        <ChevronDown className={cx("h-4 w-4 shrink-0 transition", open && "rotate-180")} />
+      </button>
+      {open && (
+        <div role="group" aria-label="فلتر المباني" className="absolute start-0 z-30 mt-2 w-60 sm:start-auto sm:end-0 rounded-xl bg-white p-1.5 shadow-lg ring-1 ring-slate-200">
+          <button type="button" aria-pressed={!selected.length} onClick={() => { onChange([]); setOpen(false); }} className={row(!selected.length)}>
+            {check(!selected.length)}
+            <span className="flex-1">كل المباني</span>
+            <span className="text-xs text-slate-400 tabular">{all}</span>
           </button>
-        );
-      })}
+          <div className="my-1 border-t border-slate-100" />
+          <div className="max-h-72 overflow-y-auto">
+            {buildings.map((building) => {
+              const active = selected.includes(building);
+              return (
+                <button
+                  key={building}
+                  type="button"
+                  aria-pressed={active}
+                  onClick={() => onChange(active ? selected.filter((item) => item !== building) : [...selected, building])}
+                  className={row(active)}
+                >
+                  {check(active)}
+                  <span className="flex-1">مبنى {building}</span>
+                  <span className="text-xs text-slate-400 tabular">{counts.get(building) ?? 0}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -338,11 +338,11 @@ export function canCancelAppointment(appointment: ClinicAppointment, request?: V
 }
 
 /**
- * هل يتابع هذا المستخدم الطلب؟ طلب الذهاب لصاحبه فقط، ورحلة العودة يتابعها كل مشرفي المباني.
+ * هل يتابع هذا المستخدم الطلب؟ الطلب (ذهابًا أو عودة) لمن طلبه فقط.
  * الطلبات القديمة أو التي أضافها مشرف السيارات بلا مالك يتابعها الجميع.
  */
 export const followsRequest = (request: VehicleRequest | undefined, uid: string) =>
-  !request?.requestedBy || request.direction === "عودة" || request.requestedBy === uid;
+  !request?.requestedBy || request.requestedBy === uid;
 
 export function migrateRequest(value: unknown): VehicleRequest | null {
   if (!value || typeof value !== "object") return null;

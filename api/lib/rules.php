@@ -53,7 +53,6 @@ function has_role(array $user, array $roles): bool
  */
 function follows_request(array $user, ?array $request): bool
 {
-    if (($request['direction'] ?? null) === 'عودة') return true;
     $owner = $request['requestedBy'] ?? null;
     return $owner === null || $owner === (string)$user['id'];
 }
