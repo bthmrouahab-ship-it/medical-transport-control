@@ -120,7 +120,7 @@ export default function ActivityLog({ since, until, periodLabel, exportable = tr
         <label className="relative block">
           <span className="sr-only">بحث في العمليات</span>
           <Search className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-          <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="بحث: مريض، سيارة، مبنى، سبب..." className={cx(inputClass, "h-10 pr-9")} />
+          <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="بحث: ضيف، سيارة، مبنى، سبب..." className={cx(inputClass, "h-10 pr-9")} />
         </label>
         <select aria-label="المستخدم" value={user} onChange={(event) => setUser(event.target.value)} className={cx(inputClass, "h-10", user !== "all" && "border-brand-600 bg-brand-50 text-brand-700")}>
           <option value="all">كل المستخدمين</option>

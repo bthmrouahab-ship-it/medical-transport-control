@@ -38,7 +38,7 @@ export default function Login() {
             <h1 className="text-3xl font-bold leading-snug">سيارات مجمع الثمامة</h1>
             <p className="mt-3 text-lg font-medium text-slate-300" dir="ltr">Al Thumama Complex Transport</p>
             <ul className="mt-8 space-y-3 text-sm text-slate-300">
-              <li className="flex items-center gap-3"><CalendarClock className="h-4 w-4 text-slate-400" /> مواعيد المرضى وطلبات السيارات</li>
+              <li className="flex items-center gap-3"><CalendarClock className="h-4 w-4 text-slate-400" /> مواعيد الضيوف وطلبات السيارات</li>
               <li className="flex items-center gap-3"><Truck className="h-4 w-4 text-slate-400" /> توزيع السيارات وجمع الرحلات</li>
               <li className="flex items-center gap-3"><MapPinned className="h-4 w-4 text-slate-400" /> متابعة السيارات على الخريطة</li>
             </ul>

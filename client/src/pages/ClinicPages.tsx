@@ -79,7 +79,7 @@ export function ClinicHome({ t, lang, appointments, date, onDateChange, onNew, o
     try {
       const XLSX = await import("xlsx");
       const worksheet = XLSX.utils.json_to_sheet([{
-        "اسم المريض أو الرقم": "مريض 001",
+        "اسم الضيف أو الرقم": "ضيف 001",
         "اسم العيادة أو المستشفى": "مستشفى حمد العام",
         "رقم المبنى": "12",
         "رقم الشقة": "4",
@@ -87,7 +87,7 @@ export function ClinicHome({ t, lang, appointments, date, onDateChange, onNew, o
         "تاريخ الموعد": localDateString(),
         "وقت الموعد": "09:30",
         "نوع الرحلة": "عادي",
-        "احتياجات المريض": "يحتاج مرافق، كرسي متحرك",
+        "احتياجات الضيف": "يحتاج مرافق، كرسي متحرك",
       }]);
       worksheet["!cols"] = [{ wch: 22 }, { wch: 28 }, { wch: 14 }, { wch: 14 }, { wch: 16 }, { wch: 14 }, { wch: 14 }, { wch: 18 }, { wch: 30 }];
       const workbook = XLSX.utils.book_new();

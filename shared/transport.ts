@@ -43,6 +43,12 @@ export type Vehicle = {
   available: boolean;
 };
 
+/**
+ * النص الظاهر للحالة: في الواجهة يُقال «الضيف» بدل «المريض». قيمة الحالة المخزنة «تم استلام المريض»
+ * تبقى كما هي حتى تعمل البيانات والصلاحيات القائمة.
+ */
+export const statusText = (status: string) => status.replace("المريض", "الضيف");
+
 export type RequestStatus = "بانتظار التوزيع" | "تم إرسال السيارة" | "وصلت السيارة" | "تم استلام المريض" | "وصلت الوجهة";
 /** كيف عُرف وصول السيارة إلى الوجهة: GPS السائق، أو انتهاء المدة التقديرية، أو تأكيد مشرف السيارات. */
 export type ArrivalSource = "gps" | "estimate" | "manual";
@@ -262,7 +268,7 @@ export function parseImportedAppointments(
 
   rows.forEach((row, index) => {
     const excelRow = index + 2;
-    const patientName = toText(readAliased(row, ["اسم المريض أو الرقم", "اسم المريض", "المريض", "رقم المريض"]));
+    const patientName = toText(readAliased(row, ["اسم الضيف أو الرقم", "اسم الضيف", "الضيف", "رقم الضيف", "اسم المريض أو الرقم", "اسم المريض", "المريض", "رقم المريض"]));
     const clinic = toText(readAliased(row, ["اسم العيادة أو المستشفى", "العيادة", "المستشفى", "الوجهة"]));
     const buildingNumber = toText(readAliased(row, ["رقم المبنى", "المبنى", "building number", "building"]));
     const apartmentNumber = toText(readAliased(row, ["رقم الشقة", "الشقة", "apartment number", "apartment"]));
@@ -271,10 +277,10 @@ export function parseImportedAppointments(
     const rawDate = readAliased(row, ["تاريخ الموعد", "التاريخ", "appointment date", "date"]);
     const appointmentDate = rawDate === undefined || toText(rawDate) === "" ? today : normalizeDate(rawDate);
     const kind = normalizeKind(readAliased(row, ["نوع الرحلة", "نوع الخدمة", "النوع", "trip type"]));
-    const assistance = normalizeAssistance(readAliased(row, ["احتياجات المريض", "المساعدة", "الاحتياج", "ملاحظات", "assistance"]));
+    const assistance = normalizeAssistance(readAliased(row, ["احتياجات الضيف", "احتياجات المريض", "المساعدة", "الاحتياج", "ملاحظات", "assistance"]));
 
     const missing = [
-      [patientName, "اسم المريض"],
+      [patientName, "اسم الضيف"],
       [clinic, "اسم العيادة أو المستشفى"],
       [buildingNumber, "رقم المبنى"],
       [apartmentNumber, "رقم الشقة"],
@@ -321,11 +327,11 @@ export function canRequestVehicle(appointment: ClinicAppointment | undefined, ex
 
 /** أسباب جاهزة لإلغاء الموعد (ويمكن كتابة سبب آخر). */
 export const CANCEL_REASONS = [
-  "المريض لا يرغب في الذهاب",
-  "المريض غير موجود في الشقة",
+  "الضيف لا يرغب في الذهاب",
+  "الضيف غير موجود في الشقة",
   "أُلغي الموعد من المستشفى",
-  "ذهب المريض بوسيلة أخرى",
-  "حالة المريض لا تسمح بالنقل",
+  "ذهب الضيف بوسيلة أخرى",
+  "حالة الضيف لا تسمح بالنقل",
 ];
 
 /**
@@ -629,7 +635,7 @@ export function suggestJoinDispatched(
             appointmentId: item.appointment.id,
             plate: members[0].request.vehiclePlate!,
             groupId: members[0].request.groupId,
-            reason: `${pairReason(scores[0])} · السيارة في الطريق (${members.length} ${members.length === 1 ? "مريض" : "مرضى"})`,
+            reason: `${pairReason(scores[0])} · السيارة في الطريق (${members.length} ${members.length === 1 ? "ضيف" : "ضيوف"})`,
           },
         };
       }
@@ -715,17 +721,17 @@ export function buildDriverMessage(
   const sorted = [...trips].sort((a, b) => byTime(a.appointment, b.appointment));
   const returning = sorted[0]?.request.direction === "عودة";
   const ar: string[] = [
-    sorted.length > 1 ? `رحلة مجمّعة (${sorted.length} مرضى) — ${returning ? "عودة" : "ذهاب"}` : `رحلة جديدة — ${returning ? "عودة" : "ذهاب"}`,
+    sorted.length > 1 ? `رحلة مجمّعة (${sorted.length} ضيوف) — ${returning ? "عودة" : "ذهاب"}` : `رحلة جديدة — ${returning ? "عودة" : "ذهاب"}`,
     `السيارة: ${vehicle.plate}`,
   ];
   const en: string[] = [
-    sorted.length > 1 ? `Grouped trip (${sorted.length} patients) — ${returning ? "Return" : "Outbound"}` : `New trip — ${returning ? "Return" : "Outbound"}`,
+    sorted.length > 1 ? `Grouped trip (${sorted.length} guests) — ${returning ? "Return" : "Outbound"}` : `New trip — ${returning ? "Return" : "Outbound"}`,
     `Vehicle: ${vehicle.plate}`,
   ];
   sorted.forEach(({ appointment }, index) => {
     const destination = destinationLabels(appointment, hospitals);
     const prefix = sorted.length > 1 ? `${index + 1}) ` : "";
-    const rider = isNonMedical(appointment) ? { ar: "الراكب", en: "Passenger" } : { ar: "المريض", en: "Patient" };
+    const rider = isNonMedical(appointment) ? { ar: "الراكب", en: "Passenger" } : { ar: "الضيف", en: "Guest" };
     const needsAr = appointment.assistance.join("، ");
     const needsEn = appointment.assistance.map((need) => NEED_EN[need]).join(", ");
     const pickupAr = `مبنى ${appointment.buildingNumber}، شقة ${appointment.apartmentNumber}`;

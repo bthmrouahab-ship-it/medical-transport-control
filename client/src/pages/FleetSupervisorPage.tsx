@@ -296,7 +296,7 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
           </Panel>
 
           {(groups.length > 0 || joins.length > 0) && (
-            <Panel tone="violet" icon={Sparkles} title="اقتراحات جمع الرحلات" count={groups.length + joins.length} description="مرضى لنفس الوجهة أو وجهات متجاورة في نفس التوقيت">
+            <Panel tone="violet" icon={Sparkles} title="اقتراحات جمع الرحلات" count={groups.length + joins.length} description="ضيوف لنفس الوجهة أو وجهات متجاورة في نفس التوقيت">
               <div className="grid gap-4 p-4 sm:p-5 lg:grid-cols-2">
                 {groups.map((group) => {
                   const members = pending.filter((trip) => group.appointmentIds.includes(trip.appointment.id));
@@ -488,7 +488,7 @@ function ActiveTrip({ trips, phase, vehicle, driver, hospitals, onArrived }: {
           <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-50 text-blue-700"><Truck className="h-5 w-5" /></span>
           <div className="min-w-0">
             <p className="truncate font-semibold text-ink"><span dir="ltr">{plate}</span> · {driver}</p>
-            <p className="truncate text-xs text-slate-500">{trips[0].request.direction} إلى {destinations.join("، ")}{trips.length > 1 ? ` · ${trips.length} مرضى` : ""}</p>
+            <p className="truncate text-xs text-slate-500">{trips[0].request.direction} إلى {destinations.join("، ")}{trips.length > 1 ? ` · ${trips.length} ضيوف` : ""}</p>
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">

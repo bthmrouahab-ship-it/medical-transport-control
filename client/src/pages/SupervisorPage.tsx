@@ -42,8 +42,8 @@ import { useHospitals, useLiveVehicles, useNow } from "@/lib/useShared";
 
 /** حالات الطلب قبل استلام المريض (السيارة لم تصل أو لم تُرسل بعد). */
 const BEFORE_PICKUP: VehicleRequest["status"][] = ["بانتظار التوزيع", "تم إرسال السيارة", "وصلت السيارة"];
-const OUTBOUND_STEPS = ["طُلبت السيارة", "أُرسلت", "وصلت السيارة", "استُلم المريض", "الوجهة"];
-const RETURN_STEPS = ["طُلبت العودة", "أُرسلت", "وصلت السيارة", "استُلم المريض"];
+const OUTBOUND_STEPS = ["طُلبت السيارة", "أُرسلت", "وصلت السيارة", "استُلم الضيف", "الوجهة"];
+const RETURN_STEPS = ["طُلبت العودة", "أُرسلت", "وصلت السيارة", "استُلم الضيف"];
 
 type Row = { appointment: ClinicAppointment; request?: VehicleRequest };
 type Stage = "request" | "expired" | "progress" | "atAppointment";
@@ -168,7 +168,7 @@ export function SupervisorHome({ uid, appointments, requests, onRequest, onUpdat
 
       <div className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4 lg:gap-4">
         <Stat icon={BellRing} tone="amber" label="تحتاج طلب سيارة" value={toRequest.length} hint={matchCount ? `${matchCount} لنفس وجهة رحلة قائمة` : `حتى ${REQUEST_GRACE_MINUTES} د بعد الموعد`} />
-        <Stat icon={Truck} tone="blue" label="طلبات جارية" value={inProgress.length} hint="حتى استلام المريض" />
+        <Stat icon={Truck} tone="blue" label="طلبات جارية" value={inProgress.length} hint="حتى استلام الضيف" />
         <Stat icon={Hospital} tone="cyan" label="في الموعد" value={atAppointment.length} hint="يمكن طلب العودة" />
         <Stat icon={CheckCircle2} tone="green" label="مكتملة اليوم" value={completed} />
       </div>
@@ -205,7 +205,7 @@ export function SupervisorHome({ uid, appointments, requests, onRequest, onUpdat
         </Panel>
 
         {atAppointment.length > 0 && (
-          <Panel tone="cyan" icon={Hospital} title="مرضى في الموعد" count={atAppointment.length} description="وصلوا إلى الوجهة · عند انتهاء الموعد يطلب أي مشرف سيارة العودة">
+          <Panel tone="cyan" icon={Hospital} title="ضيوف في الموعد" count={atAppointment.length} description="وصلوا إلى الوجهة · عند انتهاء الموعد يطلب أي مشرف سيارة العودة">
             <div className="divide-y divide-slate-100">
               {atAppointment.map(({ appointment, request }) => (
                 <AtAppointmentRow
@@ -404,7 +404,7 @@ function CancelDialog({ appointment, request, onClose, onConfirm }: {
       </fieldset>
       <label className="mt-4 block">
         <span className={labelClass}>{other ? "اكتب السبب" : "تفاصيل (اختياري)"}{other && <span className="text-red-600"> *</span>}</span>
-        <textarea value={details} onChange={(event) => setDetails(event.target.value)} maxLength={200} rows={2} placeholder={other ? "مثال: المريض في المستشفى منذ أمس" : "أي ملاحظة لمشرف السيارات والعيادة"} className={cx(inputClass, "h-auto py-2.5")} />
+        <textarea value={details} onChange={(event) => setDetails(event.target.value)} maxLength={200} rows={2} placeholder={other ? "مثال: الضيف في المستشفى منذ أمس" : "أي ملاحظة لمشرف السيارات والعيادة"} className={cx(inputClass, "h-auto py-2.5")} />
       </label>
       {!valid && preset && <p className="mt-2 text-xs text-red-600">اكتب السبب (3 أحرف على الأقل)</p>}
     </Modal>
@@ -515,7 +515,7 @@ function ProgressRow({ appointment, request, day, driver, phase, onUpdateRequest
   const next = request.status === "تم إرسال السيارة"
     ? { label: "وصلت السيارة", status: "وصلت السيارة" as const }
     : request.status === "وصلت السيارة"
-      ? { label: "تم استلام المريض", status: "تم استلام المريض" as const }
+      ? { label: "تم استلام الضيف", status: "تم استلام المريض" as const }
       : null;
   const canCancel = request.status === "بانتظار التوزيع" || request.status === "تم إرسال السيارة";
   return (
@@ -564,7 +564,7 @@ function AtAppointmentRow({ appointment, request, day, driver, phase, onReturn }
               ? <Badge tone="blue" icon={Timer}>في الطريق · الوصول المتوقع <span dir="ltr" className="tabular">{timeLabel(phase.etaAt)}</span></Badge>
               : phase.kind === "arrived" && phase.at
                 ? <Badge tone="green" icon={CheckCircle2}>وصل إلى الوجهة <span dir="ltr" className="tabular">{timeLabel(phase.at)}</span></Badge>
-                : <Badge tone="cyan" icon={CheckCircle2}>تم استلام المريض</Badge>}
+                : <Badge tone="cyan" icon={CheckCircle2}>تم استلام الضيف</Badge>}
           </div>
         </div>
       </div>

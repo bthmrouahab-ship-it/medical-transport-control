@@ -8,6 +8,7 @@ import {
   localDateString,
   migrateAppointment,
   migrateRequest,
+  statusText,
   whatsappLink,
   type ClinicAppointment,
   type Vehicle,
@@ -284,7 +285,7 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
         const appointmentRequests = requests.filter((request) => request.appointmentId === appointment.id);
         return {
           "رقم الموعد": appointment.id,
-          "المريض": appointment.patientName,
+          "الضيف": appointment.patientName,
           "رقم الموبايل": appointment.mobile,
           "الوجهة": appointment.clinic,
           "رقم المبنى": appointment.buildingNumber,
@@ -292,8 +293,8 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
           "تاريخ الموعد": appointment.appointmentDate,
           "وقت الموعد": appointment.appointmentAt,
           "نوع الرحلة": appointment.kind,
-          "احتياجات المريض": appointment.assistance.join("، ") || "لا يحتاج",
-          "حالة الموعد": appointment.status,
+          "احتياجات الضيف": appointment.assistance.join("، ") || "لا يحتاج",
+          "حالة الموعد": statusText(appointment.status),
           "طلبات السيارات": appointmentRequests.map((request) => `${request.direction}: ${request.vehiclePlate ?? "بانتظار التوزيع"} - ${request.status}`).join(" | "),
         };
       });
@@ -322,7 +323,7 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
         ? { ...appointment, status: request.direction === "عودة" ? "مكتملة" : "تم استلام المريض" }
         : appointment));
     }
-    toast.success(status === "وصلت السيارة" ? "تم تسجيل وصول السيارة" : "تم تأكيد استلام المريض", {
+    toast.success(status === "وصلت السيارة" ? "تم تسجيل وصول السيارة" : "تم تأكيد استلام الضيف", {
       description: "etaAt" in pickup && pickup.etaAt ? `الوصول المتوقع إلى الوجهة ${timeLabel(new Date(pickup.etaAt))}` : undefined,
     });
   }

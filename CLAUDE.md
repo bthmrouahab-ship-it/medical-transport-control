@@ -4,6 +4,7 @@
 - **النشر من جهاز المستخدم (Windows):** `git checkout main` ← `git pull` ← `pnpm install` ← `pnpm run deploy`، فيُنشأ `dist/althumama-hostinger.zip`، ثم يُرفع إلى `public_html` من File Manager ويُختار Extract. يجب كتابة `run` لأن `pnpm deploy` وحده أمر مدمج في pnpm. بيئة Claude السحابية لا تستطيع النشر ولا الوصول إلى الموقع.
 - **الإعداد الأول (مرة واحدة):** إنشاء قاعدة MySQL في hPanel، ثم فتح `/api/setup.php` وإدخال بياناتها وكلمة مرور المدير `admin`. يُحفظ الإعداد في `althumama-config.php` خارج `public_html`، وتتوقف صفحة الإعداد بعدها. يلزم PHP 8.1 أو أحدث.
 - المستخدم يتحدث العربية؛ رُدّ بالعربية.
+- **المصطلح:** في الواجهة والرسائل والتصدير تُستخدم كلمة «الضيف» (Guest) لا «المريض». قيمة الحالة المخزنة «تم استلام المريض» تبقى كما هي في البيانات والخادم، وتُعرض «تم استلام الضيف» عبر `statusText` في `shared/transport.ts`.
 
 ## التقنية
 - React وVite وTailwind وTypeScript (الواجهة في `client/`، والمنطق المشترك في `shared/`).

@@ -27,7 +27,7 @@ describe("statistics report", () => {
   it("shows who did each step of a trip and when", () => {
     const section = tripsSection([appointment], [outbound], activity, "2026-09-27", "2026-09-27");
     const row = Object.fromEntries(section.columns.map((column, index) => [column, section.rows[0][index]]));
-    expect(row["المريض"]).toBe("مريض تجربة");
+    expect(row["الضيف"]).toBe("مريض تجربة");
     expect(row["طلب الذهاب"]).toMatch(/مشرف المبنى 17$/);
     expect(row["إرسال سيارة الذهاب"]).toMatch(/مشرف الحركة$/);
     expect(row["سيارة الذهاب"]).toBe("943438 · خرم");
