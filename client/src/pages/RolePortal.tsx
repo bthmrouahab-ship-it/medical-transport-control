@@ -367,21 +367,35 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
   }
 
   /** إرسال سيارة لطلب أو أكثر، أو ضمّ طلب إلى رحلة سيارة في الطريق (joinRequestIds). */
-  function dispatch(requestIds: string[], vehicle: Vehicle, joinRequestIds: string[] = []) {
+  /**
+   * إرسال سيارة أو أكثر في حفظ واحد (التوزيع التلقائي يرسل عدة سيارات معًا). joinRequestIds: طلبات في الطريق
+   * تنضم إليها الرحلة الجديدة. يعيد رسالة كل سائق لإرسالها عبر واتساب.
+   */
+  function dispatchMany(items: { requestIds: string[]; vehicle: Vehicle; joinRequestIds?: string[] }[]) {
     const sentAt = timeLabel(new Date());
-    const joined = requests.filter((request) => joinRequestIds.includes(request.id));
-    const allIds = [...requestIds, ...joinRequestIds];
-    const groupId = allIds.length > 1 ? joined.find((request) => request.groupId)?.groupId ?? `GRP-${Date.now()}` : undefined;
-    const next = requests.map((request) => requestIds.includes(request.id)
-      ? { ...request, vehiclePlate: vehicle.plate, driver: vehicle.driver, status: "تم إرسال السيارة" as const, groupId, notificationSentAt: sentAt }
-      : joinRequestIds.includes(request.id) ? { ...request, groupId } : request);
+    let next = requests;
+    const stamp = Date.now();
+    items.forEach(({ requestIds, vehicle, joinRequestIds = [] }, index) => {
+      const joined = next.filter((request) => joinRequestIds.includes(request.id));
+      const groupId = requestIds.length + joinRequestIds.length > 1 ? joined.find((request) => request.groupId)?.groupId ?? `GRP-${stamp}-${index}` : undefined;
+      next = next.map((request) => requestIds.includes(request.id)
+        ? { ...request, vehiclePlate: vehicle.plate, driver: vehicle.driver, status: "تم إرسال السيارة" as const, groupId, notificationSentAt: sentAt }
+        : joinRequestIds.includes(request.id) ? { ...request, groupId } : request);
+    });
     updateRequests(next);
-    const trips = next
-      .filter((request) => allIds.includes(request.id))
-      .map((request) => ({ request, appointment: appointments.find((item) => item.id === request.appointmentId)! }))
-      .filter((trip) => trip.appointment);
-    const message = buildDriverMessage(trips, vehicle, hospitals);
-    toast.success(allIds.length > 1 ? `رحلة مجمّعة (${allIds.length}) · السيارة ${vehicle.plate}` : `تم إرسال السيارة ${vehicle.plate}`, {
+    return items.map(({ requestIds, vehicle, joinRequestIds = [] }) => {
+      const allIds = [...requestIds, ...joinRequestIds];
+      const trips = next
+        .filter((request) => allIds.includes(request.id))
+        .map((request) => ({ request, appointment: appointments.find((item) => item.id === request.appointmentId)! }))
+        .filter((trip) => trip.appointment);
+      return { vehicle, count: allIds.length, message: buildDriverMessage(trips, vehicle, hospitals) };
+    });
+  }
+
+  function dispatch(requestIds: string[], vehicle: Vehicle, joinRequestIds: string[] = []) {
+    const [{ count, message }] = dispatchMany([{ requestIds, vehicle, joinRequestIds }]);
+    toast.success(count > 1 ? `رحلة مجمّعة (${count}) · السيارة ${vehicle.plate}` : `تم إرسال السيارة ${vehicle.plate}`, {
       action: vehicle.phone ? { label: "واتساب السائق", onClick: () => window.open(whatsappLink(vehicle.phone, message), "_blank", "noopener") } : undefined,
       duration: 10000,
     });
@@ -479,6 +493,7 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
             onManager={onManager}
             onUpdate={updateFleet}
             onDispatch={dispatch}
+            onDispatchMany={dispatchMany}
             onArrived={markArrived}
             onExport={exportStats}
             date={selectedDate}
