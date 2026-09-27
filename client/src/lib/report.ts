@@ -1,5 +1,5 @@
 import type { StatsSummary } from "@shared/stats";
-import type { ClinicAppointment, VehicleRequest } from "@shared/transport";
+import { statusText, type ClinicAppointment, type VehicleRequest } from "@shared/transport";
 import { ACTIVITY_ROLES, ACTIVITY_TYPES, DETAIL_LABELS, activityDate, activityTime, type ActivityItem } from "./activity";
 
 /**
@@ -116,7 +116,7 @@ export function tripsSection(appointments: ClinicAppointment[], requests: Vehicl
         appointment.clinic,
         appointment.category === "غير طبية" ? "غير طبية" : appointment.kind,
         appointment.assistance.join("، "),
-        appointment.status,
+        statusText(appointment.status),
         who(find("appointment.create")),
         step("request.create", "ذهاب", out?.createdAt ?? ""),
         step("request.dispatch", "ذهاب", out?.notificationSentAt ?? ""),
@@ -137,8 +137,8 @@ export function tripsSection(appointments: ClinicAppointment[], requests: Vehicl
     sheet: "الرحلات",
     note: "كل مرحلة: الوقت ثم من نفّذها",
     columns: [
-      "التاريخ", "وقت الموعد", "المريض", "المبنى", "الشقة", "الموبايل", "الوجهة", "نوع الرحلة", "الاحتياجات", "حالة الموعد", "إضافة الموعد",
-      "طلب الذهاب", "إرسال سيارة الذهاب", "سيارة الذهاب", "وصول السيارة للاستلام", "استلام المريض", "الوصول إلى الوجهة",
+      "التاريخ", "وقت الموعد", "الضيف", "المبنى", "الشقة", "الموبايل", "الوجهة", "نوع الرحلة", "الاحتياجات", "حالة الموعد", "إضافة الموعد",
+      "طلب الذهاب", "إرسال سيارة الذهاب", "سيارة الذهاب", "وصول السيارة للاستلام", "استلام الضيف", "الوصول إلى الوجهة",
       "طلب العودة", "إرسال سيارة العودة", "سيارة العودة", "استلام العودة", "الوصول إلى المجمع", "إلغاء الموعد",
     ],
     rows,

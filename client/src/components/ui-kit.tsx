@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState, type ComponentType, type ReactNode } from "react";
 import { X } from "lucide-react";
-import { localDateString, type ClinicAppointment } from "@shared/transport";
+import { localDateString, statusText, type ClinicAppointment } from "@shared/transport";
 
 /**
  * مكونات الواجهة الموحدة: كل الصفحات تستخدمها حتى يبقى الشكل متسقًا.
@@ -171,7 +171,7 @@ export const STATUS_TONE: Record<string, Tone> = {
 };
 
 export function StatusBadge({ status, label }: { status: string; label?: string }) {
-  return <Badge tone={STATUS_TONE[status] ?? "neutral"}>{label ?? status}</Badge>;
+  return <Badge tone={STATUS_TONE[status] ?? "neutral"}>{label ?? statusText(status)}</Badge>;
 }
 
 export function EmptyState({ icon: IconComponent, title, hint }: { icon: Icon; title: string; hint?: ReactNode }) {

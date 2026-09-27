@@ -15,7 +15,7 @@ const ACTIVITY_ROLE_LABELS = [
 ];
 
 const APPOINTMENT_FIELD_LABELS = [
-    'patientName' => 'اسم المريض',
+    'patientName' => 'اسم الضيف',
     'clinic' => 'الوجهة',
     'buildingNumber' => 'المبنى',
     'apartmentNumber' => 'الشقة',
@@ -174,7 +174,8 @@ function describe_write(PDO $pdo, string $col, string $id, ?array $before, ?arra
                 return ['request', 'request.cancel', "إلغاء طلب السيارة ($direction) لـ $who" . ($plate ? " وكانت السيارة $plate قد أُرسلت" : ''), $details];
             }
             $status = $after['status'] ?? '';
-            $details['status'] = $status;
+            // «تم استلام المريض» تُعرض «تم استلام الضيف»
+            $details['status'] = str_replace('المريض', 'الضيف', $status);
             if (in_array('status', $changed, true)) {
                 if ($status === 'تم إرسال السيارة') {
                     $group = !empty($after['groupId']) ? ' ضمن رحلة مجمّعة' : '';

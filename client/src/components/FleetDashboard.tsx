@@ -71,8 +71,8 @@ export default function FleetDashboard({ canEdit = false, alerts = false, actor 
     const { from, to, destination } = tripEndpoints(appointment, request.direction, hospitals);
     const who = `${request.vehiclePlate ?? ""} · ${driverOf(request.vehiclePlate, request.driver)}`;
     const label = phase.kind === "toPickup"
-      ? `${who}: في الطريق لاستلام مريض (${request.direction} إلى ${destination})`
-      : `${who}: مع المريض إلى ${destination} · الوصول المتوقع ${timeLabel(phase.etaAt)}`;
+      ? `${who}: في الطريق لاستلام ضيف (${request.direction} إلى ${destination})`
+      : `${who}: مع الضيف إلى ${destination} · الوصول المتوقع ${timeLabel(phase.etaAt)}`;
     return [{ id: request.id, plate: request.vehiclePlate, phase: phase.kind, from, to, label }];
   }), [requests, appointments, hospitals, now, freshness]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -98,7 +98,7 @@ export default function FleetDashboard({ canEdit = false, alerts = false, actor 
       const trip = trips.find((item) => item.plate === vehicle.plate && item.phase === "toDestination") ?? trips.find((item) => item.plate === vehicle.plate);
       const phase = trip ? tripPhase(requests.find((request) => request.id === trip.id)!, now, isLive(vehicle.plate)) : null;
       const status = !vehicle.available ? "خارج الخدمة"
-        : phase?.kind === "toDestination" ? `مع المريض · تصل ${timeLabel(phase.etaAt)}`
+        : phase?.kind === "toDestination" ? `مع الضيف · تصل ${timeLabel(phase.etaAt)}`
           : phase?.kind === "toPickup" ? "في الطريق للاستلام" : "متاحة";
       const location = mapLocations.find((item) => item.plate === vehicle.plate);
       return { vehicle, fresh, status, location, rank: (fresh?.state === "live" ? 0 : 2) + (busyPlates.has(vehicle.plate) ? 0 : 1) };
@@ -122,7 +122,7 @@ export default function FleetDashboard({ canEdit = false, alerts = false, actor 
                 <li className="flex items-center gap-2"><span className="h-3 w-3 rounded-full" style={{ background: MAP_COLORS.origin }} /> مجمع الثمامة</li>
                 <li className="flex items-center gap-2"><span className="h-3 w-3 rounded-full opacity-75" style={{ background: MAP_COLORS.hospital }} /> مستشفى (الحجم حسب الرحلات)</li>
                 <li className="flex items-center gap-2"><span className="w-5 border-t-[3px] border-dashed" style={{ borderColor: MAP_COLORS.toPickup }} /> في الطريق للاستلام</li>
-                <li className="flex items-center gap-2"><span className="w-5 border-t-[3px]" style={{ borderColor: MAP_COLORS.toDestination }} /> مع المريض إلى الوجهة</li>
+                <li className="flex items-center gap-2"><span className="w-5 border-t-[3px]" style={{ borderColor: MAP_COLORS.toDestination }} /> مع الضيف إلى الوجهة</li>
                 <li className="flex items-center gap-2"><Dot tone="green" /> GPS مباشر</li>
                 <li className="flex items-center gap-2"><Dot tone="amber" /> آخر موقع قبل دقائق</li>
                 <li className="flex items-center gap-2"><Dot /> غير متصل</li>

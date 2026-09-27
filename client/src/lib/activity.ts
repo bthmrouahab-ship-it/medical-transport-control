@@ -36,7 +36,7 @@ export const ACTIVITY_ROLES: Record<string, string> = {
 
 /** أسماء بيانات العملية كما تظهر في الجداول والتصدير. */
 export const DETAIL_LABELS: [string, string][] = [
-  ["patient", "المريض"],
+  ["patient", "الضيف"],
   ["building", "المبنى"],
   ["apartment", "الشقة"],
   ["destination", "الوجهة"],
