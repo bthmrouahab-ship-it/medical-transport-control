@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import {
   CheckCircle2,
@@ -21,6 +21,7 @@ import {
 import {
   DEFAULT_VEHICLES,
   VEHICLE_KINDS,
+  localDateString,
   migrateRequest,
   validateVehicle,
   vehicleHasActiveTrip,
@@ -36,9 +37,10 @@ import {
   type UserRole,
 } from "@shared/users";
 import { hasSharedState, loadState, saveState, subscribeState } from "@/lib/appStore";
-import { appendAudit } from "@/lib/audit";
 import AppHeader from "@/components/AppHeader";
-import { AuditTimeline, Badge, EmptyState, Panel, PageHeader, Segmented, btn, cx, inputClass, labelClass } from "@/components/ui-kit";
+import ActivityLog from "@/components/ActivityLog";
+import { dayRange } from "@/lib/activity";
+import { Badge, EmptyState, Panel, PageHeader, Segmented, addDays, btn, cx, inputClass, labelClass } from "@/components/ui-kit";
 import { HISTORY_SEED } from "@shared/historySeed";
 import { syncHospitals, type Hospital } from "@shared/hospitals";
 import { authErrorMessage, createUser, resetUserPassword, updateUser, watchUsers } from "@/lib/auth";
@@ -62,7 +64,6 @@ export default function AdminPanel({ profile, onLogout, onChangePassword }: {
   const [tab, setTab] = useState<Tab>("users");
   const [vehicles, setVehicles] = useState<Vehicle[]>(() => loadState("fox_fleet", DEFAULT_VEHICLES));
   const [requests, setRequests] = useState<VehicleRequest[]>(loadRequests);
-  const [audit, setAudit] = useState<string[]>(() => loadState("fox_audit", []));
 
   useEffect(() => {
     // البيانات الأولية: السيارات والإحصائيات السابقة، وتحديث مواقع المستشفيات غير المؤكدة من الدليل.
@@ -76,22 +77,17 @@ export default function AdminPanel({ profile, onLogout, onChangePassword }: {
     const refresh = (key: string) => {
       if (key === "fox_fleet") setVehicles(loadState("fox_fleet", DEFAULT_VEHICLES));
       else if (key === "fox_requests") setRequests(loadRequests());
-      else if (key === "fox_audit") setAudit(loadState("fox_audit", []));
     };
     const stop = subscribeState(refresh);
     // تغييرات وصلت بين أول عرض للصفحة وبدء الاشتراك
-    ["fox_fleet", "fox_requests", "fox_audit"].forEach(refresh);
+    ["fox_fleet", "fox_requests"].forEach(refresh);
     return stop;
   }, []);
 
-  function log(message: string) {
-    setAudit(appendAudit(message, profile.displayName));
-  }
-
-  function updateVehicles(next: Vehicle[], message: string) {
+  // كل عملية يسجّلها الخادم في سجل العمليات مع اسم المدير ووقتها
+  function updateVehicles(next: Vehicle[]) {
     setVehicles(next);
     saveState("fox_fleet", next);
-    log(message);
   }
 
   const tabs: { value: Tab; label: string; icon: typeof UsersRound }[] = [
@@ -110,16 +106,9 @@ export default function AdminPanel({ profile, onLogout, onChangePassword }: {
           <Segmented label="أقسام لوحة المدير" value={tab} onChange={setTab} options={tabs} />
         </nav>
         {tab === "dashboard" && <Suspense fallback={<div className="flex min-h-64 items-center justify-center text-slate-400"><Loader2 className="h-6 w-6 animate-spin" /><span className="sr-only">جارٍ التحميل</span></div>}><FleetDashboard canEdit actor={profile.displayName} /></Suspense>}
-        {tab === "users" && <UsersTab profile={profile} vehicles={vehicles} onLog={log} />}
+        {tab === "users" && <UsersTab profile={profile} vehicles={vehicles} />}
         {tab === "vehicles" && <VehiclesTab vehicles={vehicles} requests={requests} onChange={updateVehicles} />}
-        {tab === "audit" && (
-          <>
-            <PageHeader title="سجل العمليات" subtitle="آخر 50 عملية في النظام ومن نفّذها" />
-            <Panel icon={ClipboardList} title="العمليات" count={audit.length}>
-              {audit.length ? <AuditTimeline items={audit} className="max-h-[65vh]" /> : <EmptyState icon={ClipboardList} title="لا توجد عمليات مسجلة بعد" />}
-            </Panel>
-          </>
-        )}
+        {tab === "audit" && <AuditTab />}
       </main>
     </div>
   );
@@ -127,7 +116,7 @@ export default function AdminPanel({ profile, onLogout, onChangePassword }: {
 
 // ————— المستخدمون —————
 
-function UsersTab({ profile, vehicles, onLog }: { profile: UserProfile; vehicles: Vehicle[]; onLog: (message: string) => void }) {
+function UsersTab({ profile, vehicles }: { profile: UserProfile; vehicles: Vehicle[] }) {
   const [users, setUsers] = useState<UserProfile[] | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [issued, setIssued] = useState<{ username: string; password: string } | null>(null);
@@ -135,12 +124,11 @@ function UsersTab({ profile, vehicles, onLog }: { profile: UserProfile; vehicles
 
   useEffect(() => watchUsers(setUsers, (error) => toast.error(authErrorMessage(error, "تعذر تحميل المستخدمين"))), []);
 
-  async function run(uid: string, action: () => Promise<void>, success: string, logMessage: string) {
+  async function run(uid: string, action: () => Promise<void>, success: string) {
     setBusyUid(uid);
     try {
       await action();
       toast.success(success);
-      onLog(logMessage);
     } catch (error) {
       toast.error(authErrorMessage(error));
     } finally {
@@ -154,7 +142,7 @@ function UsersTab({ profile, vehicles, onLog }: { profile: UserProfile; vehicles
     run(user.uid, async () => {
       await resetUserPassword(user, password);
       setIssued({ username: user.username, password });
-    }, "تم إصدار كلمة مرور مؤقتة", `إعادة تعيين كلمة مرور المستخدم ${user.username}`);
+    }, "تم إصدار كلمة مرور مؤقتة");
   }
 
   const activeCount = users?.filter((user) => user.active).length ?? 0;
@@ -173,7 +161,6 @@ function UsersTab({ profile, vehicles, onLog }: { profile: UserProfile; vehicles
           onCancel={() => setShowForm(false)}
           onCreate={async (input) => {
             await createUser(input, profile.username);
-            onLog(`إضافة المستخدم ${input.username} بدور ${ROLE_LABELS[input.role]}`);
             setShowForm(false);
             setIssued({ username: input.username.trim().toLowerCase(), password: input.password });
             toast.success("تم إنشاء المستخدم");
@@ -202,7 +189,7 @@ function UsersTab({ profile, vehicles, onLog }: { profile: UserProfile; vehicles
                     <button disabled={busy} onClick={() => {
                       const name = window.prompt("الاسم الظاهر الجديد", user.displayName);
                       if (name === null || name.trim() === user.displayName) return;
-                      run(user.uid, () => updateUser(user.uid, { displayName: name }), "تم تحديث الاسم", `تغيير اسم المستخدم ${user.username}`);
+                      run(user.uid, () => updateUser(user.uid, { displayName: name }), "تم تحديث الاسم");
                     }} className="mt-0.5 inline-flex items-center gap-1 text-xs text-slate-500 hover:text-brand-600"><Pencil className="h-3 w-3" /> تعديل الاسم</button>
                   </div>
                 </div>
@@ -214,14 +201,14 @@ function UsersTab({ profile, vehicles, onLog }: { profile: UserProfile; vehicles
                       toast.error("أضف سيارة أولًا لربطها بالسائق");
                       return;
                     }
-                    run(user.uid, () => updateUser(user.uid, vehiclePlate ? { role, vehiclePlate } : { role }), "تم تغيير الدور", `تغيير دور ${user.username} إلى ${ROLE_LABELS[role]}`);
+                    run(user.uid, () => updateUser(user.uid, vehiclePlate ? { role, vehiclePlate } : { role }), "تم تغيير الدور");
                   }} className={cx(inputClass, "h-10 font-medium")}>
                     {USER_ROLES.map((role) => <option key={role} value={role}>{ROLE_LABELS[role]}</option>)}
                   </select>
                   {user.role === "driver" && (
                     <select aria-label="سيارة السائق" disabled={busy} value={user.vehiclePlate ?? ""} onChange={(event) => {
                       const vehiclePlate = event.target.value;
-                      run(user.uid, () => updateUser(user.uid, { vehiclePlate }), "تم ربط السائق بالسيارة", `ربط السائق ${user.username} بالسيارة ${vehiclePlate}`);
+                      run(user.uid, () => updateUser(user.uid, { vehiclePlate }), "تم ربط السائق بالسيارة");
                     }} className={cx(inputClass, "h-10")}>
                       {!user.vehiclePlate && <option value="">اختر السيارة</option>}
                       {vehicles.map((vehicle) => <option key={vehicle.plate} value={vehicle.plate}>{vehicle.plate} · {vehicle.driver}</option>)}
@@ -232,7 +219,7 @@ function UsersTab({ profile, vehicles, onLog }: { profile: UserProfile; vehicles
                   <button disabled={isSelf || busy} onClick={() => resetPassword(user)} className={btn("secondary", "sm")}><KeyRound className="h-3.5 w-3.5" /> كلمة مرور جديدة</button>
                   <button disabled={isSelf || busy} onClick={() => {
                     if (user.active && !window.confirm(`إيقاف حساب ${user.username}؟ سيُمنع من الدخول فورًا.`)) return;
-                    run(user.uid, () => updateUser(user.uid, { active: !user.active }), user.active ? "تم إيقاف الحساب" : "تم تفعيل الحساب", `${user.active ? "إيقاف" : "تفعيل"} المستخدم ${user.username}`);
+                    run(user.uid, () => updateUser(user.uid, { active: !user.active }), user.active ? "تم إيقاف الحساب" : "تم تفعيل الحساب");
                   }} className={btn(user.active ? "danger" : "success", "sm")}><Power className="h-3.5 w-3.5" /> {user.active ? "إيقاف" : "تفعيل"}</button>
                 </div>
               </div>
@@ -320,7 +307,7 @@ type VehicleDraft = { plate: string; driver: string; phone: string; kind: Vehicl
 function VehiclesTab({ vehicles, requests, onChange }: {
   vehicles: Vehicle[];
   requests: VehicleRequest[];
-  onChange: (next: Vehicle[], message: string) => void;
+  onChange: (next: Vehicle[]) => void;
 }) {
   // null = لا يوجد نموذج مفتوح، "" = سيارة جديدة، غير ذلك = رقم السيارة قيد التعديل
   const [editing, setEditing] = useState<string | null>(null);
@@ -338,10 +325,10 @@ function VehiclesTab({ vehicles, requests, onChange }: {
       return;
     }
     if (original) {
-      onChange(vehicles.map((vehicle) => vehicle.plate === original.plate ? { ...vehicle, ...result.vehicle } : vehicle), `تعديل بيانات السيارة ${result.vehicle.plate}`);
+      onChange(vehicles.map((vehicle) => vehicle.plate === original.plate ? { ...vehicle, ...result.vehicle } : vehicle));
       toast.success("تم تحديث بيانات السيارة");
     } else {
-      onChange([...vehicles, { ...result.vehicle, available: true }], `إضافة السيارة ${result.vehicle.plate}`);
+      onChange([...vehicles, { ...result.vehicle, available: true }]);
       toast.success("تمت إضافة السيارة");
     }
     setEditing(null);
@@ -353,7 +340,7 @@ function VehiclesTab({ vehicles, requests, onChange }: {
       return;
     }
     if (!window.confirm(`حذف السيارة ${vehicle.plate} (${vehicle.driver})؟`)) return;
-    onChange(vehicles.filter((item) => item.plate !== vehicle.plate), `حذف السيارة ${vehicle.plate}`);
+    onChange(vehicles.filter((item) => item.plate !== vehicle.plate));
     toast.success("تم حذف السيارة");
   }
 
@@ -368,7 +355,7 @@ function VehiclesTab({ vehicles, requests, onChange }: {
       {missingSeed.length > 0 && (
         <div className="mb-6 flex flex-col gap-3 rounded-2xl bg-blue-50 p-4 text-sm text-blue-900 ring-1 ring-inset ring-blue-200 sm:flex-row sm:items-center sm:justify-between">
           <span className="flex items-start gap-2"><Info className="mt-0.5 h-4 w-4 shrink-0" /><span><b>{missingSeed.length}</b> سيارة من ملف السائقين غير مضافة: <span dir="ltr">{missingSeed.map((vehicle) => vehicle.plate).join("، ")}</span></span></span>
-          <button onClick={() => onChange([...vehicles, ...missingSeed], `إضافة ${missingSeed.length} سيارة من ملف السائقين`)} className={btn("dark", "sm")}>إضافة الكل</button>
+          <button onClick={() => onChange([...vehicles, ...missingSeed])} className={btn("dark", "sm")}>إضافة الكل</button>
         </div>
       )}
       {editing === "" && <VehicleForm onSave={save} onCancel={() => setEditing(null)} />}
@@ -432,4 +419,29 @@ function VehicleForm({ initial, onSave, onCancel }: { initial?: Vehicle; onSave:
   return initial
     ? <div className="rounded-xl bg-white ring-1 ring-slate-200">{form}</div>
     : <Panel tone="brand" icon={Plus} title="سيارة جديدة" className="mb-6">{form}</Panel>;
+}
+
+// ————— سجل العمليات —————
+
+type AuditPeriod = "today" | "7d" | "30d" | "all";
+
+/** كل العمليات في النظام مع من نفّذها ووقتها (يسجّلها الخادم)، مع التصدير. */
+function AuditTab() {
+  const [period, setPeriod] = useState<AuditPeriod>("today");
+  const range = useMemo(() => {
+    const today = localDateString();
+    if (period === "all") return {};
+    return dayRange(period === "today" ? today : addDays(today, period === "7d" ? -6 : -29), today);
+  }, [period]);
+  const labels: Record<AuditPeriod, string> = { today: "اليوم", "7d": "آخر 7 أيام", "30d": "آخر 30 يومًا", all: "كل الفترات" };
+  return (
+    <>
+      <PageHeader
+        title="سجل العمليات"
+        subtitle="كل عملية في النظام مع اسم من نفّذها ووقتها، يسجّلها الخادم ولا يمكن تعديلها"
+        actions={<Segmented label="الفترة" value={period} onChange={setPeriod} options={(Object.keys(labels) as AuditPeriod[]).map((value) => ({ value, label: labels[value] }))} />}
+      />
+      <ActivityLog since={range.since} until={range.until} periodLabel={labels[period]} />
+    </>
+  );
 }

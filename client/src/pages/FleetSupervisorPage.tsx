@@ -20,7 +20,6 @@ import {
   Sparkles,
   Timer,
   Truck,
-  Users,
 } from "lucide-react";
 import {
   appointmentPickupLabel,
@@ -41,7 +40,6 @@ import {
 import type { Hospital } from "@shared/hospitals";
 import { arrivalsOn, tripEndpoints, tripPhase, vehicleAvailability, type TripPhase } from "@shared/trips";
 import {
-  AuditTimeline,
   Badge,
   DateChooser,
   Dot,
@@ -62,6 +60,7 @@ import {
   timeLabel,
 } from "@/components/ui-kit";
 import NonMedicalTripForm from "./NonMedicalTripForm";
+import { RecentActivity } from "@/components/ActivityLog";
 import { useHospitals, useLiveVehicles, useNow } from "@/lib/useShared";
 import { NOTIFY_KEY, deviceNotificationsOn, useArrivalAlerts, useCancellationAlerts } from "@/lib/arrivalAlerts";
 
@@ -80,11 +79,10 @@ function groupPhase(phases: TripPhase[]): TripPhase {
 
 const minutesText = (minutes: number) => (minutes <= 1 ? "دقيقة" : minutes <= 10 ? `${minutes} دقائق` : `${minutes} دقيقة`);
 
-export function FleetSupervisorPage({ vehicles, appointments, requests, audit, date, onDateChange, onManager, onUpdate, onDispatch, onArrived, onExport, onAddTrip }: {
+export function FleetSupervisorPage({ vehicles, appointments, requests, date, onDateChange, onManager, onUpdate, onDispatch, onArrived, onExport, onAddTrip }: {
   vehicles: Vehicle[];
   appointments: ClinicAppointment[];
   requests: VehicleRequest[];
-  audit: string[];
   date: string;
   onDateChange: (date: string) => void;
   onManager: () => void;
@@ -444,10 +442,8 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, audit, d
             </ul>
           </Panel>
 
-          <Panel icon={History} title="سجل العمليات" count={audit.length}>
-            {audit.length ? (
-              <AuditTimeline items={audit} className="max-h-72" />
-            ) : <EmptyState icon={Users} title="لا توجد عمليات بعد" />}
+          <Panel icon={History} title="آخر العمليات" description="السجل الكامل في الخريطة والإحصائيات">
+            <RecentActivity limit={15} />
           </Panel>
         </aside>
       </div>

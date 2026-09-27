@@ -25,7 +25,6 @@ import { FleetSupervisorPage } from "./FleetSupervisorPage";
 import Login from "./Login";
 import ChangePasswordForm from "@/components/ChangePasswordForm";
 import { SHARED_KEYS, clearSharedBackend, loadState, removeState, saveState, setSharedBackend, subscribeState } from "@/lib/appStore";
-import { appendAudit } from "@/lib/audit";
 import { createApiBackend } from "@/lib/apiBackend";
 import { authErrorMessage, logout, watchSession } from "@/lib/auth";
 
@@ -88,7 +87,7 @@ export default function RolePortal() {
 
   useEffect(() => {
     // مسح بقايا الإصدارات السابقة التي كانت تحفظ الجلسة وبيانات المرضى على الجهاز.
-    ["fox_session", ...SHARED_KEYS].forEach(removeState);
+    ["fox_session", "fox_audit", ...SHARED_KEYS].forEach(removeState);
 
     return watchSession((profile, message) => {
       if (!profile) {
@@ -252,7 +251,6 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
   const [appointments, setAppointments] = useState<ClinicAppointment[]>(loadAppointments);
   const [requests, setRequests] = useState<VehicleRequest[]>(loadRequests);
   const [fleetVehicles, setFleetVehicles] = useState<Vehicle[]>(() => loadState("fox_fleet", DEFAULT_VEHICLES));
-  const [audit, setAudit] = useState<string[]>(() => loadState("fox_audit", []));
   const [view, setView] = useState<ClinicView>("home");
   const [editingAppointment, setEditingAppointment] = useState<ClinicAppointment | null>(null);
   const [lang, setLang] = useLang();
@@ -267,11 +265,10 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
       if (key === "fox_appointments") setAppointments(loadAppointments());
       else if (key === "fox_requests") setRequests(loadRequests());
       else if (key === "fox_fleet") setFleetVehicles(loadState("fox_fleet", DEFAULT_VEHICLES));
-      else if (key === "fox_audit") setAudit(loadState("fox_audit", []));
     };
     const stop = subscribeState(refresh);
     // تغييرات وصلت بين أول عرض للصفحة وبدء الاشتراك
-    ["fox_appointments", "fox_requests", "fox_fleet", "fox_audit"].forEach(refresh);
+    ["fox_appointments", "fox_requests", "fox_fleet"].forEach(refresh);
     return stop;
   }, []);
 
@@ -279,9 +276,6 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
   function updateAppointments(next: ClinicAppointment[]) { saveState("fox_appointments", next, appointments); setAppointments(next); }
   function updateRequests(next: VehicleRequest[]) { saveState("fox_requests", next, requests); setRequests(next); }
   function updateFleet(next: Vehicle[]) { setFleetVehicles(next); saveState("fox_fleet", next); }
-  function logAudit(message: string) {
-    setAudit(appendAudit(message, session.name));
-  }
 
   async function exportStats() {
     try {
@@ -328,7 +322,6 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
         ? { ...appointment, status: request.direction === "عودة" ? "مكتملة" : "تم استلام المريض" }
         : appointment));
     }
-    logAudit(`${status} للطلب ${requestId}`);
     toast.success(status === "وصلت السيارة" ? "تم تسجيل وصول السيارة" : "تم تأكيد استلام المريض", {
       description: "etaAt" in pickup && pickup.etaAt ? `الوصول المتوقع إلى الوجهة ${timeLabel(new Date(pickup.etaAt))}` : undefined,
     });
@@ -340,7 +333,6 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
     updateRequests(requests.map((request) => requestIds.includes(request.id) && request.status === "تم استلام المريض"
       ? { ...request, status: "وصلت الوجهة" as const, arrivedAt: source === "estimate" && request.etaAt ? request.etaAt : arrivedAt, arrivalSource: source }
       : request));
-    if (source === "manual") logAudit(`تأكيد وصول ${requestIds.length} طلب إلى الوجهة`);
   }
 
   function openEditAppointment(appointment: ClinicAppointment) {
@@ -357,7 +349,6 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
       ? appointments.map((item) => item.id === appointment.id ? appointment : item)
       : [...appointments, appointment];
     updateAppointments(next.sort(byAppointmentTime));
-    logAudit(editingAppointment ? `تعديل الموعد ${appointment.id}` : `إضافة الموعد ${appointment.id}`);
     setEditingAppointment(null);
     setSelectedDate(appointment.appointmentDate);
     setView("home");
@@ -371,7 +362,6 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
     }
     if (!window.confirm(t.confirmDelete(appointment.patientName))) return;
     updateAppointments(appointments.filter((item) => item.id !== appointment.id));
-    logAudit(`حذف الموعد ${appointment.id}`);
     toast.success(t.deleted);
   }
 
@@ -385,9 +375,6 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
       ? { ...request, vehiclePlate: vehicle.plate, driver: vehicle.driver, status: "تم إرسال السيارة" as const, groupId, notificationSentAt: sentAt }
       : joinRequestIds.includes(request.id) ? { ...request, groupId } : request);
     updateRequests(next);
-    logAudit(joinRequestIds.length
-      ? `ضم ${requestIds.length} طلب إلى رحلة السيارة ${vehicle.plate}`
-      : `إرسال السيارة ${vehicle.plate} إلى ${requestIds.length} طلب`);
     const trips = next
       .filter((request) => allIds.includes(request.id))
       .map((request) => ({ request, appointment: appointments.find((item) => item.id === request.appointmentId)! }))
@@ -427,7 +414,6 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
             onDelete={deleteAppointment}
             onImport={(imported) => {
               updateAppointments([...appointments, ...imported].sort(byAppointmentTime));
-              logAudit(`استيراد ${imported.length} موعد من Excel`);
             }}
           />
         )}
@@ -450,7 +436,6 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
               // الطلب باسم المشرف الذي طلبه: هو وحده يتابعه
               updateRequests([...requests, { ...request, requestedBy: session.uid }]);
               updateAppointments(appointments.map((appointment) => appointment.id === appointmentId ? { ...appointment, status: request.direction === "عودة" ? "طلب عودة" : "تم طلب السيارة" } : appointment));
-              logAudit(`طلب ${request.direction} ${request.id}`);
               toast.success("تم إرسال الطلب إلى مشرف السيارات");
             }}
             onUpdateRequest={updateRequestStatus}
@@ -459,7 +444,6 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
               updateAppointments(appointments.map((item) => item.id === appointment.id
                 ? { ...item, status: request.direction === "عودة" ? "تم استلام المريض" : "بانتظار طلب السيارة" }
                 : item));
-              logAudit(`إلغاء طلب ${request.direction} ${request.id}`);
               toast.success("تم إلغاء طلب السيارة");
             }}
             onReturn={(appointment, request) => {
@@ -474,7 +458,6 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
               };
               updateRequests([...requests, returnRequest]);
               updateAppointments(appointments.map((item) => item.id === appointment.id ? { ...item, status: "طلب عودة" } : item));
-              logAudit(`طلب عودة ${returnRequest.id}`);
               toast.success("تم إرسال طلب العودة");
             }}
             onCancelAppointment={(appointment, reason, request) => {
@@ -483,7 +466,6 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
               updateAppointments(appointments.map((item) => item.id === appointment.id
                 ? { ...item, status: "ملغي" as const, cancelReason: reason, cancelledBy: session.name, cancelledAt: new Date().toISOString() }
                 : item));
-              logAudit(`إلغاء الموعد ${appointment.id}: ${reason}`);
               toast.success("تم إلغاء الموعد", { description: request?.vehiclePlate ? `وأُلغي طلب السيارة ${request.vehiclePlate}` : undefined });
             }}
           />
@@ -493,9 +475,8 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
             vehicles={fleetVehicles}
             appointments={appointments}
             requests={requests}
-            audit={audit}
             onManager={onManager}
-            onUpdate={(next) => { updateFleet(next); logAudit("تغيير حالة سيارة"); }}
+            onUpdate={updateFleet}
             onDispatch={dispatch}
             onArrived={markArrived}
             onExport={exportStats}
@@ -504,7 +485,6 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
             onAddTrip={(appointment, request) => {
               updateAppointments([...appointments, appointment].sort(byAppointmentTime));
               updateRequests([...requests, request]);
-              logAudit(`إضافة رحلة غير طبية ${appointment.id} إلى ${appointment.clinic}`);
               toast.success("تمت إضافة الرحلة إلى الطلبات");
               setSelectedDate(appointment.appointmentDate);
             }}

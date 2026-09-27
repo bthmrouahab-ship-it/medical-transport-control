@@ -17,7 +17,7 @@ function slug(value: string) {
 export default function HospitalManager({ hospitals, tripCounts, onSave }: {
   hospitals: Hospital[];
   tripCounts: Record<string, number>;
-  onSave: (next: Hospital[], message: string) => void;
+  onSave: (next: Hospital[]) => void;
 }) {
   const [draft, setDraft] = useState<Draft | null>(null);
   const [isNew, setIsNew] = useState(false);
@@ -50,14 +50,14 @@ export default function HospitalManager({ hospitals, tripCounts, onSave }: {
       verified: true,
     };
     const next = isNew ? [...hospitals, hospital] : hospitals.map((item) => (item.id === hospital.id ? hospital : item));
-    onSave(next, `${isNew ? "إضافة" : "تعديل"} المستشفى ${hospital.name}`);
+    onSave(next);
     toast.success("تم حفظ المستشفى");
     setDraft(null);
   }
 
   function remove(hospital: Hospital) {
     if (!window.confirm(`حذف ${hospital.name} من الدليل؟ لن تُحذف المواعيد المسجلة.`)) return;
-    onSave(hospitals.filter((item) => item.id !== hospital.id), `حذف المستشفى ${hospital.name}`);
+    onSave(hospitals.filter((item) => item.id !== hospital.id));
     setDraft(null);
   }
 

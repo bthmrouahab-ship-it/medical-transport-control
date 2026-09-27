@@ -47,9 +47,13 @@ function has_role(array $user, array $roles): bool
     return in_array($user['role'], $roles, true);
 }
 
-/** الطلب يتابعه مشرف المبنى الذي طلبه فقط؛ الطلب القديم أو الذي أضافه مشرف السيارات بلا مالك يتابعه أي مشرف مبنى. */
+/**
+ * طلب الذهاب يتابعه مشرف المبنى الذي طلبه فقط، ورحلة العودة يتابعها كل مشرفي المباني.
+ * الطلب القديم أو الذي أضافه مشرف السيارات بلا مالك يتابعه أي مشرف مبنى.
+ */
 function follows_request(array $user, ?array $request): bool
 {
+    if (($request['direction'] ?? null) === 'عودة') return true;
     $owner = $request['requestedBy'] ?? null;
     return $owner === null || $owner === (string)$user['id'];
 }

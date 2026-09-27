@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import { AlertTriangle, Building2, FileSpreadsheet, Filter, FilterX, Info, Loader2, Upload, X } from "lucide-react";
+import { AlertTriangle, Building2, Download, FileCode2, FileSpreadsheet, Filter, FilterX, Info, Loader2, Upload, X } from "lucide-react";
 import type { Hospital } from "@shared/hospitals";
 import { parseDriverList, parseTripRows, type HistorySummary, type ImportedDriver } from "@shared/history";
 import {
@@ -19,10 +19,13 @@ import {
 } from "@shared/stats";
 import { localDateString, type ClinicAppointment, type Vehicle, type VehicleRequest } from "@shared/transport";
 import { saveState } from "@/lib/appStore";
-import { appendAudit } from "@/lib/audit";
+import { authErrorMessage } from "@/lib/auth";
+import { dayRange, fetchAllActivity } from "@/lib/activity";
+import { activitySection, downloadExcel, downloadHtml, statsReport, tripsSection } from "@/lib/report";
 import { saveStatsDays, watchStatsDays } from "@/lib/statsStore";
-import { EmptyState, Panel, Segmented, addDays, btn, cx, inputClass } from "./ui-kit";
+import { EmptyState, Panel, Segmented, addDays, btn, cx, inputClass, stamp } from "./ui-kit";
 import HistoryCharts from "./HistoryCharts";
+import ActivityLog from "./ActivityLog";
 
 type Preset = "all" | "today" | "7d" | "30d" | "month" | "lastMonth" | "year" | "custom";
 
@@ -118,9 +121,38 @@ export default function StatsPanel({ canEdit, actor, hospitals, fleet, appointme
   // القيمة المختارة تبقى في القائمة حتى لو لم تعد لها رحلات في الفترة الجديدة
   const withSelected = (values: string[], value: string) => (value !== "all" && !values.includes(value) ? [value, ...values] : values);
 
+  // سجل العمليات والتصدير لنفس فترة الإحصائيات
+  const range = useMemo(() => dayRange(filter.from || undefined, filter.to || undefined), [filter.from, filter.to]);
+  const periodLabel = filter.from || filter.to
+    ? `الفترة ${filter.from || "البداية"} إلى ${filter.to || localDateString()}`
+    : `كل الفترات${summary.totalTrips ? ` (${summary.from} إلى ${summary.to})` : ""}`;
+  const [exporting, setExporting] = useState<"excel" | "html" | null>(null);
+
+  /** تصدير كل الإحصائيات: الملخص والجداول، والرحلات بتفاصيلها (من طلب ومن أرسل ومتى)، وسجل العمليات. */
+  async function exportReport(format: "excel" | "html") {
+    setExporting(format);
+    try {
+      const { items, truncated } = await fetchAllActivity(range);
+      const report = statsReport(summary, "إحصائيات سيارات مجمع الثمامة", `${periodLabel} · أنشأه ${actor} في ${stamp()}`);
+      report.sections.push(
+        tripsSection(appointments, requests, items, filter.from || undefined, filter.to || undefined),
+        activitySection(items, truncated),
+      );
+      const name = `althumama-stats-${localDateString()}`;
+      if (format === "excel") await downloadExcel(report, `${name}.xlsx`);
+      else downloadHtml(report, `${name}.html`);
+      toast.success(format === "excel" ? "تم تصدير الإحصائيات إلى Excel" : "تم تصدير الإحصائيات إلى صفحة HTML");
+    } catch (error) {
+      console.error("[stats] export", error);
+      toast.error(authErrorMessage(error, "تعذر تصدير الإحصائيات"));
+    } finally {
+      setExporting(null);
+    }
+  }
+
   return (
     <div className="space-y-6">
-      {canEdit && <HistoryImport fleet={fleet} hospitals={hospitals} actor={actor} imported={imported ?? []} />}
+      {canEdit && <HistoryImport fleet={fleet} hospitals={hospitals} imported={imported ?? []} />}
 
       <Panel
         icon={Filter}
@@ -131,7 +163,17 @@ export default function StatsPanel({ canEdit, actor, hospitals, fleet, appointme
             {selected.days.excel} يوم من ملفات Excel · {selected.days.system} يوم من رحلات النظام{filter.source === "all" ? " (اليوم الذي له ملف Excel يُحسب من الملف فقط)" : ""}
           </>
         )}
-        actions={<button type="button" disabled={!filtersActive} onClick={() => { setPreset("all"); setFilter(EMPTY_FILTER); }} className={btn("ghost", "sm")}><FilterX className="h-4 w-4" /> مسح الفلاتر</button>}
+        actions={(
+          <>
+            <button type="button" disabled={!filtersActive} onClick={() => { setPreset("all"); setFilter(EMPTY_FILTER); }} className={btn("ghost", "sm")}><FilterX className="h-4 w-4" /> مسح الفلاتر</button>
+            <button type="button" disabled={Boolean(exporting)} onClick={() => exportReport("excel")} title="الملخص والرحلات بتفاصيلها وسجل العمليات" className={btn("primary", "sm")}>
+              {exporting === "excel" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />} تصدير Excel
+            </button>
+            <button type="button" disabled={Boolean(exporting)} onClick={() => exportReport("html")} title="صفحة تقرير مستقلة تُفتح في المتصفح وتُطبع" className={btn("secondary", "sm")}>
+              {exporting === "html" ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileCode2 className="h-4 w-4" />} صفحة HTML
+            </button>
+          </>
+        )}
         bodyClassName="space-y-4 p-4 sm:p-5"
       >
         <div className="flex flex-wrap items-end gap-3">
@@ -200,13 +242,15 @@ export default function StatsPanel({ canEdit, actor, hospitals, fleet, appointme
           />
         </div>
       )}
+
+      <ActivityLog since={range.since} until={range.until} periodLabel={periodLabel} exportable={false} />
     </div>
   );
 }
 
 type Preview = { fileName: string; trips: TripStat[] | null; drivers: ImportedDriver[]; error?: string };
 
-function HistoryImport({ fleet, hospitals, actor, imported }: { fleet: Vehicle[]; hospitals: Hospital[]; actor: string; imported: StatsDay[] }) {
+function HistoryImport({ fleet, hospitals, imported }: { fleet: Vehicle[]; hospitals: Hospital[]; imported: StatsDay[] }) {
   const input = useRef<HTMLInputElement>(null);
   const [preview, setPreview] = useState<Preview | null>(null);
   const [busy, setBusy] = useState(false);
@@ -248,7 +292,6 @@ function HistoryImport({ fleet, hospitals, actor, imported }: { fleet: Vehicle[]
     setBusy(true);
     try {
       const days = await saveStatsDays(preview.trips, preview.fileName);
-      appendAudit(`استيراد ${preview.trips.length} رحلة من ${preview.fileName} (${days} يوم: ${fileDays[0]} إلى ${fileDays[fileDays.length - 1]})`, actor);
       toast.success(`تمت إضافة ${days} يوم إلى الإحصائيات`);
       setPreview(preview.drivers.length ? { ...preview, trips: null } : null);
     } catch (error) {
@@ -269,7 +312,6 @@ function HistoryImport({ fleet, hospitals, actor, imported }: { fleet: Vehicle[]
       else next.push({ ...data, available: true });
     }
     saveState("fox_fleet", next);
-    appendAudit(`تحديث ${preview.drivers.length} سيارة من ملف Excel`, actor);
     toast.success("تم تحديث السيارات والسائقين");
     setPreview(preview.trips ? { ...preview, drivers: [] } : null);
   }

@@ -3,7 +3,7 @@ declare(strict_types=1);
 
 /**
  * واجهة الخادم لموقع سيارات مجمع الثمامة: /api/index.php?r=<route>
- * GET  session | users | sync&since=N | stats-days
+ * GET  session | users | sync&since=N | stats-days | activity
  * POST login | logout | change-password | users.create | users.update | users.reset-password | write | location | stats-days.save
  */
 
@@ -12,6 +12,7 @@ ini_set('display_errors', '0');
 
 require __DIR__ . '/lib/bootstrap.php';
 require __DIR__ . '/lib/rules.php';
+require __DIR__ . '/lib/activity.php';
 
 /** محاولات خاطئة قبل الإيقاف: للحساب الواحد، ولعنوان الشبكة (موظفو المكتب قد يشتركون في عنوان واحد) */
 const LOGIN_MAX_FAILURES = ['u' => 10, 'ip' => 50];
@@ -38,6 +39,7 @@ try {
         'POST write' => 'route_write',
         'POST location' => 'route_location',
         'GET stats-days' => 'route_stats_days',
+        'GET activity' => 'route_activity',
         'POST stats-days.save' => 'route_stats_days_save',
     ];
     $handler = $handlers["$method $route"] ?? null;
@@ -107,9 +109,13 @@ function route_login(PDO $pdo, array $body): array
     $hash = $row['password_hash'] ?? '$2y$12$LwJvaQEaoJOk3CKtNkbcbOinzMLNyUDkK1NjAbGZ4V8jQrwW/tosK';
     if (!password_verify($password, $hash) || !$row) {
         record_failure($pdo, $keys);
+        log_activity($pdo, null, 'session', 'session.failed', "محاولة دخول خاطئة باسم المستخدم $username", $username, ['ip' => client_ip()], $username);
         throw new ApiException(401, INVALID_LOGIN, 'invalid_login');
     }
-    if (!$row['active']) throw new ApiException(403, 'هذا الحساب موقوف. تواصل مع مدير النظام.', 'disabled');
+    if (!$row['active']) {
+        log_activity($pdo, $row, 'session', 'session.failed', 'محاولة دخول بحساب موقوف', $username, ['ip' => client_ip()]);
+        throw new ApiException(403, 'هذا الحساب موقوف. تواصل مع مدير النظام.', 'disabled');
+    }
     $pdo->prepare('DELETE FROM login_attempts WHERE k = ?')->execute([$keys[0]]);
     if (password_needs_rehash($row['password_hash'], PASSWORD_DEFAULT)) {
         $pdo->prepare('UPDATE users SET password_hash = ? WHERE id = ?')->execute([password_hash($password, PASSWORD_DEFAULT), $row['id']]);
@@ -117,11 +123,14 @@ function route_login(PDO $pdo, array $body): array
     start_session();
     session_regenerate_id(true);
     $_SESSION = ['uid' => (int)$row['id'], 'ver' => (int)$row['session_version'], 'last' => time()];
+    log_activity($pdo, $row, 'session', 'session.login', 'تسجيل الدخول', $username, ['ip' => client_ip()]);
     return ['user' => profile($row)];
 }
 
 function route_logout(PDO $pdo): array
 {
+    $user = current_user($pdo, false);
+    if ($user) log_activity($pdo, $user, 'session', 'session.logout', 'تسجيل الخروج', $user['username']);
     end_session();
     return ['ok' => true];
 }
@@ -140,6 +149,7 @@ function route_change_password(PDO $pdo, array $body): array
     // الجلسات الأخرى لهذا الحساب تنتهي، وتبقى الجلسة الحالية
     session_regenerate_id(true);
     $_SESSION['ver'] = $version;
+    log_activity($pdo, $user, 'user', 'user.password', 'تغيير كلمة المرور', $user['username']);
     return ['user' => profile(user_row($pdo, (int)$user['id']))];
 }
 
@@ -178,7 +188,9 @@ function route_users_create(PDO $pdo, array $body): array
     $pdo->prepare('INSERT INTO users (username, display_name, role, active, must_change_password, vehicle_plate, password_hash, created_at, created_by)
         VALUES (?, ?, ?, 1, 1, ?, ?, ?, ?)')
         ->execute([$username, $displayName, $role, $plate, password_hash($password, PASSWORD_DEFAULT), now_iso(), $admin['username']]);
-    return ['user' => profile(user_row($pdo, (int)$pdo->lastInsertId()))];
+    $created = user_row($pdo, (int)$pdo->lastInsertId());
+    log_activity($pdo, $admin, 'user', 'user.create', "إنشاء حساب $username ($displayName) بدور " . ACTIVITY_ROLE_LABELS[$role] . ($plate ? " للسيارة $plate" : ''), $username, ['plate' => $plate ?? '']);
+    return ['user' => profile($created)];
 }
 
 function target_user(PDO $pdo, array $body): array
@@ -219,6 +231,15 @@ function route_users_update(PDO $pdo, array $body): array
     if ($fields) {
         $set = implode(', ', array_map(fn($field) => "$field = ?", array_keys($fields)));
         $pdo->prepare("UPDATE users SET $set WHERE id = ?")->execute([...array_values($fields), $row['id']]);
+        $labels = [
+            'display_name' => fn($value) => "الاسم: {$row['display_name']} ← $value",
+            'role' => fn($value) => 'الدور: ' . (ACTIVITY_ROLE_LABELS[$row['role']] ?? $row['role']) . ' ← ' . (ACTIVITY_ROLE_LABELS[$value] ?? $value),
+            'active' => fn($value) => $value ? 'تفعيل الحساب' : 'إيقاف الحساب',
+            'vehicle_plate' => fn($value) => "السيارة: {$row['vehicle_plate']} ← $value",
+        ];
+        $changes = [];
+        foreach ($fields as $field => $value) if ((string)$row[$field] !== (string)$value) $changes[] = $labels[$field]($value);
+        if ($changes) log_activity($pdo, $admin, 'user', 'user.update', "تعديل حساب {$row['username']}: " . implode('، ', $changes), $row['username']);
     }
     return ['user' => profile(user_row($pdo, (int)$row['id']))];
 }
@@ -234,6 +255,7 @@ function route_users_reset_password(PDO $pdo, array $body): array
     if ($error = validate_password($password)) throw new ApiException(400, $error, 'invalid');
     $pdo->prepare('UPDATE users SET password_hash = ?, must_change_password = 1, session_version = session_version + 1 WHERE id = ?')
         ->execute([password_hash($password, PASSWORD_DEFAULT), $row['id']]);
+    log_activity($pdo, $admin, 'user', 'user.reset_password', "إصدار كلمة مرور مؤقتة لحساب {$row['username']}", $row['username']);
     return ['user' => profile(user_row($pdo, (int)$row['id']))];
 }
 
@@ -329,7 +351,10 @@ function route_write(PDO $pdo, array $body): array
                 throw new ApiException(400, 'بيانات غير صالحة', 'bad_request');
             }
             if ($error = authorize_write($user, $col, $id, $before, $after)) throw new ApiException(403, $error, 'permission_denied');
+            // الوصف قبل الحفظ (يقرأ الموعد المرتبط بالطلب كما كان)، والتسجيل بعده في نفس المعاملة
+            $entry = describe_write($pdo, $col, $id, $before, $after);
             save_doc($pdo, $col, $id, $after, $rev);
+            if ($entry) log_activity($pdo, empty($entry[4]) ? $user : null, $entry[0], $entry[1], $entry[2], $id, $entry[3]);
         }
         $pdo->commit();
     } catch (Throwable $error) {
@@ -351,7 +376,7 @@ function distance_m(float $lat1, float $lng1, float $lat2, float $lng2): float
  * الطلبات التي في الطريق إلى وجهتها بهذه السيارة تُعلَّم «وصلت الوجهة» عندما تقترب منها،
  * فتظهر لمشرف السيارات وتصبح السيارة متاحة. يعيد عدد الطلبات التي وصلت.
  */
-function detect_arrivals(PDO $pdo, string $plate, float $lat, float $lng, int $rev): int
+function detect_arrivals(PDO $pdo, string $plate, float $lat, float $lng, int $rev, ?array $user = null): int
 {
     $like = fn(string $text) => '%' . addcslashes($text, '%_\\') . '%';
     $candidates = $pdo->prepare("SELECT id FROM docs WHERE col = 'requests' AND data LIKE ? AND data LIKE ?");
@@ -364,10 +389,13 @@ function detect_arrivals(PDO $pdo, string $plate, float $lat, float $lng, int $r
         if (!$doc || ($doc['vehiclePlate'] ?? null) !== $plate || ($doc['status'] ?? null) !== 'تم استلام المريض' || isset($doc['arrivedAt'])) continue;
         if (!is_numeric($doc['destLat'] ?? null) || !is_numeric($doc['destLng'] ?? null)) continue;
         if (distance_m($lat, $lng, (float)$doc['destLat'], (float)$doc['destLng']) > ARRIVAL_RADIUS_M) continue;
+        $before = $doc;
         $doc['status'] = 'وصلت الوجهة';
         $doc['arrivedAt'] = now_iso();
         $doc['arrivalSource'] = 'gps';
+        $entry = describe_write($pdo, 'requests', (string)$id, $before, $doc);
         save_doc($pdo, 'requests', (string)$id, $doc, $rev);
+        if ($entry && $user) log_activity($pdo, $user, $entry[0], $entry[1], $entry[2], (string)$id, $entry[3]);
         $arrived += 1;
     }
     return $arrived;
@@ -410,8 +438,13 @@ function route_location(PDO $pdo, array $body): array
             return ['ok' => true];
         }
         save_doc($pdo, 'vehicleLocations', $plate, $after, $rev);
+        // بداية مشاركة الموقع وإيقافها (لا تُسجَّل كل نقطة موقع)
+        $wasSharing = (bool)($before['sharing'] ?? false);
+        if ($sharing !== $wasSharing) {
+            log_activity($pdo, $user, 'location', $sharing ? 'location.start' : 'location.stop', ($sharing ? 'بدء' : 'إيقاف') . " مشاركة موقع السيارة $plate", $plate, ['plate' => $plate, 'driver' => $user['display_name']]);
+        }
         $precise = $sharing && ($after['accuracy'] === null || $after['accuracy'] <= ARRIVAL_MAX_ACCURACY_M);
-        $arrived = $precise ? detect_arrivals($pdo, $plate, (float)$after['lat'], (float)$after['lng'], $rev) : 0;
+        $arrived = $precise ? detect_arrivals($pdo, $plate, (float)$after['lat'], (float)$after['lng'], $rev, $user) : 0;
         $pdo->commit();
     } catch (Throwable $error) {
         $pdo->rollBack();
@@ -434,7 +467,8 @@ function route_stats_days(PDO $pdo): array
 
 function route_stats_days_save(PDO $pdo, array $body): array
 {
-    require_role(current_user($pdo), ['admin']);
+    $user = current_user($pdo);
+    require_role($user, ['admin']);
     $days = $body['days'] ?? null;
     if (!is_array($days) || !array_is_list($days) || count($days) > 400) throw new ApiException(400, 'بيانات غير صالحة', 'bad_request');
     $pdo->beginTransaction();
@@ -448,10 +482,50 @@ function route_stats_days_save(PDO $pdo, array $body): array
             if (!$valid) throw new ApiException(400, 'بيانات الإحصائيات غير صالحة', 'bad_request');
             save_doc($pdo, 'statsDays', $day['date'], $day, $rev);
         }
+        if ($days) {
+            $dates = array_column($days, 'date');
+            sort($dates);
+            $trips = array_sum(array_map(fn($day) => count($day['trips']), $days));
+            log_activity($pdo, $user, 'stats', 'stats.import', 'استيراد ' . count($days) . " يوم ($trips رحلة) من " . $days[0]['source'] . " ({$dates[0]} إلى " . end($dates) . ')', $days[0]['source']);
+        }
         $pdo->commit();
     } catch (Throwable $error) {
         $pdo->rollBack();
         throw $error;
     }
     return ['saved' => count($days)];
+}
+
+// ————— سجل العمليات —————
+
+/** العمليات في فترة (وقت ISO) من الأحدث، للمدير ومشرف السيارات. before: لتحميل الصفحة التالية. */
+function route_activity(PDO $pdo): array
+{
+    require_role(current_user($pdo), ['admin', 'fleetSupervisor']);
+    $iso = fn(string $key) => is_string($_GET[$key] ?? null) && strlen($_GET[$key]) <= 40 && strtotime($_GET[$key]) !== false ? $_GET[$key] : null;
+    $limit = max(1, min(5000, (int)($_GET['limit'] ?? 500)));
+    $where = [];
+    $params = [];
+    if ($since = $iso('since')) { $where[] = 'at >= ?'; $params[] = gmdate('Y-m-d\\TH:i:s.v\\Z', strtotime($since)); }
+    if ($until = $iso('until')) { $where[] = 'at < ?'; $params[] = gmdate('Y-m-d\\TH:i:s.v\\Z', strtotime($until)); }
+    if (is_numeric($_GET['before'] ?? null)) { $where[] = 'id < ?'; $params[] = (int)$_GET['before']; }
+    $sql = 'SELECT id, at, user_id, user_name, user_role, type, action, ref, summary, details FROM activity'
+        . ($where ? ' WHERE ' . implode(' AND ', $where) : '') . ' ORDER BY id DESC LIMIT ' . ($limit + 1);
+    $stmt = $pdo->prepare($sql);
+    $stmt->execute($params);
+    $rows = $stmt->fetchAll();
+    $more = count($rows) > $limit;
+    $items = array_map(fn($row) => [
+        'id' => (int)$row['id'],
+        'at' => $row['at'],
+        'userId' => $row['user_id'] === null ? null : (string)$row['user_id'],
+        'userName' => $row['user_name'],
+        'role' => $row['user_role'],
+        'type' => $row['type'],
+        'action' => $row['action'],
+        'ref' => $row['ref'],
+        'summary' => $row['summary'],
+        'details' => $row['details'] ? (json_decode($row['details'], true) ?: (object)[]) : (object)[],
+    ], array_slice($rows, 0, $limit));
+    return ['items' => $items, 'more' => $more];
 }

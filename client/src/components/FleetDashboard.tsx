@@ -6,7 +6,6 @@ import { DEFAULT_VEHICLES, localDateString, migrateAppointment, migrateRequest, 
 import { arrivalsOn, tripEndpoints, tripPhase } from "@shared/trips";
 import { useArrivalAlerts, useCancellationAlerts } from "@/lib/arrivalAlerts";
 import { saveState } from "@/lib/appStore";
-import { appendAudit } from "@/lib/audit";
 import { useHospitals, useNow, useSharedState } from "@/lib/useShared";
 import { MAP_COLORS, locationFreshness, type MapTrip, type VehicleLocation } from "@/lib/vehicleLocation";
 import { Dot, Panel, PageHeader, Segmented, Stat, cx, timeLabel, type Tone } from "./ui-kit";
@@ -83,10 +82,8 @@ export default function FleetDashboard({ canEdit = false, alerts = false, actor 
   const liveCount = fleet.filter((vehicle) => isLive(vehicle.plate)).length;
   const busyPlates = new Set(trips.map((trip) => trip.plate));
 
-  function saveHospitals(next: Hospital[], message: string) {
-    saveState("fox_hospitals", next);
-    appendAudit(message, actor);
-  }
+  // تعديلات الدليل يسجّلها الخادم في سجل العمليات
+  const saveHospitals = (next: Hospital[]) => saveState("fox_hospitals", next);
 
   const tabs: { value: Tab; label: string; icon: typeof MapIcon }[] = [
     { value: "map", label: "الخريطة المباشرة", icon: MapIcon },

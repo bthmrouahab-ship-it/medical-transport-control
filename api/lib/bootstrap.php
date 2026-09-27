@@ -49,6 +49,12 @@ function db(): PDO
     $config = load_config();
     if (!$config) throw new ApiException(503, 'لم يُضبط الموقع بعد. افتح صفحة الإعداد /api/setup.php', 'not_configured');
     $pdo = connect_db($config['db']);
+    // المواقع المضبوطة قبل إضافة سجل العمليات تُنشأ جداولها الجديدة هنا (خارج أي معاملة)
+    try {
+        $pdo->query('SELECT 1 FROM activity LIMIT 0');
+    } catch (PDOException) {
+        ensure_schema($pdo);
+    }
     return $pdo;
 }
 
@@ -93,6 +99,20 @@ function ensure_schema(PDO $pdo): void
         value BIGINT UNSIGNED NOT NULL
     ) $options");
     $pdo->exec("INSERT IGNORE INTO revision (id, value) VALUES (1, 0)");
+    // سجل العمليات: كل عملية مع من نفّذها ووقتها (يكتبه الخادم فقط)
+    $pdo->exec("CREATE TABLE IF NOT EXISTS activity (
+        id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+        at VARCHAR(30) NOT NULL,
+        user_id INT UNSIGNED NULL,
+        user_name VARCHAR(60) NOT NULL,
+        user_role VARCHAR(20) NOT NULL,
+        type VARCHAR(20) NOT NULL,
+        action VARCHAR(40) NOT NULL,
+        ref VARCHAR(160) NOT NULL DEFAULT '',
+        summary VARCHAR(500) NOT NULL,
+        details TEXT NULL,
+        KEY activity_at (at)
+    ) $options");
     $pdo->exec("CREATE TABLE IF NOT EXISTS login_attempts (
         k VARCHAR(120) PRIMARY KEY,
         failures INT UNSIGNED NOT NULL,
