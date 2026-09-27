@@ -10,6 +10,8 @@ import {
   migrateAppointment,
   migrateRequest,
   parseImportedAppointments,
+  planDispatch,
+  vehicleLoad,
   buildTripGroups,
   findUnrequestedMatches,
   requestWindow,
@@ -70,6 +72,43 @@ describe("medical transport rules", () => {
     ];
     expect(assignVehicle(vehicles, "عادي")?.plate).toBe("A");
     expect(assignVehicle(vehicles, "احتياجات خاصة")?.plate).toBe("B");
+  });
+
+  it("spreads the work: the least-loaded suitable car is chosen first", () => {
+    const car = (plate: string, kind: "سيدان" | "باص" | "احتياجات خاصة" = "سيدان") => ({ plate, driver: plate, phone: "1", kind, available: true });
+    const vehicles = [car("A"), car("B"), car("C", "باص"), car("W", "احتياجات خاصة")];
+    // A عملت رحلتين (منهما رحلة مجمّعة تُحسب مرة واحدة)، وB رحلة واحدة
+    const day = (id: string) => ({ ...appointment, id, appointmentDate: "2026-09-24" });
+    const done = [day("D1"), day("D2"), day("D3"), day("D4")];
+    const load = vehicleLoad([
+      { ...request, id: "R1", appointmentId: "D1", vehiclePlate: "A", groupId: "G1" },
+      { ...request, id: "R2", appointmentId: "D2", vehiclePlate: "A", groupId: "G1" },
+      { ...request, id: "R3", appointmentId: "D3", vehiclePlate: "A" },
+      { ...request, id: "R4", appointmentId: "D4", vehiclePlate: "B" },
+    ], done, "2026-09-24");
+    expect(load.get("A")).toBe(2);
+    expect(load.get("B")).toBe(1);
+    expect(assignVehicle(vehicles, "عادي", load)?.plate).toBe("C");
+    expect(assignVehicle(vehicles.filter((vehicle) => vehicle.plate !== "C"), "عادي", load)?.plate).toBe("B");
+    // السيارة المجهزة تبقى آخر خيار للرحلة العادية
+    expect(assignVehicle([car("A"), car("W", "احتياجات خاصة")], "عادي", new Map([["A", 9]]))?.plate).toBe("A");
+
+    // الخطة: الاحتياجات الخاصة تأخذ السيارة المجهزة، والباقي حسب الموعد، ومن لا سيارة له ينتظر
+    const pending = [
+      { id: "P1", time: "11:00", kind: "عادي" as const, clinic: "مستشفى الوكرة", building: "11" },
+      { id: "P2", time: "09:00", kind: "عادي" as const, clinic: "مستشفى الخور", building: "22" },
+      { id: "P3", time: "13:00", kind: "احتياجات خاصة" as const, clinic: "مستشفى الخور", building: "33" },
+      { id: "P4", time: "15:00", kind: "عادي" as const, clinic: "مستشفى الوكرة", building: "44" },
+    ].map(({ id, time, kind, clinic, building }) => ({
+      appointment: { ...appointment, id, appointmentAt: time, kind, clinic, buildingNumber: building, hospitalId: undefined },
+      request: { ...request, id: `REQ-${id}`, appointmentId: id, vehiclePlate: undefined, driver: undefined },
+    }));
+    const plan = planDispatch(pending, [car("A"), car("B"), car("W", "احتياجات خاصة")], load);
+    const byTrip = Object.fromEntries(plan.assignments.map((item) => [item.requestIds.join(), item.vehicle.plate]));
+    expect(byTrip["REQ-P3"]).toBe("W");
+    expect(byTrip["REQ-P2"]).toBe("B");
+    expect(byTrip["REQ-P1"]).toBe("A");
+    expect(plan.waiting.map((item) => item.requestIds.join())).toEqual(["REQ-P4"]);
   });
 
   it("builds a driver message with the building, apartment, and mobile", () => {

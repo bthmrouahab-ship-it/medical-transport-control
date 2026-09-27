@@ -389,20 +389,92 @@ export function migrateRequest(value: unknown): VehicleRequest | null {
   };
 }
 
-export function assignVehicle(vehicles: Vehicle[], kind: AppointmentKind) {
-  const available = vehicles.filter((vehicle) => vehicle.available);
-  if (kind === "احتياجات خاصة") {
-    return available.find((vehicle) => vehicle.kind === "احتياجات خاصة") ?? null;
+/** عدد رحلات كل سيارة في يوم (الرحلة المجمّعة رحلة واحدة)، لتوزيع العمل على السيارات بالتساوي. */
+export function vehicleLoad(requests: VehicleRequest[], appointments: ClinicAppointment[], date: string) {
+  const dates = new Map(appointments.map((appointment) => [appointment.id, appointment.appointmentDate]));
+  const trips = new Map<string, Set<string>>();
+  for (const request of requests) {
+    if (!request.vehiclePlate || dates.get(request.appointmentId) !== date) continue;
+    const plateTrips = trips.get(request.vehiclePlate) ?? new Set<string>();
+    plateTrips.add(request.groupId ?? request.id);
+    trips.set(request.vehiclePlate, plateTrips);
   }
-  return available.find((vehicle) => vehicle.kind === "سيدان")
-    ?? available.find((vehicle) => vehicle.kind === "باص")
-    ?? available[0]
-    ?? null;
+  return new Map(Array.from(trips, ([plate, set]) => [plate, set.size]));
 }
 
-export function assignVehicleForTrips(vehicles: Vehicle[], appointments: ClinicAppointment[]) {
-  const requiresAccessibleVehicle = appointments.some((appointment) => appointment.kind === "احتياجات خاصة");
-  return assignVehicle(vehicles, requiresAccessibleVehicle ? "احتياجات خاصة" : "عادي");
+const KIND_ORDER: Record<VehicleKind, number> = { "سيدان": 0, "باص": 1, "احتياجات خاصة": 2 };
+
+/**
+ * السيارة المناسبة من السيارات المتاحة: رحلة الاحتياجات الخاصة تحتاج سيارة مجهزة، والرحلة العادية تأخذ
+ * سيارة عادية أولًا (تبقى المجهزة لمن يحتاجها). وبين المناسبة: الأقل رحلات اليوم (load) حتى يتوزع العمل،
+ * ثم السيدان قبل الباص، ثم ترتيب الأسطول.
+ */
+export function assignVehicle(vehicles: Vehicle[], kind: AppointmentKind, load: Map<string, number> = new Map()) {
+  const candidates = vehicles
+    .map((vehicle, index) => ({ vehicle, index }))
+    .filter(({ vehicle }) => vehicle.available && (kind !== "احتياجات خاصة" || vehicle.kind === "احتياجات خاصة"));
+  candidates.sort((a, b) => Number(a.vehicle.kind === "احتياجات خاصة") - Number(b.vehicle.kind === "احتياجات خاصة")
+    || (load.get(a.vehicle.plate) ?? 0) - (load.get(b.vehicle.plate) ?? 0)
+    || KIND_ORDER[a.vehicle.kind] - KIND_ORDER[b.vehicle.kind]
+    || a.index - b.index);
+  return candidates[0]?.vehicle ?? null;
+}
+
+export const needsAccessibleVehicle = (appointments: ClinicAppointment[]) => appointments.some((appointment) => appointment.kind === "احتياجات خاصة");
+
+export function assignVehicleForTrips(vehicles: Vehicle[], appointments: ClinicAppointment[], load?: Map<string, number>) {
+  return assignVehicle(vehicles, needsAccessibleVehicle(appointments) ? "احتياجات خاصة" : "عادي", load);
+}
+
+export type PlannedTrip = { requestIds: string[]; appointments: ClinicAppointment[] };
+export type DispatchPlan = {
+  /** رحلة (ضيف أو أكثر مجمّعين) وسيارتها */
+  assignments: (PlannedTrip & { vehicle: Vehicle })[];
+  /** رحلات لا توجد لها سيارة متاحة الآن */
+  waiting: PlannedTrip[];
+};
+
+/**
+ * خطة توزيع كل الطلبات المنتظرة على السيارات المتاحة الآن (كل سيارة رحلة واحدة):
+ * - الرحلات القابلة للجمع (buildTripGroups) تذهب في سيارة واحدة.
+ * - رحلات الاحتياجات الخاصة أولًا لأن سياراتها أقل، ثم الأقرب موعدًا.
+ * - كل رحلة تأخذ السيارة المناسبة الأقل رحلات اليوم، فيتوزع العمل على كل السيارات.
+ */
+export function planDispatch(
+  trips: { request: VehicleRequest; appointment: ClinicAppointment }[],
+  vehicles: Vehicle[],
+  load: Map<string, number> = new Map(),
+  hospitals: Hospital[] = DEFAULT_HOSPITALS,
+): DispatchPlan {
+  const byAppointment = new Map(trips.map((trip) => [trip.appointment.id, trip]));
+  const units: PlannedTrip[] = [];
+  const grouped = new Set<string>();
+  for (const group of buildTripGroups(trips.map((trip) => ({ appointment: trip.appointment, direction: trip.request.direction })), hospitals)) {
+    const members = group.appointmentIds.map((id) => byAppointment.get(id)).filter((trip): trip is NonNullable<typeof trip> => Boolean(trip));
+    if (members.length < 2) continue;
+    members.forEach((trip) => grouped.add(trip.appointment.id));
+    units.push({ requestIds: members.map((trip) => trip.request.id), appointments: members.map((trip) => trip.appointment) });
+  }
+  for (const trip of trips) {
+    if (!grouped.has(trip.appointment.id)) units.push({ requestIds: [trip.request.id], appointments: [trip.appointment] });
+  }
+  const startOf = (unit: PlannedTrip) => unit.appointments.map((appointment) => `${appointment.appointmentDate} ${appointment.appointmentAt}`).sort()[0];
+  units.sort((a, b) => Number(needsAccessibleVehicle(b.appointments)) - Number(needsAccessibleVehicle(a.appointments)) || startOf(a).localeCompare(startOf(b)));
+
+  const free = vehicles.filter((vehicle) => vehicle.available);
+  const plan: DispatchPlan = { assignments: [], waiting: [] };
+  for (const unit of units) {
+    const vehicle = assignVehicleForTrips(free, unit.appointments, load);
+    if (!vehicle) {
+      plan.waiting.push(unit);
+      continue;
+    }
+    free.splice(free.indexOf(vehicle), 1);
+    plan.assignments.push({ ...unit, vehicle });
+  }
+  plan.assignments.sort((a, b) => startOf(a).localeCompare(startOf(b)));
+  plan.waiting.sort((a, b) => startOf(a).localeCompare(startOf(b)));
+  return plan;
 }
 
 /** المسافة التي تُعتبر فيها الوجهتان متجاورتين (مثل مباني مدينة حمد الطبية). */

@@ -20,6 +20,7 @@ import {
   Sparkles,
   Timer,
   Truck,
+  Wand2,
 } from "lucide-react";
 import {
   appointmentPickupLabel,
@@ -31,9 +32,13 @@ import {
   isNonMedical,
   localDateString,
   matchHospitalZone,
+  needsAccessibleVehicle,
+  planDispatch,
   suggestJoinDispatched,
+  vehicleLoad,
   whatsappLink,
   type ClinicAppointment,
+  type DispatchPlan,
   type Vehicle,
   type VehicleRequest,
 } from "@shared/transport";
@@ -44,6 +49,7 @@ import {
   DateChooser,
   Dot,
   EmptyState,
+  Modal,
   Panel,
   PageHeader,
   Segmented,
@@ -77,9 +83,12 @@ function groupPhase(phases: TripPhase[]): TripPhase {
   return { ...last, tracking: onRoad.some((phase) => phase.tracking) };
 }
 
+const tripsText = (count: number) => (count === 0 ? "بلا رحلات اليوم" : count === 1 ? "رحلة اليوم" : count === 2 ? "رحلتان اليوم" : `${count} رحلات اليوم`);
 const minutesText = (minutes: number) => (minutes <= 1 ? "دقيقة" : minutes <= 10 ? `${minutes} دقائق` : `${minutes} دقيقة`);
 
-export function FleetSupervisorPage({ vehicles, appointments, requests, date, onDateChange, onManager, onUpdate, onDispatch, onArrived, onExport, onAddTrip }: {
+type DriverMessage = { vehicle: Vehicle; count: number; message: string };
+
+export function FleetSupervisorPage({ vehicles, appointments, requests, date, onDateChange, onManager, onUpdate, onDispatch, onDispatchMany, onArrived, onExport, onAddTrip }: {
   vehicles: Vehicle[];
   appointments: ClinicAppointment[];
   requests: VehicleRequest[];
@@ -88,6 +97,7 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
   onManager: () => void;
   onUpdate: (vehicles: Vehicle[]) => void;
   onDispatch: (requestIds: string[], vehicle: Vehicle, joinRequestIds?: string[]) => void;
+  onDispatchMany: (items: { requestIds: string[]; vehicle: Vehicle }[]) => DriverMessage[];
   onArrived: (requestIds: string[], source: "manual" | "estimate") => void;
   onExport: () => void;
   onAddTrip: (appointment: ClinicAppointment, request: VehicleRequest) => void;
@@ -95,6 +105,8 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
   const [addingTrip, setAddingTrip] = useState(false);
   const [selectedVehicles, setSelectedVehicles] = useState<Record<string, string>>({});
   const [vehicleFilter, setVehicleFilter] = useState<VehicleFilter>("all");
+  const [plan, setPlan] = useState<DispatchPlan | null>(null);
+  const [driverMessages, setDriverMessages] = useState<DriverMessage[] | null>(null);
   const hospitals = useHospitals();
   const now = useNow(15000);
   const today = localDateString(now);
@@ -121,6 +133,8 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
   const availability = new Map(vehicles.map((vehicle) => [vehicle.plate, vehicleAvailability(vehicle.plate, requests, now, gpsLive(vehicle.plate))]));
   const isBusy = (plate: string) => Boolean(availability.get(plate)?.busy);
   const dispatchable = vehicles.filter((vehicle) => vehicle.available && !isBusy(vehicle.plate));
+  // رحلات كل سيارة في اليوم المختار: السيارة الأقل رحلات تُقترح أولًا حتى يتوزع العمل
+  const load = vehicleLoad(requests, appointments, date);
   const toPickupTrips = active.filter((trip) => phases.get(trip.request.id)!.kind === "toPickup");
 
   const groups = buildTripGroups(pending.map((trip) => ({ appointment: trip.appointment, direction: trip.request.direction })), hospitals);
@@ -174,7 +188,7 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
   }
 
   function dispatchSingle(trip: Trip) {
-    const suggested = assignVehicleForTrips(dispatchable, [trip.appointment]);
+    const suggested = assignVehicleForTrips(dispatchable, [trip.appointment], load);
     const plate = selectedVehicles[trip.request.id] || suggested?.plate;
     const vehicle = dispatchable.find((item) => item.plate === plate);
     if (!vehicle) {
@@ -186,7 +200,7 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
 
   function dispatchGroup(appointmentIds: string[]) {
     const members = pending.filter((trip) => appointmentIds.includes(trip.appointment.id));
-    const vehicle = assignVehicleForTrips(dispatchable, members.map((trip) => trip.appointment));
+    const vehicle = assignVehicleForTrips(dispatchable, members.map((trip) => trip.appointment), load);
     if (!vehicle || members.length < 2) {
       toast.error("لا توجد سيارة مناسبة ومتاحة لجمع هذه الرحلات");
       return;
@@ -199,6 +213,31 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
     if (!vehicle) return;
     const partners = toPickupTrips.filter((trip) => trip.request.vehiclePlate === plate && (groupId ? trip.request.groupId === groupId : !trip.request.groupId)).map((trip) => trip.request.id);
     onDispatch([requestId], vehicle, partners);
+  }
+
+  // أقرب سيارة مناسبة تتفرغ (لرحلة لا توجد لها سيارة متاحة الآن)
+  function nextFree(appointments: ClinicAppointment[]) {
+    const accessible = needsAccessibleVehicle(appointments);
+    const soonest = vehicles
+      .filter((vehicle) => vehicle.available && isBusy(vehicle.plate) && (!accessible || vehicle.kind === "احتياجات خاصة"))
+      .flatMap((vehicle) => {
+        const until = availability.get(vehicle.plate)?.until;
+        return until ? [{ vehicle, until }] : [];
+      })
+      .sort((a, b) => a.until.getTime() - b.until.getTime())[0];
+    return soonest ? `أقرب سيارة تتفرغ ${timeLabel(soonest.until)} (${soonest.vehicle.plate})` : "لا توجد سيارة مناسبة متاحة الآن";
+  }
+
+  function confirmPlan(items: { requestIds: string[]; vehicle: Vehicle }[]) {
+    // السيارة قد تكون انشغلت أو الطلب قد وُزّع من جهاز آخر بعد فتح الخطة
+    const stillPending = new Set(pending.map((trip) => trip.request.id));
+    const valid = items.filter((item) => dispatchable.some((vehicle) => vehicle.plate === item.vehicle.plate) && item.requestIds.every((id) => stillPending.has(id)));
+    if (valid.length < items.length) toast.warning("تغيّرت بعض الطلبات أو السيارات منذ فتح الخطة، فأُرسل الباقي فقط");
+    setPlan(null);
+    if (!valid.length) return;
+    const messages = onDispatchMany(valid);
+    toast.success(`تم إرسال ${valid.length} سيارة`);
+    setDriverMessages(messages);
   }
 
   const availabilityText = (vehicle: Vehicle) => {
@@ -250,11 +289,27 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
 
       <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_380px]">
         <div className="min-w-0 space-y-6">
-          <Panel tone="amber" icon={BellRing} title="طلبات بانتظار التوزيع" count={pending.length} description="اختر السيارة المناسبة ثم أرسلها">
+          <Panel
+            tone="amber"
+            icon={BellRing}
+            title="طلبات بانتظار التوزيع"
+            count={pending.length}
+            description="اختر السيارة المناسبة ثم أرسلها، أو وزّع الكل تلقائيًا على السيارات المتاحة"
+            actions={pending.length > 0 && (
+              <button
+                disabled={!dispatchable.length}
+                onClick={() => setPlan(planDispatch(pending, dispatchable, load, hospitals))}
+                title={dispatchable.length ? "توزيع الطلبات على السيارات المتاحة بالتساوي" : "لا توجد سيارة متاحة الآن"}
+                className={btn("primary", "sm")}
+              >
+                <Wand2 className="h-4 w-4" /> توزيع تلقائي
+              </button>
+            )}
+          >
             {pending.length ? (
               <div className="divide-y divide-slate-100">
                 {pending.map((trip) => {
-                  const suggested = assignVehicleForTrips(dispatchable, [trip.appointment]);
+                  const suggested = assignVehicleForTrips(dispatchable, [trip.appointment], load);
                   const selectedPlate = selectedVehicles[trip.request.id] || suggested?.plate || "";
                   // الرحلة العادية تقبل أي سيارة (سيدان وباص أولًا)، واحتياجات خاصة تحتاج سيارة مجهزة
                   const compatible = (trip.appointment.kind === "احتياجات خاصة" ? vehicles.filter((vehicle) => vehicle.kind === "احتياجات خاصة") : [...vehicles]
@@ -280,7 +335,7 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
                       <div className="flex flex-col gap-2 sm:flex-row lg:w-[360px]">
                         <select aria-label="السيارة" value={ready.some((vehicle) => vehicle.plate === selectedPlate) ? selectedPlate : ""} onChange={(event) => setSelectedVehicles((current) => ({ ...current, [trip.request.id]: event.target.value }))} className={cx(inputClass, "h-10 min-w-0 flex-1")}>
                           {!ready.length && <option value="">لا توجد سيارة متاحة</option>}
-                          {ready.map((vehicle) => <option key={vehicle.plate} value={vehicle.plate}>{vehicle.plate} · {driverOf(vehicle.plate)} · {vehicle.kind}</option>)}
+                          {ready.map((vehicle) => <option key={vehicle.plate} value={vehicle.plate}>{vehicle.plate} · {driverOf(vehicle.plate)} · {vehicle.kind} · {tripsText(load.get(vehicle.plate) ?? 0)}</option>)}
                           {compatible.filter((vehicle) => isBusy(vehicle.plate)).map((vehicle) => {
                             const until = availability.get(vehicle.plate)?.until;
                             return <option key={vehicle.plate} value={vehicle.plate} disabled>{vehicle.plate} · مشغولة{until ? ` حتى ${timeLabel(until)}` : ""}</option>;
@@ -300,7 +355,7 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
               <div className="grid gap-4 p-4 sm:p-5 lg:grid-cols-2">
                 {groups.map((group) => {
                   const members = pending.filter((trip) => group.appointmentIds.includes(trip.appointment.id));
-                  const vehicle = assignVehicleForTrips(dispatchable, members.map((trip) => trip.appointment));
+                  const vehicle = assignVehicleForTrips(dispatchable, members.map((trip) => trip.appointment), load);
                   return (
                     <div key={group.appointmentIds.join("-")} className="flex flex-col rounded-xl bg-violet-50/50 p-4 ring-1 ring-violet-100">
                       <div className="flex items-start justify-between gap-3">
@@ -430,6 +485,10 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
                       <p className="truncate text-sm font-medium text-ink"><span dir="ltr">{vehicle.plate}</span> · {live?.driver ?? vehicle.driver}</p>
                       <p className="truncate text-xs text-slate-500">{vehicle.kind} · {state.text}{live ? " · GPS مباشر" : ""}</p>
                     </div>
+                    <div className="shrink-0 text-center" title="رحلات اليوم المختار">
+                      <p className="text-sm font-semibold text-ink tabular">{load.get(vehicle.plate) ?? 0}</p>
+                      <p className="text-[11px] leading-none text-slate-400">رحلة</p>
+                    </div>
                     <Switch
                       checked={vehicle.available}
                       label={vehicle.available ? `إيقاف السيارة ${vehicle.plate}` : `إتاحة السيارة ${vehicle.plate}`}
@@ -447,6 +506,9 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
           </Panel>
         </aside>
       </div>
+
+      {plan && <AutoDispatchDialog plan={plan} free={dispatchable} load={load} driverOf={driverOf} nextFree={nextFree} onConfirm={confirmPlan} onClose={() => setPlan(null)} />}
+      {driverMessages && <DriverMessagesDialog messages={driverMessages} driverOf={driverOf} onClose={() => setDriverMessages(null)} />}
     </>
   );
 }
@@ -529,5 +591,147 @@ function ActiveTrip({ trips, phase, vehicle, driver, hospitals, onArrived }: {
         )}
       </div>
     </article>
+  );
+}
+
+/**
+ * خطة التوزيع التلقائي قبل الإرسال: كل رحلة وسيارتها المقترحة (الأقل رحلات اليوم)، ويمكن تغيير السيارة
+ * أو استبعاد رحلة، ثم تُرسل كل السيارات معًا.
+ */
+function AutoDispatchDialog({ plan, free, load, driverOf, nextFree, onConfirm, onClose }: {
+  plan: DispatchPlan;
+  free: Vehicle[];
+  load: Map<string, number>;
+  driverOf: (plate?: string, fallback?: string) => string;
+  nextFree: (appointments: ClinicAppointment[]) => string;
+  onConfirm: (items: { requestIds: string[]; vehicle: Vehicle }[]) => void;
+  onClose: () => void;
+}) {
+  const [rows, setRows] = useState(() => plan.assignments.map((item) => ({ ...item, plate: item.vehicle.plate, include: true })));
+  const chosen = rows.filter((row) => row.include);
+  const used = new Map<string, number>();
+  chosen.forEach((row) => used.set(row.plate, (used.get(row.plate) ?? 0) + 1));
+  const conflict = Array.from(used.values()).some((count) => count > 1);
+  const update = (index: number, change: Partial<(typeof rows)[number]>) => setRows((current) => current.map((row, i) => (i === index ? { ...row, ...change } : row)));
+  const names = (appointments: ClinicAppointment[]) => appointments.map((appointment) => appointment.patientName).join("، ");
+  const destinations = (appointments: ClinicAppointment[]) => Array.from(new Set(appointments.map((appointment) => appointment.clinic))).join("، ");
+
+  return (
+    <Modal
+      tone="violet"
+      icon={Wand2}
+      title="التوزيع التلقائي"
+      description="كل رحلة على السيارة المناسبة الأقل رحلات اليوم، والرحلات القابلة للجمع في سيارة واحدة. راجع الخطة ثم أرسل."
+      onClose={onClose}
+      footer={(
+        <>
+          <button type="button" onClick={onClose} className={btn("secondary")}>إلغاء</button>
+          <button
+            type="button"
+            disabled={!chosen.length || conflict}
+            onClick={() => onConfirm(chosen.map((row) => ({ requestIds: row.requestIds, vehicle: free.find((vehicle) => vehicle.plate === row.plate)! })))}
+            className={btn("primary")}
+          >
+            <Send className="h-4 w-4" /> إرسال {chosen.length} {chosen.length === 1 ? "سيارة" : "سيارات"}
+          </button>
+        </>
+      )}
+    >
+      <div className="space-y-4">
+        {conflict && <p className="flex items-center gap-2 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700"><AlertTriangle className="h-4 w-4 shrink-0" /> نفس السيارة مختارة لأكثر من رحلة</p>}
+        {rows.length ? (
+          <ul className="divide-y divide-slate-100 rounded-xl ring-1 ring-slate-200">
+            {rows.map((row, index) => {
+              const accessible = needsAccessibleVehicle(row.appointments);
+              const options = free.filter((vehicle) => !accessible || vehicle.kind === "احتياجات خاصة");
+              const first = [...row.appointments].sort((a, b) => a.appointmentAt.localeCompare(b.appointmentAt))[0];
+              return (
+                <li key={row.requestIds.join()} className={cx("space-y-2 p-3", !row.include && "opacity-50")}>
+                  <label className="flex cursor-pointer items-start gap-2.5">
+                    <input type="checkbox" checked={row.include} onChange={(event) => update(index, { include: event.target.checked })} className="mt-1 h-4 w-4 accent-brand-600" />
+                    <span className="min-w-0 flex-1">
+                      <span className="flex flex-wrap items-center gap-1.5">
+                        <span dir="ltr" className="font-semibold text-ink tabular">{first.appointmentAt}</span>
+                        <span className="font-medium text-ink">{names(row.appointments)}</span>
+                        {row.appointments.length > 1 && <Badge tone="violet" icon={Sparkles}>مجمّعة {row.appointments.length}</Badge>}
+                        {accessible && <Badge tone="amber">احتياجات خاصة</Badge>}
+                      </span>
+                      <span className="block truncate text-xs text-slate-500">{destinations(row.appointments)}</span>
+                    </span>
+                  </label>
+                  <select
+                    aria-label={`سيارة رحلة ${names(row.appointments)}`}
+                    value={row.plate}
+                    disabled={!row.include}
+                    onChange={(event) => update(index, { plate: event.target.value })}
+                    className={cx(inputClass, "h-10 w-full", row.include && (used.get(row.plate) ?? 0) > 1 && "border-red-400 bg-red-50")}
+                  >
+                    {options.map((vehicle) => (
+                      <option key={vehicle.plate} value={vehicle.plate}>{vehicle.plate} · {driverOf(vehicle.plate, vehicle.driver)} · {vehicle.kind} · {tripsText(load.get(vehicle.plate) ?? 0)}</option>
+                    ))}
+                  </select>
+                </li>
+              );
+            })}
+          </ul>
+        ) : <p className="rounded-lg bg-slate-50 px-3 py-4 text-center text-sm text-slate-500">لا توجد سيارة مناسبة متاحة الآن</p>}
+
+        {plan.waiting.length > 0 && (
+          <div className="rounded-xl bg-amber-50 p-3 ring-1 ring-amber-200">
+            <p className="flex items-center gap-2 text-sm font-semibold text-amber-800"><Timer className="h-4 w-4" /> بانتظار سيارة ({plan.waiting.length})</p>
+            <ul className="mt-2 space-y-1.5 text-sm text-amber-900">
+              {plan.waiting.map((item) => (
+                <li key={item.requestIds.join()}>
+                  <span dir="ltr" className="tabular">{item.appointments[0].appointmentAt}</span> · {names(item.appointments)}
+                  <span className="block text-xs text-amber-700">{nextFree(item.appointments)}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
+/** رسائل السائقين بعد التوزيع التلقائي: زر واتساب لكل سيارة. */
+function DriverMessagesDialog({ messages, driverOf, onClose }: {
+  messages: DriverMessage[];
+  driverOf: (plate?: string, fallback?: string) => string;
+  onClose: () => void;
+}) {
+  const [opened, setOpened] = useState<Set<string>>(new Set());
+  return (
+    <Modal
+      tone="green"
+      icon={MessageCircle}
+      title="رسائل السائقين"
+      description="أُرسلت السيارات. أرسل لكل سائق رسالته عبر واتساب."
+      onClose={onClose}
+      footer={<button type="button" onClick={onClose} className={btn("primary")}>تم</button>}
+    >
+      <ul className="divide-y divide-slate-100 rounded-xl ring-1 ring-slate-200">
+        {messages.map(({ vehicle, count, message }) => (
+          <li key={vehicle.plate} className="flex flex-wrap items-center gap-2 p-3">
+            <span className="min-w-0 flex-1">
+              <span className="block font-medium text-ink"><span dir="ltr">{vehicle.plate}</span> · {driverOf(vehicle.plate, vehicle.driver)}</span>
+              <span className="text-xs text-slate-500">{count > 1 ? `رحلة مجمّعة · ${count} ضيوف` : "ضيف واحد"}</span>
+            </span>
+            {vehicle.phone && (
+              <a
+                href={whatsappLink(vehicle.phone, message)}
+                target="_blank"
+                rel="noreferrer"
+                onClick={() => setOpened((current) => new Set(current).add(vehicle.plate))}
+                className={cx(btn("secondary", "sm"), opened.has(vehicle.plate) ? "text-slate-500" : "text-emerald-700")}
+              >
+                {opened.has(vehicle.plate) ? <CheckCircle2 className="h-4 w-4" /> : <MessageCircle className="h-4 w-4" />} واتساب
+              </a>
+            )}
+            <button type="button" onClick={() => navigator.clipboard?.writeText(message).then(() => toast.success("تم نسخ الرسالة"), () => toast.error("تعذر النسخ"))} className={btn("ghost", "sm")}><Copy className="h-4 w-4" /> نسخ</button>
+          </li>
+        ))}
+      </ul>
+    </Modal>
   );
 }
