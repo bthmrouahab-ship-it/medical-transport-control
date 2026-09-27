@@ -1,5 +1,5 @@
 import { DEFAULT_HOSPITALS, ORIGIN, distanceKm, type Hospital } from "./hospitals";
-import { appointmentHospital, localDateString, type ArrivalSource, type ClinicAppointment, type VehicleRequest } from "./transport";
+import { appointmentHospital, localDateString, type ArrivalSource, type ClinicAppointment, type Vehicle, type VehicleRequest } from "./transport";
 
 /**
  * الرحلة بعد استلام المريض: تقدير مدة الطريق، ومعرفة متى تصل السيارة وتعود متاحة.
@@ -35,15 +35,20 @@ export function isRushHour(at: Date) {
  * - التسليم في الوجهة: 10 دقائق، و15 لاحتياجات خاصة، و5 دقائق لكل مريض إضافي في نفس السيارة.
  */
 export function estimateTravelMinutes(from: Point, to: Point, at = new Date(), options: { special?: boolean; extraStops?: number } = {}) {
+  let minutes = driveMinutes(from, to, at);
+  minutes += options.special ? 15 : 10;
+  minutes += Math.max(0, options.extraStops ?? 0) * 5;
+  return Math.ceil(minutes / 5) * 5;
+}
+
+/** مدة القيادة وحدها (بلا وقت التسليم ولا التقريب): الطريق والسرعة والذروة والهامش كما في estimateTravelMinutes. */
+export function driveMinutes(from: Point, to: Point, at = new Date()) {
   const straight = distanceKm(from, to);
   const roadKm = straight * (straight < 10 ? 1.4 : 1.25);
   const speed = roadKm <= 5 ? 30 : roadKm <= 15 ? 40 : roadKm <= 40 ? 60 : 80;
   let minutes = (roadKm / speed) * 60;
   if (isRushHour(at)) minutes *= 1.35;
-  minutes += Math.max(5, minutes * 0.15);
-  minutes += options.special ? 15 : 10;
-  minutes += Math.max(0, options.extraStops ?? 0) * 5;
-  return Math.ceil(minutes / 5) * 5;
+  return minutes + Math.max(5, minutes * 0.15);
 }
 
 /** بداية الطريق ونهايته: من المجمع إلى المستشفى في الذهاب، ومن المستشفى إلى المجمع في العودة. */
@@ -139,4 +144,133 @@ export function arrivalsOn(date: string, requests: VehicleRequest[], now = new D
         : [];
     })
     .sort((a, b) => b.at.getTime() - a.at.getTime());
+}
+
+// ————— مكان السيارة المتاحة: داخل المجمع أو خارجه —————
+
+/** السيارة داخل المجمع إذا كان موقعها (GPS) على هذا البعد منه أو أقل. */
+export const COMPLEX_RADIUS_KM = 0.4;
+
+export type VehicleLocationState =
+  | { kind: "trip" }
+  | { kind: "inside"; since: Date | null; source: "gps" | "estimate" | "default" }
+  | {
+    kind: "outside";
+    /** وقت وصولها إلى الوجهة التي تعود منها */
+    since: Date;
+    /** الوجهة التي تعود منها */
+    from: string;
+    /** الوقت المتوقع لعودتها إلى المجمع */
+    backAt: Date;
+    /** نسبة ما قطعته من طريق العودة (0 عند الوجهة، 1 عند المجمع) */
+    progress: number;
+    /** موقعها الآن: من GPS، أو تقديري على خط العودة (null إن كانت الوجهة غير معروفة) */
+    position: Point | null;
+    source: "gps" | "estimate";
+    /** لم تقطع نصف طريق العودة بعد، فيمكن توجيهها إلى ضيف ينتظر العودة */
+    canRedirect: boolean;
+  };
+
+/**
+ * مكان السيارة الآن، من آخر رحلة وصلت (بالـ GPS أو تقديريًا):
+ * - في رحلة: لها رحلة جارية.
+ * - خارج المجمع: آخر رحلة ذهاب وصلت إلى المستشفى، ولم تعد إلى المجمع بعد. تعود تقديريًا بعد مدة
+ *   القيادة من الوجهة إلى المجمع، أو عندما يصبح موقعها (GPS) قرب المجمع.
+ * - داخل المجمع: آخر رحلة كانت عودة إلى المجمع، أو عادت بعد رحلة ذهاب، أو لا رحلات لها.
+ */
+export function vehicleLocationState(
+  plate: string,
+  requests: VehicleRequest[],
+  appointments: ClinicAppointment[],
+  hospitals: Hospital[] = DEFAULT_HOSPITALS,
+  now = new Date(),
+  gps: Point | null = null,
+): VehicleLocationState {
+  const own = requests.filter((request) => request.vehiclePlate === plate);
+  const phases = own.map((request) => ({ request, phase: tripPhase(request, now, Boolean(gps)) }));
+  if (phases.some((item) => isActivePhase(item.phase))) return { kind: "trip" };
+
+  const origin: Point = { lat: ORIGIN.lat, lng: ORIGIN.lng };
+  const atComplex = gps ? distanceKm(gps, origin) <= COMPLEX_RADIUS_KM : false;
+  let last: { request: VehicleRequest; at: Date } | null = null;
+  for (const { request, phase } of phases) {
+    if (phase.kind === "arrived" && phase.at && phase.at <= now && (!last || phase.at > last.at)) last = { request, at: phase.at };
+  }
+  if (!last) return { kind: "inside", since: null, source: "default" };
+  if (last.request.direction === "عودة") {
+    return { kind: "inside", since: last.at, source: last.request.arrivalSource === "gps" ? "gps" : "estimate" };
+  }
+
+  const appointment = appointments.find((item) => item.id === last!.request.appointmentId);
+  const hospital = appointment ? appointmentHospital(appointment, hospitals) : null;
+  const place: Point | null = last.request.destLat !== undefined && last.request.destLng !== undefined
+    ? { lat: last.request.destLat, lng: last.request.destLng }
+    : hospital ? { lat: hospital.lat, lng: hospital.lng } : null;
+  const from = hospital?.name ?? appointment?.clinic ?? "";
+  const drive = place ? driveMinutes(place, origin, last.at) : UNKNOWN_TRAVEL_MINUTES - 10;
+  const backAt = new Date(last.at.getTime() + Math.ceil(drive) * 60000);
+
+  if (gps) {
+    if (atComplex) return { kind: "inside", since: null, source: "gps" };
+    const total = place ? distanceKm(place, origin) : 0;
+    const progress = total > 0 ? Math.min(1, Math.max(0, 1 - distanceKm(gps, origin) / total)) : 0;
+    return { kind: "outside", since: last.at, from, backAt, progress, position: gps, source: "gps", canRedirect: progress < 0.5 };
+  }
+  if (now >= backAt) return { kind: "inside", since: backAt, source: "estimate" };
+  const progress = Math.min(1, Math.max(0, (now.getTime() - last.at.getTime()) / (backAt.getTime() - last.at.getTime())));
+  const position = place ? { lat: place.lat + (origin.lat - place.lat) * progress, lng: place.lng + (origin.lng - place.lng) * progress } : null;
+  return { kind: "outside", since: last.at, from, backAt, progress, position, source: "estimate", canRedirect: progress < 0.5 };
+}
+
+export type ReturnRedirect = {
+  request: VehicleRequest;
+  appointment: ClinicAppointment;
+  vehicle: Vehicle;
+  /** بُعد السيارة عن مكان الضيف (كم) */
+  distanceKm: number;
+  /** الوجهة التي تعود منها السيارة */
+  from: string;
+  /** مكان استلام الضيف (المستشفى) */
+  pickup: string;
+};
+
+/**
+ * توجيه السيارات الخارجة من المجمع إلى ضيوف ينتظرون العودة: سيارة متاحة خارج المجمع لم تقطع نصف طريق
+ * عودتها تُوجَّه إلى أقرب ضيف طلب العودة، إذا كانت أقرب إليه من المجمع. الاحتياجات الخاصة تحتاج سيارة مجهزة.
+ * كل سيارة لضيف واحد، والأقرب أولًا.
+ */
+export function suggestReturnRedirects(
+  pendingReturns: { request: VehicleRequest; appointment: ClinicAppointment }[],
+  vehicles: Vehicle[],
+  states: Map<string, VehicleLocationState>,
+  hospitals: Hospital[] = DEFAULT_HOSPITALS,
+): ReturnRedirect[] {
+  const origin: Point = { lat: ORIGIN.lat, lng: ORIGIN.lng };
+  const pairs: (ReturnRedirect & { special: boolean })[] = [];
+  for (const trip of pendingReturns) {
+    if (trip.request.direction !== "عودة") continue;
+    const hospital = appointmentHospital(trip.appointment, hospitals);
+    if (!hospital) continue;
+    const special = trip.appointment.kind === "احتياجات خاصة";
+    for (const vehicle of vehicles) {
+      const state = states.get(vehicle.plate);
+      if (!vehicle.available || state?.kind !== "outside" || !state.canRedirect || !state.position) continue;
+      if (special && vehicle.kind !== "احتياجات خاصة") continue;
+      const distance = distanceKm(state.position, hospital);
+      if (distance >= distanceKm(origin, hospital)) continue;
+      pairs.push({ ...trip, vehicle, distanceKm: Math.round(distance * 10) / 10, from: state.from, pickup: hospital.name, special });
+    }
+  }
+  // الاحتياجات الخاصة أولًا (سياراتها أقل)، ثم الأقرب
+  pairs.sort((a, b) => Number(b.special) - Number(a.special) || a.distanceKm - b.distanceKm);
+  const usedVehicles = new Set<string>();
+  const usedRequests = new Set<string>();
+  const result: ReturnRedirect[] = [];
+  for (const { special: _special, ...pair } of pairs) {
+    if (usedVehicles.has(pair.vehicle.plate) || usedRequests.has(pair.request.id)) continue;
+    usedVehicles.add(pair.vehicle.plate);
+    usedRequests.add(pair.request.id);
+    result.push(pair);
+  }
+  return result.sort((a, b) => a.distanceKm - b.distanceKm);
 }

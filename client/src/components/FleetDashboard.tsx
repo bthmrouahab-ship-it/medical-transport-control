@@ -3,7 +3,7 @@ import { BarChart3, CarFront, Hospital as HospitalIcon, Loader2, Map as MapIcon,
 import type { Hospital } from "@shared/hospitals";
 import type { HistorySummary } from "@shared/history";
 import { DEFAULT_VEHICLES, localDateString, migrateAppointment, migrateRequest, type ClinicAppointment, type Vehicle, type VehicleRequest } from "@shared/transport";
-import { arrivalsOn, tripEndpoints, tripPhase } from "@shared/trips";
+import { arrivalsOn, tripEndpoints, tripPhase, vehicleLocationState } from "@shared/trips";
 import { useArrivalAlerts, useCancellationAlerts } from "@/lib/arrivalAlerts";
 import { saveState } from "@/lib/appStore";
 import { useHospitals, useNow, useSharedState } from "@/lib/useShared";
@@ -97,10 +97,14 @@ export default function FleetDashboard({ canEdit = false, alerts = false, actor 
       const fresh = freshness.get(vehicle.plate);
       const trip = trips.find((item) => item.plate === vehicle.plate && item.phase === "toDestination") ?? trips.find((item) => item.plate === vehicle.plate);
       const phase = trip ? tripPhase(requests.find((request) => request.id === trip.id)!, now, isLive(vehicle.plate)) : null;
+      const location = mapLocations.find((item) => item.plate === vehicle.plate);
+      // المتاحة: داخل المجمع، أو خارجه عائدة من وجهتها
+      const place = !vehicle.available || phase ? null
+        : vehicleLocationState(vehicle.plate, requests, appointments, hospitals, now, location && isLive(vehicle.plate) ? { lat: location.lat, lng: location.lng } : null);
       const status = !vehicle.available ? "خارج الخدمة"
         : phase?.kind === "toDestination" ? `مع الضيف · تصل ${timeLabel(phase.etaAt)}`
-          : phase?.kind === "toPickup" ? "في الطريق للاستلام" : "متاحة";
-      const location = mapLocations.find((item) => item.plate === vehicle.plate);
+          : phase?.kind === "toPickup" ? "في الطريق للاستلام"
+            : place?.kind === "outside" ? `متاحة خارج المجمع · تصل المجمع ${timeLabel(place.backAt)}` : "متاحة داخل المجمع";
       return { vehicle, fresh, status, location, rank: (fresh?.state === "live" ? 0 : 2) + (busyPlates.has(vehicle.plate) ? 0 : 1) };
     })
     .sort((a, b) => a.rank - b.rank || a.vehicle.plate.localeCompare(b.vehicle.plate));
