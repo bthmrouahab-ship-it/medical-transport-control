@@ -110,8 +110,9 @@ export function Panel({ title, description, icon: IconComponent, tone = "neutral
   return (
     <section className={cx("overflow-hidden rounded-2xl bg-white shadow-card ring-1 ring-slate-200/80", className)}>
       {style.bar && <div className={cx("h-[3px]", style.bar)} />}
-      <header className="flex items-center justify-between gap-3 border-b border-slate-100 px-5 py-3.5">
-        <div className="flex min-w-0 items-center gap-3">
+      {/* الأزرار تنزل تحت العنوان حين يضيق المكان (الهاتف) بدل أن تضغط الوصف */}
+      <header className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2.5 border-b border-slate-100 px-5 py-3.5">
+        <div className="flex min-w-0 flex-1 basis-60 items-center gap-3">
           {IconComponent && <span className={cx("flex h-9 w-9 shrink-0 items-center justify-center rounded-xl", style.icon)}><IconComponent className="h-[18px] w-[18px]" /></span>}
           <div className="min-w-0">
             <h2 className="flex items-center gap-2 text-[15px] font-semibold text-ink">
@@ -121,7 +122,7 @@ export function Panel({ title, description, icon: IconComponent, tone = "neutral
             {description && <p className="mt-0.5 text-xs leading-5 text-slate-500">{description}</p>}
           </div>
         </div>
-        {actions && <div className="flex shrink-0 items-center gap-2">{actions}</div>}
+        {actions && <div className="flex max-w-full shrink-0 flex-wrap items-center gap-2">{actions}</div>}
       </header>
       <div className={bodyClassName}>{children}</div>
     </section>
@@ -298,24 +299,6 @@ export function Modal({ title, description, icon: IconComponent, tone = "neutral
         {footer && <footer className="flex flex-wrap justify-end gap-2 border-t border-slate-100 bg-slate-50/70 px-5 py-3">{footer}</footer>}
       </div>
     </div>
-  );
-}
-
-/** سجل العمليات كخط زمني: العملية، وتحتها الوقت ومن نفّذها. */
-export function AuditTimeline({ items, className }: { items: string[]; className?: string }) {
-  return (
-    <ol className={cx("overflow-y-auto px-5 py-4", className)}>
-      {items.map((item, index) => {
-        const [when, ...rest] = item.split(" — ");
-        return (
-          <li key={`${item}-${index}`} className="relative border-s border-slate-200 pb-4 ps-4 last:border-transparent last:pb-0">
-            <span className="absolute -start-[5px] top-1.5 h-2.5 w-2.5 rounded-full bg-slate-300 ring-2 ring-white" />
-            <p className="text-sm text-slate-700">{rest.join(" — ") || item}</p>
-            {rest.length > 0 && <p className="mt-0.5 text-xs text-slate-400 tabular" dir="ltr">{when}</p>}
-          </li>
-        );
-      })}
-    </ol>
   );
 }
 

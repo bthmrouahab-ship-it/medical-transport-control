@@ -252,6 +252,8 @@ describe("medical transport rules", () => {
     expect(owned.requestedBy).toBe("7");
     expect(followsRequest(owned, "7")).toBe(true);
     expect(followsRequest(owned, "8")).toBe(false);
+    // رحلة العودة يتابعها كل المشرفين
+    expect(followsRequest({ ...owned, direction: "عودة" }, "8")).toBe(true);
     // طلب قديم أو رحلة غير طبية بلا مالك يتابعها الجميع، والموعد بلا طلب كذلك
     expect(followsRequest(request, "8")).toBe(true);
     expect(followsRequest(undefined, "8")).toBe(true);

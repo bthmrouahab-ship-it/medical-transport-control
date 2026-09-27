@@ -42,9 +42,11 @@ import { useHospitals, useLiveVehicles, useNow } from "@/lib/useShared";
 
 /** حالات الطلب قبل استلام المريض (السيارة لم تصل أو لم تُرسل بعد). */
 const BEFORE_PICKUP: VehicleRequest["status"][] = ["بانتظار التوزيع", "تم إرسال السيارة", "وصلت السيارة"];
-const PROGRESS_STEPS = ["طُلبت السيارة", "أُرسلت", "وصلت السيارة", "استُلم المريض"];
+const OUTBOUND_STEPS = ["طُلبت السيارة", "أُرسلت", "وصلت السيارة", "استُلم المريض", "الوجهة"];
+const RETURN_STEPS = ["طُلبت العودة", "أُرسلت", "وصلت السيارة", "استُلم المريض"];
 
 type Row = { appointment: ClinicAppointment; request?: VehicleRequest };
+type Stage = "request" | "expired" | "progress" | "atAppointment";
 type RequestHandlers = {
   onRequest: (request: VehicleRequest, appointmentId: string) => void;
   onUpdateRequest: (requestId: string, status: VehicleRequest["status"]) => void;
@@ -93,19 +95,36 @@ export function SupervisorHome({ uid, appointments, requests, onRequest, onUpdat
   // آخر طلب لكل موعد (الذهاب، ثم العودة إن طُلبت)
   const latest = new Map<string, VehicleRequest>();
   for (const request of requests) latest.set(request.appointmentId, request);
-  // متابعة الطلب لصاحبه فقط: موعد طلب له مشرف آخر سيارة لا يظهر هنا
-  const followed = (appointment: ClinicAppointment) => followsRequest(latest.get(appointment.id), uid);
+  const phaseOf = (request: VehicleRequest) => tripPhase(request, now, Boolean(request.vehiclePlate && liveGps.has(request.vehiclePlate)));
 
   // مواعيد اليوم فقط، مع أي رحلة من يوم سابق لم يُستلم مريضها بعد (مثل عودة بعد منتصف الليل)
   const activeIds = new Set(requests.filter((request) => BEFORE_PICKUP.includes(request.status)).map((request) => request.appointmentId));
   const todays = appointments.filter((appointment) => appointment.appointmentDate === today
     || (appointment.appointmentDate < today && activeIds.has(appointment.id)));
-  const mine = todays.filter(followed);
-  const pending = mine.filter((appointment) => appointment.status !== "مكتملة" && appointment.status !== "ملغي");
+
+  /**
+   * أين يظهر الموعد الآن، أو null إن لم يكن لهذا المشرف:
+   * - متابعة طلب الذهاب حتى وصول السيارة إلى الوجهة لمن طلبها فقط.
+   * - بعد وصول الوجهة (مرضى في الموعد) وطلب العودة ومتابعته: لكل مشرفي المباني.
+   */
+  const stageOf = (appointment: ClinicAppointment): Stage | null => {
+    const request = latest.get(appointment.id);
+    if (!request) return requestWindow(appointment, now).open ? "request" : "expired";
+    if (request.direction === "عودة") return "progress";
+    if (BEFORE_PICKUP.includes(request.status)) return followsRequest(request, uid) ? "progress" : null;
+    if (phaseOf(request).kind === "arrived") return "atAppointment";
+    return followsRequest(request, uid) ? "progress" : null;
+  };
+  const visible = todays
+    .filter((appointment) => appointment.status !== "مكتملة" && appointment.status !== "ملغي")
+    .flatMap((appointment) => {
+      const stage = stageOf(appointment);
+      return stage ? [{ appointment, request: latest.get(appointment.id), stage }] : [];
+    });
 
   // فلتر المباني: اختيار مبنى أو أكثر، ويُحفظ على هذا الجهاز
   const buildingCounts = new Map<string, number>();
-  for (const appointment of pending) buildingCounts.set(appointment.buildingNumber, (buildingCounts.get(appointment.buildingNumber) ?? 0) + 1);
+  for (const { appointment } of visible) buildingCounts.set(appointment.buildingNumber, (buildingCounts.get(appointment.buildingNumber) ?? 0) + 1);
   const buildingNumbers = Array.from(new Set([...Array.from(buildingCounts.keys()), ...buildings]))
     .sort((first, second) => first.localeCompare(second, "ar", { numeric: true }));
   const inFilter = (appointment: ClinicAppointment) => !buildings.length || buildings.includes(appointment.buildingNumber);
@@ -114,14 +133,15 @@ export function SupervisorHome({ uid, appointments, requests, onRequest, onUpdat
     try { localStorage.setItem(BUILDINGS_KEY, JSON.stringify(next)); } catch { /* التخزين غير متاح */ }
   }
 
-  const rows: Row[] = pending.filter(inFilter).sort(byAppointmentTime).map((appointment) => ({ appointment, request: latest.get(appointment.id) }));
+  const rows = visible.filter((row) => inFilter(row.appointment)).sort((a, b) => byAppointmentTime(a.appointment, b.appointment));
+  const inStage = (stage: Stage) => rows.filter((row) => row.stage === stage);
 
   // المواعيد حسب ما تحتاجه الآن من مشرف المبنى
-  const toRequest = rows.filter((row) => !row.request && requestWindow(row.appointment, now).open);
-  const expired = rows.filter((row) => !row.request && !requestWindow(row.appointment, now).open);
-  const inProgress = rows.filter((row): row is Required<Row> => Boolean(row.request && (BEFORE_PICKUP.includes(row.request.status) || row.request.direction === "عودة")));
-  const atAppointment = rows.filter((row): row is Required<Row> => Boolean(row.request && !BEFORE_PICKUP.includes(row.request.status) && row.request.direction === "ذهاب"));
-  const completed = mine.filter((appointment) => appointment.status === "مكتملة" && inFilter(appointment)).length;
+  const toRequest = inStage("request");
+  const expired = inStage("expired");
+  const inProgress = inStage("progress") as Required<Row>[];
+  const atAppointment = inStage("atAppointment") as Required<Row>[];
+  const completed = todays.filter((appointment) => appointment.status === "مكتملة" && inFilter(appointment)).length;
   const cancelled = todays.filter((appointment) => appointment.status === "ملغي" && inFilter(appointment)).sort(byAppointmentTime);
 
   // مواعيد بلا طلب ولها رحلة قائمة لنفس الوجهة في نفس التوقيت
@@ -141,7 +161,7 @@ export function SupervisorHome({ uid, appointments, requests, onRequest, onUpdat
     <>
       <PageHeader title="طلبات السيارات" subtitle={`${longDate(today)} · مواعيد اليوم`} />
 
-      <BuildingFilter all={pending.length} counts={buildingCounts} buildings={buildingNumbers} selected={buildings} onChange={chooseBuildings} />
+      <BuildingFilter all={visible.length} counts={buildingCounts} buildings={buildingNumbers} selected={buildings} onChange={chooseBuildings} />
 
       <div className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4 lg:gap-4">
         <Stat icon={BellRing} tone="amber" label="تحتاج طلب سيارة" value={toRequest.length} hint={matchCount ? `${matchCount} لنفس وجهة رحلة قائمة` : `حتى ${REQUEST_GRACE_MINUTES} د بعد الموعد`} />
@@ -161,7 +181,7 @@ export function SupervisorHome({ uid, appointments, requests, onRequest, onUpdat
           ) : <EmptyState icon={CheckCircle2} title="لا توجد مواعيد بانتظار طلب سيارة" hint="تظهر هنا مواعيد العيادات لليوم حتى يُطلب لها سيارة" />}
         </Panel>
 
-        <Panel tone="blue" icon={Truck} title="طلبات جارية" count={inProgress.length} description="من طلب السيارة حتى استلام المريض">
+        <Panel tone="blue" icon={Truck} title="طلبات جارية" count={inProgress.length} description="الذهاب حتى الوصول إلى الوجهة، ورحلات العودة لكل المشرفين">
           {inProgress.length ? (
             <div className="divide-y divide-slate-100">
               {inProgress.map(({ appointment, request }) => (
@@ -171,6 +191,7 @@ export function SupervisorHome({ uid, appointments, requests, onRequest, onUpdat
                   request={request}
                   day={dayOf(appointment)}
                   driver={driverOf(request)}
+                  phase={phaseOf(request)}
                   onUpdateRequest={onUpdateRequest}
                   onCancel={onCancel}
                   onCancelAppointment={canCancelAppointment(appointment, request) ? () => setCancelling({ appointment, request }) : undefined}
@@ -181,7 +202,7 @@ export function SupervisorHome({ uid, appointments, requests, onRequest, onUpdat
         </Panel>
 
         {atAppointment.length > 0 && (
-          <Panel tone="cyan" icon={Hospital} title="مرضى في الموعد" count={atAppointment.length} description="عند انتهاء الموعد اطلب سيارة العودة">
+          <Panel tone="cyan" icon={Hospital} title="مرضى في الموعد" count={atAppointment.length} description="وصلوا إلى الوجهة · عند انتهاء الموعد يطلب أي مشرف سيارة العودة">
             <div className="divide-y divide-slate-100">
               {atAppointment.map(({ appointment, request }) => (
                 <AtAppointmentRow
@@ -190,7 +211,7 @@ export function SupervisorHome({ uid, appointments, requests, onRequest, onUpdat
                   request={request}
                   day={dayOf(appointment)}
                   driver={driverOf(request)}
-                  phase={tripPhase(request, now, Boolean(request.vehiclePlate && liveGps.has(request.vehiclePlate)))}
+                  phase={phaseOf(request)}
                   onReturn={onReturn}
                 />
               ))}
@@ -433,16 +454,19 @@ function RequestRow({ appointment, day, match, partner, now, onRequest, onCancel
   );
 }
 
-function ProgressRow({ appointment, request, day, driver, onUpdateRequest, onCancel, onCancelAppointment }: {
+function ProgressRow({ appointment, request, day, driver, phase, onUpdateRequest, onCancel, onCancelAppointment }: {
   appointment: ClinicAppointment;
   request: VehicleRequest;
   day?: string;
   driver: string;
+  phase: TripPhase;
   onUpdateRequest: RequestHandlers["onUpdateRequest"];
   onCancel: RequestHandlers["onCancel"];
   onCancelAppointment?: () => void;
 }) {
-  const step = request.status === "بانتظار التوزيع" ? 0 : request.status === "تم إرسال السيارة" ? 1 : request.status === "وصلت السيارة" ? 2 : 3;
+  const returning = request.direction === "عودة";
+  // الذهاب: بعد الاستلام تبقى الرحلة هنا «في الطريق إلى الوجهة» حتى تصل
+  const step = request.status === "بانتظار التوزيع" ? 0 : request.status === "تم إرسال السيارة" ? 1 : request.status === "وصلت السيارة" ? 2 : returning ? 3 : 4;
   const next = request.status === "تم إرسال السيارة"
     ? { label: "وصلت السيارة", status: "وصلت السيارة" as const }
     : request.status === "وصلت السيارة"
@@ -455,8 +479,14 @@ function ProgressRow({ appointment, request, day, driver, onUpdateRequest, onCan
         <TimeBlock time={appointment.appointmentAt} day={day} />
         <div className="min-w-0 flex-1">
           <AppointmentInfo appointment={appointment} request={request} driver={driver} />
-          <div className="mt-2.5"><Steps steps={PROGRESS_STEPS} current={step} /></div>
+          <div className="mt-2.5"><Steps steps={returning ? RETURN_STEPS : OUTBOUND_STEPS} current={step} /></div>
           {request.status === "بانتظار التوزيع" && <p className="mt-2 text-xs text-slate-500">بانتظار أن يرسل مشرف السيارات سيارة</p>}
+          {phase.kind === "toDestination" && (
+            <div className="mt-2">
+              <Badge tone="blue" icon={Timer}>في الطريق إلى الوجهة · الوصول المتوقع <span dir="ltr" className="tabular">{timeLabel(phase.etaAt)}</span>{phase.late ? " (متأخرة)" : ""}</Badge>
+              <p className="mt-1.5 text-xs text-slate-500">يُتاح طلب العودة بعد وصول السيارة إلى الوجهة</p>
+            </div>
+          )}
         </div>
       </div>
       {(next || canCancel || onCancelAppointment) && (

@@ -11,7 +11,6 @@ export const SHARED_KEYS = [
   "fox_appointments",
   "fox_requests",
   "fox_fleet",
-  "fox_audit",
   "fox_hospitals",
   "fox_history",
   "fox_locations",

@@ -21,9 +21,8 @@ const COLLECTIONS: Partial<Record<SharedKey, { col: string; idField: string; sor
   // مواقع GPS يرسلها السائقون من صفحتهم؛ هنا للقراءة والمتابعة فقط
   fox_locations: { col: "vehicleLocations", idField: "plate" },
 };
-/** قيم تُحفظ كمستند واحد: سجل العمليات (آخر 50 عملية) وملخص الإحصائيات القديم. */
+/** قيم تُحفظ كمستند واحد: ملخص الإحصائيات القديم. (سجل العمليات يكتبه الخادم في جدول مستقل.) */
 const SINGLE_DOCS: Partial<Record<SharedKey, { col: string; id: string; field: string }>> = {
-  fox_audit: { col: "meta", id: "audit", field: "items" },
   fox_history: { col: "meta", id: "history", field: "data" },
 };
 
