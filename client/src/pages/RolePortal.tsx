@@ -39,7 +39,7 @@ function PageLoading() {
 }
 
 type Role = "clinic" | "buildingSupervisor" | "fleetSupervisor";
-type Session = { role: Role; name: string };
+type Session = { role: Role; name: string; uid: string };
 type ClinicView = "home" | "form";
 
 /** تسجيل خروج تلقائي بعد هذه المدة من دون أي نشاط على الصفحة. */
@@ -229,7 +229,7 @@ export default function RolePortal() {
   return (
     <RoleShell
       key={profile.uid + profile.role}
-      session={{ role: profile.role, name: profile.displayName }}
+      session={{ role: profile.role, name: profile.displayName, uid: profile.uid }}
       onLogout={() => signOutNow()}
       onManager={() => setShowManager(true)}
       onChangePassword={() => setChangingPassword(true)}
@@ -443,10 +443,12 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
         )}
         {session.role === "buildingSupervisor" && (
           <SupervisorHome
+            uid={session.uid}
             appointments={appointments}
             requests={requests}
             onRequest={(request, appointmentId) => {
-              updateRequests([...requests, request]);
+              // الطلب باسم المشرف الذي طلبه: هو وحده يتابعه
+              updateRequests([...requests, { ...request, requestedBy: session.uid }]);
               updateAppointments(appointments.map((appointment) => appointment.id === appointmentId ? { ...appointment, status: request.direction === "عودة" ? "طلب عودة" : "تم طلب السيارة" } : appointment));
               logAudit(`طلب ${request.direction} ${request.id}`);
               toast.success("تم إرسال الطلب إلى مشرف السيارات");
@@ -468,11 +470,21 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
                 status: "بانتظار التوزيع",
                 notificationMethod: request.notificationMethod,
                 createdAt: timeLabel(new Date()),
+                requestedBy: session.uid,
               };
               updateRequests([...requests, returnRequest]);
               updateAppointments(appointments.map((item) => item.id === appointment.id ? { ...item, status: "طلب عودة" } : item));
               logAudit(`طلب عودة ${returnRequest.id}`);
               toast.success("تم إرسال طلب العودة");
+            }}
+            onCancelAppointment={(appointment, reason, request) => {
+              // طلب السيارة القائم يُلغى أولًا حتى تتفرغ السيارة، ثم يُعلَّم الموعد ملغيًا مع السبب
+              if (request) updateRequests(requests.filter((item) => item.id !== request.id));
+              updateAppointments(appointments.map((item) => item.id === appointment.id
+                ? { ...item, status: "ملغي" as const, cancelReason: reason, cancelledBy: session.name, cancelledAt: new Date().toISOString() }
+                : item));
+              logAudit(`إلغاء الموعد ${appointment.id}: ${reason}`);
+              toast.success("تم إلغاء الموعد", { description: request?.vehiclePlate ? `وأُلغي طلب السيارة ${request.vehiclePlate}` : undefined });
             }}
           />
         )}

@@ -63,7 +63,7 @@ import {
 } from "@/components/ui-kit";
 import NonMedicalTripForm from "./NonMedicalTripForm";
 import { useHospitals, useLiveVehicles, useNow } from "@/lib/useShared";
-import { NOTIFY_KEY, deviceNotificationsOn, useArrivalAlerts } from "@/lib/arrivalAlerts";
+import { NOTIFY_KEY, deviceNotificationsOn, useArrivalAlerts, useCancellationAlerts } from "@/lib/arrivalAlerts";
 
 type Trip = { request: VehicleRequest; appointment: ClinicAppointment };
 type VehicleFilter = "all" | "available" | "busy" | "off";
@@ -152,6 +152,7 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, audit, d
 
   // رسالة لمشرف السيارات عند وصول سيارة، وتنبيه على الجهاز إن فعّله
   useArrivalAlerts({ arrivals, appointments, hospitals, driverOf });
+  useCancellationAlerts({ requests, appointments });
   const [notifyDevice, setNotifyDevice] = useState(deviceNotificationsOn);
 
   async function toggleDeviceNotifications() {

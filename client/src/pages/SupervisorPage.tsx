@@ -1,11 +1,14 @@
 import { useState } from "react";
 import { toast } from "sonner";
-import { Accessibility, BellRing, CheckCircle2, Hospital, Link2, MessageCircle, Phone, RotateCcw, Timer, Truck, XCircle } from "lucide-react";
+import { Accessibility, Ban, BellRing, Building2, CheckCircle2, Hospital, Link2, MessageCircle, Phone, RotateCcw, Timer, Truck, XCircle } from "lucide-react";
 import {
+  CANCEL_REASONS,
   appointmentPickupLabel,
   calculateTripGroupingScore,
+  canCancelAppointment,
   canRequestVehicle,
   findUnrequestedMatches,
+  followsRequest,
   isNonMedical,
   localDateString,
   REQUEST_GRACE_MINUTES,
@@ -18,6 +21,7 @@ import { tripPhase, type TripPhase } from "@shared/trips";
 import {
   Badge,
   EmptyState,
+  Modal,
   Panel,
   PageHeader,
   Segmented,
@@ -26,9 +30,11 @@ import {
   TimeBlock,
   btn,
   byAppointmentTime,
+  choiceClass,
   cx,
   formatDay,
   inputClass,
+  labelClass,
   longDate,
   timeLabel,
 } from "@/components/ui-kit";
@@ -44,7 +50,21 @@ type RequestHandlers = {
   onUpdateRequest: (requestId: string, status: VehicleRequest["status"]) => void;
   onCancel: (appointment: ClinicAppointment, request: VehicleRequest) => void;
   onReturn: (appointment: ClinicAppointment, request: VehicleRequest) => void;
+  /** إلغاء الموعد نفسه (مع طلب السيارة القائم إن وُجد) بسبب مكتوب */
+  onCancelAppointment: (appointment: ClinicAppointment, reason: string, request?: VehicleRequest) => void;
 };
+
+/** المباني التي يتابعها المشرف على هذا الجهاز (فارغة = كل المباني). */
+const BUILDINGS_KEY = "fox_building_filter";
+
+function loadBuildings(): string[] {
+  try {
+    const stored = JSON.parse(localStorage.getItem(BUILDINGS_KEY) ?? "[]");
+    return Array.isArray(stored) ? stored.filter((item): item is string => typeof item === "string") : [];
+  } catch {
+    return [];
+  }
+}
 
 function newRequest(appointment: ClinicAppointment, method: VehicleRequest["notificationMethod"]): VehicleRequest {
   return {
@@ -57,23 +77,43 @@ function newRequest(appointment: ClinicAppointment, method: VehicleRequest["noti
   };
 }
 
-export function SupervisorHome({ appointments, requests, onRequest, onUpdateRequest, onCancel, onReturn }: { appointments: ClinicAppointment[]; requests: VehicleRequest[] } & RequestHandlers) {
-  const [buildingFilter, setBuildingFilter] = useState("all");
+export function SupervisorHome({ uid, appointments, requests, onRequest, onUpdateRequest, onCancel, onReturn, onCancelAppointment }: {
+  /** رقم حساب المشرف: يرى متابعة طلباته هو فقط */
+  uid: string;
+  appointments: ClinicAppointment[];
+  requests: VehicleRequest[];
+} & RequestHandlers) {
+  const [buildings, setBuildings] = useState<string[]>(loadBuildings);
+  const [cancelling, setCancelling] = useState<Row | null>(null);
   const now = useNow();
   const hospitals = useHospitals();
   const liveGps = useLiveVehicles(now);
   const today = localDateString(now);
-  // مواعيد اليوم فقط، مع أي رحلة من يوم سابق لم يُستلم مريضها بعد (مثل عودة بعد منتصف الليل)
-  const activeIds = new Set(requests.filter((request) => BEFORE_PICKUP.includes(request.status)).map((request) => request.appointmentId));
-  const todays = appointments.filter((appointment) => appointment.appointmentDate === today
-    || (appointment.appointmentDate < today && activeIds.has(appointment.id)));
-  const pending = todays.filter((appointment) => appointment.status !== "مكتملة");
-  const buildingNumbers = Array.from(new Set(pending.map((appointment) => appointment.buildingNumber))).sort((first, second) => first.localeCompare(second, "ar", { numeric: true }));
-  const inFilter = (appointment: ClinicAppointment) => buildingFilter === "all" || appointment.buildingNumber === buildingFilter;
 
   // آخر طلب لكل موعد (الذهاب، ثم العودة إن طُلبت)
   const latest = new Map<string, VehicleRequest>();
   for (const request of requests) latest.set(request.appointmentId, request);
+  // متابعة الطلب لصاحبه فقط: موعد طلب له مشرف آخر سيارة لا يظهر هنا
+  const followed = (appointment: ClinicAppointment) => followsRequest(latest.get(appointment.id), uid);
+
+  // مواعيد اليوم فقط، مع أي رحلة من يوم سابق لم يُستلم مريضها بعد (مثل عودة بعد منتصف الليل)
+  const activeIds = new Set(requests.filter((request) => BEFORE_PICKUP.includes(request.status)).map((request) => request.appointmentId));
+  const todays = appointments.filter((appointment) => appointment.appointmentDate === today
+    || (appointment.appointmentDate < today && activeIds.has(appointment.id)));
+  const mine = todays.filter(followed);
+  const pending = mine.filter((appointment) => appointment.status !== "مكتملة" && appointment.status !== "ملغي");
+
+  // فلتر المباني: اختيار مبنى أو أكثر، ويُحفظ على هذا الجهاز
+  const buildingCounts = new Map<string, number>();
+  for (const appointment of pending) buildingCounts.set(appointment.buildingNumber, (buildingCounts.get(appointment.buildingNumber) ?? 0) + 1);
+  const buildingNumbers = Array.from(new Set([...Array.from(buildingCounts.keys()), ...buildings]))
+    .sort((first, second) => first.localeCompare(second, "ar", { numeric: true }));
+  const inFilter = (appointment: ClinicAppointment) => !buildings.length || buildings.includes(appointment.buildingNumber);
+  function chooseBuildings(next: string[]) {
+    setBuildings(next);
+    try { localStorage.setItem(BUILDINGS_KEY, JSON.stringify(next)); } catch { /* التخزين غير متاح */ }
+  }
+
   const rows: Row[] = pending.filter(inFilter).sort(byAppointmentTime).map((appointment) => ({ appointment, request: latest.get(appointment.id) }));
 
   // المواعيد حسب ما تحتاجه الآن من مشرف المبنى
@@ -81,7 +121,8 @@ export function SupervisorHome({ appointments, requests, onRequest, onUpdateRequ
   const expired = rows.filter((row) => !row.request && !requestWindow(row.appointment, now).open);
   const inProgress = rows.filter((row): row is Required<Row> => Boolean(row.request && (BEFORE_PICKUP.includes(row.request.status) || row.request.direction === "عودة")));
   const atAppointment = rows.filter((row): row is Required<Row> => Boolean(row.request && !BEFORE_PICKUP.includes(row.request.status) && row.request.direction === "ذهاب"));
-  const completed = todays.filter((appointment) => appointment.status === "مكتملة" && inFilter(appointment)).length;
+  const completed = mine.filter((appointment) => appointment.status === "مكتملة" && inFilter(appointment)).length;
+  const cancelled = todays.filter((appointment) => appointment.status === "ملغي" && inFilter(appointment)).sort(byAppointmentTime);
 
   // مواعيد بلا طلب ولها رحلة قائمة لنفس الوجهة في نفس التوقيت
   const matches = new Map(findUnrequestedMatches(todays, requests, hospitals, now).map((match) => [match.appointment.id, match]));
@@ -98,16 +139,9 @@ export function SupervisorHome({ appointments, requests, onRequest, onUpdateRequ
 
   return (
     <>
-      <PageHeader
-        title="طلبات السيارات"
-        subtitle={`${longDate(today)} · مواعيد اليوم`}
-        actions={(
-          <select aria-label="رقم المبنى" value={buildingFilter} onChange={(event) => setBuildingFilter(event.target.value)} className={cx(inputClass, "h-10 w-auto min-w-44 font-medium")}>
-            <option value="all">كل المباني ({pending.length})</option>
-            {buildingNumbers.map((building) => <option key={building} value={building}>مبنى {building}</option>)}
-          </select>
-        )}
-      />
+      <PageHeader title="طلبات السيارات" subtitle={`${longDate(today)} · مواعيد اليوم`} />
+
+      <BuildingFilter all={pending.length} counts={buildingCounts} buildings={buildingNumbers} selected={buildings} onChange={chooseBuildings} />
 
       <div className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4 lg:gap-4">
         <Stat icon={BellRing} tone="amber" label="تحتاج طلب سيارة" value={toRequest.length} hint={matchCount ? `${matchCount} لنفس وجهة رحلة قائمة` : `حتى ${REQUEST_GRACE_MINUTES} د بعد الموعد`} />
@@ -121,7 +155,7 @@ export function SupervisorHome({ appointments, requests, onRequest, onUpdateRequ
           {toRequest.length ? (
             <div className="divide-y divide-slate-100">
               {toRequest.map(({ appointment }) => (
-                <RequestRow key={appointment.id} appointment={appointment} day={dayOf(appointment)} match={matches.get(appointment.id)} partner={partnerOf(appointment)} now={now} onRequest={onRequest} />
+                <RequestRow key={appointment.id} appointment={appointment} day={dayOf(appointment)} match={matches.get(appointment.id)} partner={partnerOf(appointment)} now={now} onRequest={onRequest} onCancelAppointment={() => setCancelling({ appointment })} />
               ))}
             </div>
           ) : <EmptyState icon={CheckCircle2} title="لا توجد مواعيد بانتظار طلب سيارة" hint="تظهر هنا مواعيد العيادات لليوم حتى يُطلب لها سيارة" />}
@@ -131,7 +165,16 @@ export function SupervisorHome({ appointments, requests, onRequest, onUpdateRequ
           {inProgress.length ? (
             <div className="divide-y divide-slate-100">
               {inProgress.map(({ appointment, request }) => (
-                <ProgressRow key={appointment.id} appointment={appointment} request={request} day={dayOf(appointment)} driver={driverOf(request)} onUpdateRequest={onUpdateRequest} onCancel={onCancel} />
+                <ProgressRow
+                  key={appointment.id}
+                  appointment={appointment}
+                  request={request}
+                  day={dayOf(appointment)}
+                  driver={driverOf(request)}
+                  onUpdateRequest={onUpdateRequest}
+                  onCancel={onCancel}
+                  onCancelAppointment={canCancelAppointment(appointment, request) ? () => setCancelling({ appointment, request }) : undefined}
+                />
               ))}
             </div>
           ) : <EmptyState icon={Truck} title="لا توجد طلبات جارية" />}
@@ -159,17 +202,146 @@ export function SupervisorHome({ appointments, requests, onRequest, onUpdateRequ
           <Panel tone="red" icon={XCircle} title="انتهت مهلة الطلب" count={expired.length} description={`مضى أكثر من ${REQUEST_GRACE_MINUTES} دقيقة على الموعد، ويجب أن تعدّل العيادة الموعد أولًا`}>
             <ul className="divide-y divide-slate-100">
               {expired.map(({ appointment }) => (
-                <li key={appointment.id} className="flex items-center gap-4 p-4 sm:px-5">
-                  <TimeBlock time={appointment.appointmentAt} day={dayOf(appointment)} tone="red" />
-                  <div className="min-w-0 flex-1"><AppointmentInfo appointment={appointment} /></div>
-                  <span className="hidden shrink-0 text-xs font-medium text-red-700 sm:block">بانتظار تعديل العيادة</span>
+                <li key={appointment.id} className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:px-5">
+                  <div className="flex min-w-0 flex-1 gap-4">
+                    <TimeBlock time={appointment.appointmentAt} day={dayOf(appointment)} tone="red" />
+                    <div className="min-w-0 flex-1"><AppointmentInfo appointment={appointment} /></div>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-3">
+                    <span className="text-xs font-medium text-red-700">بانتظار تعديل العيادة</span>
+                    {canCancelAppointment(appointment) && <CancelAppointmentButton onClick={() => setCancelling({ appointment })} />}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </Panel>
+        )}
+
+        {cancelled.length > 0 && (
+          <Panel icon={Ban} title="مواعيد ملغاة" count={cancelled.length} description="أُلغيت اليوم مع سبب الإلغاء">
+            <ul className="divide-y divide-slate-100">
+              {cancelled.map((appointment) => (
+                <li key={appointment.id} className="flex gap-4 p-4 opacity-90 sm:px-5">
+                  <TimeBlock time={appointment.appointmentAt} day={dayOf(appointment)} />
+                  <div className="min-w-0 flex-1">
+                    <AppointmentInfo appointment={appointment} />
+                    <p className="mt-2 w-fit rounded-lg bg-red-50 px-2.5 py-1.5 text-xs text-red-800 ring-1 ring-inset ring-red-200">
+                      <span className="font-semibold">سبب الإلغاء:</span> {appointment.cancelReason || "—"}
+                      {appointment.cancelledBy && <span className="text-red-700/80"> · {appointment.cancelledBy}{appointment.cancelledAt && !Number.isNaN(Date.parse(appointment.cancelledAt)) ? ` ${timeLabel(new Date(appointment.cancelledAt))}` : ""}</span>}
+                    </p>
+                  </div>
                 </li>
               ))}
             </ul>
           </Panel>
         )}
       </div>
+
+      {cancelling && (
+        <CancelDialog
+          appointment={cancelling.appointment}
+          request={cancelling.request}
+          onClose={() => setCancelling(null)}
+          onConfirm={(reason) => {
+            onCancelAppointment(cancelling.appointment, reason, cancelling.request);
+            setCancelling(null);
+          }}
+        />
+      )}
     </>
+  );
+}
+
+/** فلتر المباني: «كل المباني» أو مبنى واحد أو أكثر. */
+function BuildingFilter({ all, counts, buildings, selected, onChange }: {
+  all: number;
+  counts: Map<string, number>;
+  buildings: string[];
+  selected: string[];
+  onChange: (next: string[]) => void;
+}) {
+  if (!buildings.length) return null;
+  const chip = (active: boolean) => cx(
+    "inline-flex h-9 items-center gap-1.5 rounded-full px-3.5 text-sm font-medium ring-1 ring-inset transition",
+    active ? "bg-navy-900 text-white ring-navy-900" : "bg-white text-slate-600 ring-slate-300 hover:bg-slate-50 hover:text-ink",
+  );
+  const count = (value: number, active: boolean) => <span className={cx("rounded-full px-1.5 text-xs tabular", active ? "bg-white/15" : "bg-slate-100 text-slate-500")}>{value}</span>;
+  return (
+    <div className="mb-6 flex flex-wrap items-center gap-2" role="group" aria-label="فلتر المباني">
+      <span className="me-1 inline-flex items-center gap-1.5 text-sm font-medium text-slate-500"><Building2 className="h-4 w-4" /> المباني</span>
+      <button type="button" aria-pressed={!selected.length} onClick={() => onChange([])} className={chip(!selected.length)}>الكل {count(all, !selected.length)}</button>
+      {buildings.map((building) => {
+        const active = selected.includes(building);
+        return (
+          <button
+            key={building}
+            type="button"
+            aria-pressed={active}
+            onClick={() => onChange(active ? selected.filter((item) => item !== building) : [...selected, building])}
+            className={chip(active)}
+          >
+            مبنى {building} {count(counts.get(building) ?? 0, active)}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function CancelAppointmentButton({ onClick }: { onClick: () => void }) {
+  return <button type="button" onClick={onClick} className={cx(btn("ghost", "sm"), "text-red-600 hover:bg-red-50 hover:text-red-700")}><Ban className="h-4 w-4" /> إلغاء الموعد</button>;
+}
+
+/** إلغاء الموعد: سبب إلزامي (من الأسباب الجاهزة أو مكتوب). */
+function CancelDialog({ appointment, request, onClose, onConfirm }: {
+  appointment: ClinicAppointment;
+  request?: VehicleRequest;
+  onClose: () => void;
+  onConfirm: (reason: string) => void;
+}) {
+  const [preset, setPreset] = useState("");
+  const [details, setDetails] = useState("");
+  const other = preset === "other";
+  const reason = (other ? details : [preset, details.trim()].filter(Boolean).join(" — ")).trim();
+  const valid = Boolean(preset) && reason.length >= 3;
+  const carOnWay = request && request.status !== "بانتظار التوزيع";
+  return (
+    <Modal
+      tone="red"
+      icon={Ban}
+      title={`إلغاء موعد ${appointment.patientName}`}
+      description={`${appointment.appointmentAt} · ${appointmentPickupLabel(appointment)} ← ${appointment.clinic}`}
+      onClose={onClose}
+      footer={(
+        <>
+          <button type="button" onClick={onClose} className={btn("secondary")}>رجوع</button>
+          <button type="button" disabled={!valid} onClick={() => onConfirm(reason.slice(0, 300))} className={cx(btn("primary"), "bg-red-600 hover:bg-red-700")}><Ban className="h-4 w-4" /> إلغاء الموعد</button>
+        </>
+      )}
+    >
+      {request && (
+        <p className="mb-4 rounded-xl bg-amber-50 p-3 text-sm leading-6 text-amber-900 ring-1 ring-inset ring-amber-200">
+          {carOnWay
+            ? <>سيُلغى أيضًا طلب السيارة <span dir="ltr" className="font-semibold">{request.vehiclePlate}</span> وتصل رسالة لمشرف السيارات ليبلغ السائق.</>
+            : "سيُلغى أيضًا طلب السيارة المرسل إلى مشرف السيارات."}
+        </p>
+      )}
+      <fieldset>
+        <legend className={labelClass}>سبب الإلغاء <span className="text-red-600">*</span></legend>
+        <div className="grid gap-2 sm:grid-cols-2">
+          {[...CANCEL_REASONS, "other"].map((item) => (
+            <button key={item} type="button" aria-pressed={preset === item} onClick={() => setPreset(item)} className={cx(choiceClass(preset === item), "min-h-10 text-start")}>
+              {item === "other" ? "سبب آخر" : item}
+            </button>
+          ))}
+        </div>
+      </fieldset>
+      <label className="mt-4 block">
+        <span className={labelClass}>{other ? "اكتب السبب" : "تفاصيل (اختياري)"}{other && <span className="text-red-600"> *</span>}</span>
+        <textarea value={details} onChange={(event) => setDetails(event.target.value)} maxLength={200} rows={2} placeholder={other ? "مثال: المريض في المستشفى منذ أمس" : "أي ملاحظة لمشرف السيارات والعيادة"} className={cx(inputClass, "h-auto py-2.5")} />
+      </label>
+      {!valid && preset && <p className="mt-2 text-xs text-red-600">اكتب السبب (3 أحرف على الأقل)</p>}
+    </Modal>
   );
 }
 
@@ -201,13 +373,14 @@ function AppointmentInfo({ appointment, request, driver }: { appointment: Clinic
   );
 }
 
-function RequestRow({ appointment, day, match, partner, now, onRequest }: {
+function RequestRow({ appointment, day, match, partner, now, onRequest, onCancelAppointment }: {
   appointment: ClinicAppointment;
   day?: string;
   match?: UnrequestedMatch;
   partner?: ClinicAppointment;
   now: Date;
   onRequest: RequestHandlers["onRequest"];
+  onCancelAppointment: () => void;
 }) {
   const [method, setMethod] = useState<VehicleRequest["notificationMethod"]>(match?.matchedRequest.notificationMethod ?? "whatsapp");
   const deadline = requestWindow(appointment, now);
@@ -254,18 +427,20 @@ function RequestRow({ appointment, day, match, partner, now, onRequest }: {
           options={[{ value: "whatsapp", label: "واتساب", icon: MessageCircle }, { value: "call", label: "اتصال", icon: Phone }]}
         />
         <button onClick={requestCar} className={btn("primary")}><BellRing className="h-4 w-4" /> طلب السيارة</button>
+        {canCancelAppointment(appointment) && <CancelAppointmentButton onClick={onCancelAppointment} />}
       </div>
     </div>
   );
 }
 
-function ProgressRow({ appointment, request, day, driver, onUpdateRequest, onCancel }: {
+function ProgressRow({ appointment, request, day, driver, onUpdateRequest, onCancel, onCancelAppointment }: {
   appointment: ClinicAppointment;
   request: VehicleRequest;
   day?: string;
   driver: string;
   onUpdateRequest: RequestHandlers["onUpdateRequest"];
   onCancel: RequestHandlers["onCancel"];
+  onCancelAppointment?: () => void;
 }) {
   const step = request.status === "بانتظار التوزيع" ? 0 : request.status === "تم إرسال السيارة" ? 1 : request.status === "وصلت السيارة" ? 2 : 3;
   const next = request.status === "تم إرسال السيارة"
@@ -284,10 +459,11 @@ function ProgressRow({ appointment, request, day, driver, onUpdateRequest, onCan
           {request.status === "بانتظار التوزيع" && <p className="mt-2 text-xs text-slate-500">بانتظار أن يرسل مشرف السيارات سيارة</p>}
         </div>
       </div>
-      {(next || canCancel) && (
+      {(next || canCancel || onCancelAppointment) && (
         <div className="flex flex-wrap items-center gap-2 lg:justify-end">
           {next && <button onClick={() => onUpdateRequest(request.id, next.status)} className={btn("dark")}><CheckCircle2 className="h-4 w-4" /> {next.label}</button>}
-          {canCancel && <button onClick={() => window.confirm("هل تريد إلغاء طلب السيارة؟") && onCancel(appointment, request)} className={btn("danger")}><XCircle className="h-4 w-4" /> إلغاء الطلب</button>}
+          {canCancel && <button onClick={() => window.confirm("إلغاء طلب السيارة فقط؟ يبقى الموعد ويمكن طلب سيارة له من جديد.") && onCancel(appointment, request)} className={btn("danger")}><XCircle className="h-4 w-4" /> إلغاء طلب السيارة</button>}
+          {onCancelAppointment && <CancelAppointmentButton onClick={onCancelAppointment} />}
         </div>
       )}
     </div>
