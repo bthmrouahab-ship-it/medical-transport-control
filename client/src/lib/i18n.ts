@@ -33,7 +33,7 @@ const STATUS_EN: Record<AppointmentStatus, string> = {
   "ملغي": "Cancelled",
 };
 const KIND_EN: Record<AppointmentKind, string> = { "عادي": "Regular", "احتياجات خاصة": "Special needs" };
-const NEED_EN: Record<AssistanceNeed, string> = { "يحتاج مرافق": "Needs escort", "كرسي متحرك": "Wheelchair" };
+const NEED_EN: Record<AssistanceNeed, string> = { "يحتاج مرافق": "Needs escort", "يحتاج Nurse": "Needs nurse", "كرسي متحرك": "Wheelchair" };
 
 const ar = {
   dir: "rtl" as "rtl" | "ltr",
@@ -96,6 +96,27 @@ const ar = {
   changePassword: "تغيير كلمة المرور",
   logout: "تسجيل الخروج",
   switchLang: "English",
+  // موعد ثانٍ لنفس الضيف
+  secondToggle: "للضيف موعد ثانٍ في نفس اليوم",
+  secondTitle: "الموعد الثاني",
+  secondHint: "يُضاف الموعدان معًا. عند انتهاء الموعد الأول يمكن نقل الضيف مباشرة إلى الثاني بدل العودة إلى المجمع.",
+  errSecondOrder: "وقت الموعد الثاني يجب أن يكون بعد الموعد الأول",
+  errSecondIncomplete: "أدخل مستشفى الموعد الثاني ووقته",
+  savedTwo: "تم تسجيل الموعدين",
+  otherSameDay: (time: string, clinic: string) => `موعد آخر للضيف في نفس اليوم: ${time} · ${clinic}`,
+  // البحث والفلترة
+  search: "بحث: الاسم، الموبايل، المبنى، الشقة، الوجهة",
+  filterStatus: "الحالة",
+  statusAll: "كل الحالات",
+  statusWaiting: "بانتظار طلب السيارة",
+  statusActive: "مرتبطة بطلب سيارة",
+  statusDone: "مكتملة",
+  statusCancelled: "ملغاة",
+  scopeDay: "هذا اليوم",
+  scopeAll: "كل الأيام",
+  results: (count: number) => `${count} نتيجة`,
+  noResults: "لا توجد مواعيد مطابقة",
+  clearFilters: "مسح البحث",
 };
 
 export type ClinicText = typeof ar;
@@ -161,6 +182,25 @@ const en: ClinicText = {
   changePassword: "Change password",
   logout: "Sign out",
   switchLang: "العربية",
+  secondToggle: "The guest has a second appointment the same day",
+  secondTitle: "Second appointment",
+  secondHint: "Both appointments are added together. When the first one ends, the guest can be taken straight to the second instead of returning to the complex.",
+  errSecondOrder: "The second appointment must be after the first",
+  errSecondIncomplete: "Enter the hospital and time of the second appointment",
+  savedTwo: "Both appointments saved",
+  otherSameDay: (time, clinic) => `Another appointment the same day: ${time} · ${clinic}`,
+  search: "Search: name, mobile, building, apartment, destination",
+  filterStatus: "Status",
+  statusAll: "All statuses",
+  statusWaiting: "Awaiting car request",
+  statusActive: "Car requested",
+  statusDone: "Completed",
+  statusCancelled: "Cancelled",
+  scopeDay: "This day",
+  scopeAll: "All days",
+  results: (count) => `${count} results`,
+  noResults: "No matching appointments",
+  clearFilters: "Clear search",
 };
 
 

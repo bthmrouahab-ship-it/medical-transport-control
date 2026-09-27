@@ -168,6 +168,11 @@ function describe_write(PDO $pdo, string $col, string $id, ?array $before, ?arra
             $plate = $request['vehiclePlate'] ?? '';
             if ($before === null) {
                 $details['status'] = 'بانتظار التوزيع';
+                if (!empty($request['fromAppointmentId'])) {
+                    $first = appointment_doc($pdo, (string)$request['fromAppointmentId']);
+                    $details['from'] = $first['clinic'] ?? '';
+                    return ['request', 'request.create', "طلب نقل $who من {$details['from']} إلى {$details['destination']} (موعد " . ($details['time'] ?? '') . ') بدل العودة إلى المجمع', $details];
+                }
                 return ['request', 'request.create', "طلب سيارة $direction لـ $who (مبنى {$details['building']} ← {$details['destination']}، " . ($details['time'] ?? '') . ')', $details];
             }
             if ($after === null) {
