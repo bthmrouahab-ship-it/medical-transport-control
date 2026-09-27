@@ -3,7 +3,9 @@ import { FLEET_SEED } from "./seedData";
 
 export type AppointmentKind = "عادي" | "احتياجات خاصة";
 export type VehicleKind = "سيدان" | "احتياجات خاصة" | "باص";
-export type AssistanceNeed = "يحتاج مرافق" | "كرسي متحرك";
+export type AssistanceNeed = "يحتاج مرافق" | "يحتاج Nurse" | "كرسي متحرك";
+/** احتياجات الضيف بترتيب ظهورها في النماذج: مرافق وممرض (Nurse) خياران منفصلان. */
+export const ASSISTANCE_NEEDS: AssistanceNeed[] = ["يحتاج مرافق", "يحتاج Nurse", "كرسي متحرك"];
 export type AppointmentStatus =
   | "بانتظار طلب السيارة"
   | "تم طلب السيارة"
@@ -76,6 +78,11 @@ export type VehicleRequest = {
   /** وقت الوصول إلى الوجهة (ISO) ومصدره */
   arrivedAt?: string;
   arrivalSource?: ArrivalSource;
+  /**
+   * نقل بين موعدين: الضيف يُستلم من مستشفى هذا الموعد (الأول) بعد انتهائه ويُنقل مباشرة إلى موعد الطلب (الثاني)
+   * بدل العودة إلى المجمع. الطلب «ذهاب» لموعده الثاني.
+   */
+  fromAppointmentId?: string;
 };
 
 export type TripGroupSuggestion = {
@@ -165,6 +172,7 @@ function normalizeAssistance(value: unknown): AssistanceNeed[] {
   const text = values.join(" ");
   const needs: AssistanceNeed[] = [];
   if (text.includes("مرافق")) needs.push("يحتاج مرافق");
+  if (/ممرض|nurse/i.test(text)) needs.push("يحتاج Nurse");
   if (text.includes("كرسي")) needs.push("كرسي متحرك");
   return needs;
 }
@@ -208,6 +216,11 @@ export function requestWindow(appointment: Pick<ClinicAppointment, "appointmentD
 
 export function appointmentPickupLabel(appointment: Pick<ClinicAppointment, "buildingNumber" | "apartmentNumber">) {
   return `مبنى ${appointment.buildingNumber}، شقة ${appointment.apartmentNumber}`;
+}
+
+/** مكان الاستلام ← الوجهة كما يظهر في القوائم؛ في النقل بين موعدين من مستشفى الموعد الأول. */
+export function routeLabel(appointment: ClinicAppointment, from?: ClinicAppointment | null) {
+  return `${from ? from.clinic : appointmentPickupLabel(appointment)} ← ${appointment.clinic}`;
 }
 
 export function migrateAppointment(value: unknown, index = 0): ClinicAppointment | null {
@@ -386,7 +399,35 @@ export function migrateRequest(value: unknown): VehicleRequest | null {
     destLng: coordinate(raw.destLng),
     arrivedAt: isoTime(raw.arrivedAt),
     arrivalSource,
+    fromAppointmentId: toText(raw.fromAppointmentId) || undefined,
   };
+}
+
+/** طلب نقل بين موعدين (من مستشفى الموعد الأول إلى الثاني). */
+export const isTransfer = (request: Pick<VehicleRequest, "fromAppointmentId">) => Boolean(request.fromAppointmentId);
+
+const guestKey = (appointment: Pick<ClinicAppointment, "patientName" | "buildingNumber" | "apartmentNumber">) =>
+  [appointment.patientName, appointment.buildingNumber, appointment.apartmentNumber].map((part) => part.trim().replace(/\s+/g, " ").toLowerCase()).join("|");
+
+/** نفس الضيف: الاسم والمبنى والشقة. */
+export const sameGuest = (a: ClinicAppointment, b: ClinicAppointment) => guestKey(a) === guestKey(b);
+
+/** مواعيد الضيف الأخرى في نفس اليوم (غير الملغاة)، بترتيب الوقت. */
+export function sameDayAppointments(appointment: ClinicAppointment, appointments: ClinicAppointment[]) {
+  return appointments
+    .filter((other) => other.id !== appointment.id && other.appointmentDate === appointment.appointmentDate
+      && other.status !== "ملغي" && !isNonMedical(other) && sameGuest(other, appointment))
+    .sort((a, b) => a.appointmentAt.localeCompare(b.appointmentAt));
+}
+
+/**
+ * الموعد التالي لنفس الضيف في نفس اليوم، إن كان يمكن نقله إليه مباشرة بعد انتهاء هذا الموعد:
+ * بعده في الوقت، ولم يُطلب له سيارة بعد، ومهلة طلبه مفتوحة.
+ */
+export function nextAppointmentOf(appointment: ClinicAppointment, appointments: ClinicAppointment[], now = new Date()) {
+  if (isNonMedical(appointment)) return null;
+  return sameDayAppointments(appointment, appointments)
+    .find((other) => other.appointmentAt > appointment.appointmentAt && other.status === "بانتظار طلب السيارة" && requestWindow(other, now).open) ?? null;
 }
 
 /** عدد رحلات كل سيارة في يوم (الرحلة المجمّعة رحلة واحدة)، لتوزيع العمل على السيارات بالتساوي. */
@@ -452,7 +493,9 @@ export function planDispatch(
   const byAppointment = new Map(trips.map((trip) => [trip.appointment.id, trip]));
   const units: PlannedTrip[] = [];
   const grouped = new Set<string>();
-  for (const group of buildTripGroups(trips.map((trip) => ({ appointment: trip.appointment, direction: trip.request.direction })), hospitals)) {
+  // النقل بين موعدين يبدأ من مستشفى، فلا يُجمع مع رحلات تبدأ من المجمع
+  const groupable = trips.filter((trip) => !isTransfer(trip.request));
+  for (const group of buildTripGroups(groupable.map((trip) => ({ appointment: trip.appointment, direction: trip.request.direction })), hospitals)) {
     const members = group.appointmentIds.map((id) => byAppointment.get(id)).filter((trip): trip is NonNullable<typeof trip> => Boolean(trip));
     if (members.length < 2) continue;
     members.forEach((trip) => grouped.add(trip.appointment.id));
@@ -767,7 +810,7 @@ const byTime = (a: ClinicAppointment, b: ClinicAppointment) => appointmentDateTi
 // ————— رسالة السائق (عربي / إنجليزي) —————
 
 const KIND_EN: Record<AppointmentKind, string> = { "عادي": "Regular", "احتياجات خاصة": "Special needs" };
-const NEED_EN: Record<AssistanceNeed, string> = { "يحتاج مرافق": "Needs escort", "كرسي متحرك": "Wheelchair" };
+const NEED_EN: Record<AssistanceNeed, string> = { "يحتاج مرافق": "Needs escort", "يحتاج Nurse": "Needs nurse", "كرسي متحرك": "Wheelchair" };
 
 /** وجهات الرحلات غير الطبية (مع «أخرى» تُكتب يدويًا). */
 export const NON_MEDICAL_DESTINATIONS: { ar: string; en: string }[] = [
@@ -789,28 +832,33 @@ function destinationLabels(appointment: ClinicAppointment, hospitals: Hospital[]
 
 /** رسالة واتساب للسائق بالعربية ثم الإنجليزية؛ تدعم رحلة واحدة أو رحلة مجمّعة. */
 export function buildDriverMessage(
-  trips: { appointment: ClinicAppointment; request: VehicleRequest }[],
+  /** from: الموعد الأول في رحلة النقل بين موعدين (الاستلام من مستشفاه) */
+  trips: { appointment: ClinicAppointment; request: VehicleRequest; from?: ClinicAppointment | null }[],
   vehicle: Pick<Vehicle, "plate" | "driver">,
   hospitals: Hospital[] = DEFAULT_HOSPITALS,
 ) {
   const sorted = [...trips].sort((a, b) => byTime(a.appointment, b.appointment));
   const returning = sorted[0]?.request.direction === "عودة";
+  const transfer = Boolean(sorted[0]?.from);
+  const leg = { ar: transfer ? "نقل بين موعدين" : returning ? "عودة" : "ذهاب", en: transfer ? "Transfer between appointments" : returning ? "Return" : "Outbound" };
   const ar: string[] = [
-    sorted.length > 1 ? `رحلة مجمّعة (${sorted.length} ضيوف) — ${returning ? "عودة" : "ذهاب"}` : `رحلة جديدة — ${returning ? "عودة" : "ذهاب"}`,
+    sorted.length > 1 ? `رحلة مجمّعة (${sorted.length} ضيوف) — ${leg.ar}` : `رحلة جديدة — ${leg.ar}`,
     `السيارة: ${vehicle.plate}`,
   ];
   const en: string[] = [
-    sorted.length > 1 ? `Grouped trip (${sorted.length} guests) — ${returning ? "Return" : "Outbound"}` : `New trip — ${returning ? "Return" : "Outbound"}`,
+    sorted.length > 1 ? `Grouped trip (${sorted.length} guests) — ${leg.en}` : `New trip — ${leg.en}`,
     `Vehicle: ${vehicle.plate}`,
   ];
-  sorted.forEach(({ appointment }, index) => {
+  sorted.forEach(({ appointment, from }, index) => {
     const destination = destinationLabels(appointment, hospitals);
     const prefix = sorted.length > 1 ? `${index + 1}) ` : "";
     const rider = isNonMedical(appointment) ? { ar: "الراكب", en: "Passenger" } : { ar: "الضيف", en: "Guest" };
     const needsAr = appointment.assistance.join("، ");
     const needsEn = appointment.assistance.map((need) => NEED_EN[need]).join(", ");
-    const pickupAr = `مبنى ${appointment.buildingNumber}، شقة ${appointment.apartmentNumber}`;
-    const pickupEn = `Building ${appointment.buildingNumber}, Apt ${appointment.apartmentNumber}`;
+    // في النقل بين موعدين يُستلم الضيف من مستشفى موعده الأول
+    const firstPlace = from ? destinationLabels(from, hospitals) : null;
+    const pickupAr = firstPlace ? `${firstPlace.ar} (بعد موعده ${from!.appointmentAt})` : `مبنى ${appointment.buildingNumber}، شقة ${appointment.apartmentNumber}`;
+    const pickupEn = firstPlace ? `${firstPlace.en} (after appointment ${from!.appointmentAt})` : `Building ${appointment.buildingNumber}, Apt ${appointment.apartmentNumber}`;
     ar.push(
       "",
       `${prefix}${rider.ar}: ${appointment.patientName}${isNonMedical(appointment) ? " (رحلة غير طبية)" : ""}`,

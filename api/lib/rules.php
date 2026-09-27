@@ -13,7 +13,8 @@ const APPOINTMENT_FIELDS = ['id', 'patientName', 'clinic', 'buildingNumber', 'ap
 const CANCEL_FIELDS = ['cancelReason', 'cancelledBy', 'cancelledAt'];
 const REQUEST_STATUSES = ['بانتظار التوزيع', 'تم إرسال السيارة', 'وصلت السيارة', 'تم استلام المريض', 'وصلت الوجهة'];
 const REQUEST_FIELDS = ['id', 'appointmentId', 'vehiclePlate', 'driver', 'direction', 'status', 'notificationMethod',
-    'createdAt', 'groupId', 'notificationSentAt', 'requestedBy', 'pickedUpAt', 'etaAt', 'destLat', 'destLng', 'arrivedAt', 'arrivalSource', '_o'];
+    'createdAt', 'groupId', 'notificationSentAt', 'requestedBy', 'pickedUpAt', 'etaAt', 'destLat', 'destLng', 'arrivedAt', 'arrivalSource',
+    'fromAppointmentId', '_o'];
 /** خانات مرحلة الطريق إلى الوجهة (تُكتب عند استلام المريض وعند الوصول) */
 const TRIP_FIELDS = ['pickedUpAt', 'etaAt', 'destLat', 'destLng', 'arrivedAt', 'arrivalSource'];
 const VEHICLE_FIELDS = ['plate', 'driver', 'phone', 'kind', 'available', '_o'];
@@ -137,12 +138,16 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
                     && in_array($after['direction'] ?? null, ['ذهاب', 'عودة'], true)
                     && ($after['status'] ?? null) === 'بانتظار التوزيع'
                     && in_array($after['notificationMethod'] ?? null, ['whatsapp', 'call'], true)
+                    // النقل بين موعدين: طلب ذهاب للموعد الثاني يبدأ من مستشفى موعد آخر
+                    && (!array_key_exists('fromAppointmentId', $after)
+                        || (is_text($after['fromAppointmentId'], 160) && $after['fromAppointmentId'] !== '' && $after['fromAppointmentId'] !== $after['appointmentId']
+                            && $after['direction'] === 'ذهاب'))
                     && !array_intersect(array_keys($after), ['vehiclePlate', 'driver', 'groupId', 'notificationSentAt', ...TRIP_FIELDS]);
                 return $valid ? null : 'بيانات الطلب غير صالحة';
             }
             if (!valid_trip_fields($after)) return 'بيانات الطلب غير صالحة';
             if ($role === 'admin') {
-                return only($changed, REQUEST_FIELDS) && !array_intersect($changed, ['id', 'appointmentId'])
+                return only($changed, REQUEST_FIELDS) && !array_intersect($changed, ['id', 'appointmentId', 'fromAppointmentId'])
                     && in_array($after['status'] ?? null, REQUEST_STATUSES, true) ? null : $denied;
             }
             // مشرف السيارات: إرسال السيارة وجمع الرحلات، وتأكيد وصولها إلى الوجهة (يدويًا أو بانتهاء المدة التقديرية)

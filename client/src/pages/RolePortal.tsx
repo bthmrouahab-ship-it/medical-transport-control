@@ -314,14 +314,17 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
     const appointment = request && appointments.find((item) => item.id === request.appointmentId);
     // عند استلام المريض: وقت بداية الطريق، والوقت المتوقع للوصول، وإحداثيات الوجهة لاكتشاف الوصول عبر GPS
     const passengers = request?.groupId ? requests.filter((item) => item.groupId === request.groupId).length : 1;
+    // النقل بين موعدين: الاستلام من مستشفى الموعد الأول
+    const firstAppointment = request?.fromAppointmentId ? appointments.find((item) => item.id === request.fromAppointmentId) ?? null : null;
     const pickup = status === "تم استلام المريض" && request && appointment
-      ? pickupDetails(request, appointment, hospitals, new Date(), passengers)
+      ? pickupDetails(request, appointment, hospitals, new Date(), passengers, firstAppointment)
       : {};
     updateRequests(requests.map((item) => item.id === requestId ? { ...item, status, ...pickup } : item));
     if (request && status === "تم استلام المريض") {
+      // الموعد الأول في النقل ينتهي عند استلام الضيف منه
       updateAppointments(appointments.map((appointment) => appointment.id === request.appointmentId
         ? { ...appointment, status: request.direction === "عودة" ? "مكتملة" : "تم استلام المريض" }
-        : appointment));
+        : appointment.id === request.fromAppointmentId ? { ...appointment, status: "مكتملة" } : appointment));
     }
     toast.success(status === "وصلت السيارة" ? "تم تسجيل وصول السيارة" : "تم تأكيد استلام الضيف", {
       description: "etaAt" in pickup && pickup.etaAt ? `الوصول المتوقع إلى الوجهة ${timeLabel(new Date(pickup.etaAt))}` : undefined,
@@ -345,15 +348,17 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
     setView("form");
   }
 
-  function saveAppointment(appointment: ClinicAppointment) {
+  /** موعد واحد، أو موعدان لنفس الضيف في نفس اليوم يُضافان معًا في حفظ واحد */
+  function saveAppointment(saved: ClinicAppointment[]) {
+    const [appointment] = saved;
     const next = editingAppointment
       ? appointments.map((item) => item.id === appointment.id ? appointment : item)
-      : [...appointments, appointment];
+      : [...appointments, ...saved];
     updateAppointments(next.sort(byAppointmentTime));
     setEditingAppointment(null);
     setSelectedDate(appointment.appointmentDate);
     setView("home");
-    toast.success(editingAppointment ? t.updated : t.saved);
+    toast.success(editingAppointment ? t.updated : saved.length > 1 ? t.savedTwo : t.saved);
   }
 
   function deleteAppointment(appointment: ClinicAppointment) {
@@ -387,7 +392,11 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
       const allIds = [...requestIds, ...joinRequestIds];
       const trips = next
         .filter((request) => allIds.includes(request.id))
-        .map((request) => ({ request, appointment: appointments.find((item) => item.id === request.appointmentId)! }))
+        .map((request) => ({
+          request,
+          appointment: appointments.find((item) => item.id === request.appointmentId)!,
+          from: request.fromAppointmentId ? appointments.find((item) => item.id === request.fromAppointmentId) ?? null : null,
+        }))
         .filter((trip) => trip.appointment);
       return { vehicle, count: allIds.length, message: buildDriverMessage(trips, vehicle, hospitals) };
     });
@@ -474,6 +483,22 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
               updateRequests([...requests, returnRequest]);
               updateAppointments(appointments.map((item) => item.id === appointment.id ? { ...item, status: "طلب عودة" } : item));
               toast.success("تم إرسال طلب العودة");
+            }}
+            onTransfer={(appointment, request, next) => {
+              // بدل العودة إلى المجمع: طلب ذهاب للموعد التالي يبدأ من مستشفى هذا الموعد
+              const transfer: VehicleRequest = {
+                id: `REQ-${Date.now()}`,
+                appointmentId: next.id,
+                direction: "ذهاب",
+                status: "بانتظار التوزيع",
+                notificationMethod: request.notificationMethod,
+                createdAt: timeLabel(new Date()),
+                requestedBy: session.uid,
+                fromAppointmentId: appointment.id,
+              };
+              updateRequests([...requests, transfer]);
+              updateAppointments(appointments.map((item) => item.id === next.id ? { ...item, status: "تم طلب السيارة" } : item));
+              toast.success(`تم طلب نقل الضيف إلى موعده التالي (${next.appointmentAt} · ${next.clinic})`);
             }}
             onCancelAppointment={(appointment, reason, request) => {
               // طلب السيارة القائم يُلغى أولًا حتى تتفرغ السيارة، ثم يُعلَّم الموعد ملغيًا مع السبب

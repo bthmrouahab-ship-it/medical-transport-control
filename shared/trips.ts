@@ -51,11 +51,23 @@ export function driveMinutes(from: Point, to: Point, at = new Date()) {
   return minutes + Math.max(5, minutes * 0.15);
 }
 
-/** بداية الطريق ونهايته: من المجمع إلى المستشفى في الذهاب، ومن المستشفى إلى المجمع في العودة. */
-export function tripEndpoints(appointment: ClinicAppointment, direction: VehicleRequest["direction"], hospitals: Hospital[] = DEFAULT_HOSPITALS) {
+/**
+ * بداية الطريق ونهايته: من المجمع إلى المستشفى في الذهاب، ومن المستشفى إلى المجمع في العودة،
+ * ومن مستشفى الموعد الأول إلى مستشفى الموعد الثاني في النقل بين موعدين (fromAppointment).
+ */
+export function tripEndpoints(
+  appointment: ClinicAppointment,
+  direction: VehicleRequest["direction"],
+  hospitals: Hospital[] = DEFAULT_HOSPITALS,
+  fromAppointment: ClinicAppointment | null = null,
+) {
   const hospital = appointmentHospital(appointment, hospitals);
   const origin: Point = { lat: ORIGIN.lat, lng: ORIGIN.lng };
   const place: Point | null = hospital ? { lat: hospital.lat, lng: hospital.lng } : null;
+  if (fromAppointment) {
+    const first = appointmentHospital(fromAppointment, hospitals);
+    return { from: first ? { lat: first.lat, lng: first.lng } : null, to: place, destination: hospital?.name ?? appointment.clinic };
+  }
   return direction === "عودة"
     ? { from: place, to: origin, destination: ORIGIN.name }
     : { from: origin, to: place, destination: hospital?.name ?? appointment.clinic };
@@ -70,8 +82,9 @@ export function pickupDetails(
   hospitals: Hospital[] = DEFAULT_HOSPITALS,
   now = new Date(),
   passengers = 1,
+  fromAppointment: ClinicAppointment | null = null,
 ): Pick<VehicleRequest, "pickedUpAt" | "etaAt" | "destLat" | "destLng"> {
-  const { from, to } = tripEndpoints(appointment, request.direction, hospitals);
+  const { from, to } = tripEndpoints(appointment, request.direction, hospitals, fromAppointment);
   const extraStops = Math.max(0, passengers - 1);
   const minutes = from && to
     ? estimateTravelMinutes(from, to, now, { special: appointment.kind === "احتياجات خاصة", extraStops })
@@ -240,7 +253,8 @@ export type ReturnRedirect = {
  * كل سيارة لضيف واحد، والأقرب أولًا.
  */
 export function suggestReturnRedirects(
-  pendingReturns: { request: VehicleRequest; appointment: ClinicAppointment }[],
+  /** طلبات العودة، وطلبات النقل بين موعدين ومعها موعدها الأول (from) */
+  pendingReturns: { request: VehicleRequest; appointment: ClinicAppointment; from?: ClinicAppointment | null }[],
   vehicles: Vehicle[],
   states: Map<string, VehicleLocationState>,
   hospitals: Hospital[] = DEFAULT_HOSPITALS,
@@ -248,8 +262,10 @@ export function suggestReturnRedirects(
   const origin: Point = { lat: ORIGIN.lat, lng: ORIGIN.lng };
   const pairs: (ReturnRedirect & { special: boolean })[] = [];
   for (const trip of pendingReturns) {
-    if (trip.request.direction !== "عودة") continue;
-    const hospital = appointmentHospital(trip.appointment, hospitals);
+    // مكان استلام الضيف: مستشفى الموعد في العودة، أو مستشفى الموعد الأول في النقل
+    const pickupAppointment = trip.request.direction === "عودة" ? trip.appointment : trip.request.fromAppointmentId ? trip.from : null;
+    if (!pickupAppointment) continue;
+    const hospital = appointmentHospital(pickupAppointment, hospitals);
     if (!hospital) continue;
     const special = trip.appointment.kind === "احتياجات خاصة";
     for (const vehicle of vehicles) {

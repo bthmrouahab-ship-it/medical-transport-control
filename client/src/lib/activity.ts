@@ -49,6 +49,7 @@ export const DETAIL_LABELS: [string, string][] = [
   ["eta", "الوصول المتوقع"],
   ["arrivedAt", "وقت الوصول"],
   ["source", "مصدر الوصول"],
+  ["from", "النقل من"],
   ["reason", "سبب الإلغاء"],
   ["changes", "التغييرات"],
   ["ip", "عنوان الشبكة"],

@@ -6,6 +6,7 @@ import {
   REQUEST_GRACE_MINUTES,
   requestWindow,
   type AppointmentKind,
+  ASSISTANCE_NEEDS,
   type AssistanceNeed,
   type ClinicAppointment,
   type VehicleRequest,
@@ -118,7 +119,7 @@ export default function NonMedicalTripForm({ defaultDate, onSave, onCancel }: {
         <fieldset className="sm:col-span-2">
           <legend className={labelClass}>الاحتياجات</legend>
           <div className="grid gap-2 sm:grid-cols-2">
-            {(["يحتاج مرافق", "كرسي متحرك"] as AssistanceNeed[]).map((need) => {
+            {ASSISTANCE_NEEDS.map((need) => {
               const selected = form.assistance.includes(need);
               return (
                 <label key={need} className={cx(choiceClass(selected), "cursor-pointer")}>

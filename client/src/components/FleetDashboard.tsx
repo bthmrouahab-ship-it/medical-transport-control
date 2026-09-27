@@ -68,7 +68,8 @@ export default function FleetDashboard({ canEdit = false, alerts = false, actor 
     if (phase.kind !== "toPickup" && phase.kind !== "toDestination") return [];
     const appointment = appointments.find((item) => item.id === request.appointmentId);
     if (!appointment) return [];
-    const { from, to, destination } = tripEndpoints(appointment, request.direction, hospitals);
+    const firstAppointment = request.fromAppointmentId ? appointments.find((item) => item.id === request.fromAppointmentId) ?? null : null;
+    const { from, to, destination } = tripEndpoints(appointment, request.direction, hospitals, firstAppointment);
     const who = `${request.vehiclePlate ?? ""} · ${driverOf(request.vehiclePlate, request.driver)}`;
     const label = phase.kind === "toPickup"
       ? `${who}: في الطريق لاستلام ضيف (${request.direction} إلى ${destination})`
