@@ -49,9 +49,9 @@ function db(): PDO
     $config = load_config();
     if (!$config) throw new ApiException(503, 'لم يُضبط الموقع بعد. افتح صفحة الإعداد /api/setup.php', 'not_configured');
     $pdo = connect_db($config['db']);
-    // المواقع المضبوطة قبل إضافة جداول جديدة (سجل العمليات، ثم إشعارات السائقين) تُنشأ جداولها هنا (خارج أي معاملة)
+    // المواقع المضبوطة قبل إضافة جداول أو خانات جديدة (سجل العمليات، ثم إشعارات السائقين ولغتها) تُنشأ هنا (خارج أي معاملة)
     try {
-        $pdo->query('SELECT 1 FROM push_subscriptions LIMIT 0');
+        $pdo->query('SELECT lang FROM push_subscriptions LIMIT 0');
     } catch (PDOException) {
         ensure_schema($pdo);
     }
@@ -131,9 +131,14 @@ function ensure_schema(PDO $pdo): void
         endpoint VARCHAR(1000) NOT NULL,
         p256dh VARCHAR(200) NOT NULL,
         auth VARCHAR(100) NOT NULL,
+        lang VARCHAR(5) NOT NULL DEFAULT 'ar',
         created_at VARCHAR(30) NOT NULL,
         KEY push_user (user_id)
     ) $options");
+    // لغة الإشعارات أُضيفت بعد إنشاء الجدول في بعض المواقع
+    if (!$pdo->query("SHOW COLUMNS FROM push_subscriptions LIKE 'lang'")->fetch()) {
+        $pdo->exec("ALTER TABLE push_subscriptions ADD COLUMN lang VARCHAR(5) NOT NULL DEFAULT 'ar' AFTER auth");
+    }
 }
 
 // ————— الطلب والرد —————

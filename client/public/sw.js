@@ -21,7 +21,7 @@ const OFFLINE_PAGE = `<!doctype html>
 <body>
 <main>
   <h1>لا يوجد اتصال بالإنترنت</h1>
-  <p>تأكد من اتصال الهاتف بالإنترنت ثم أعد المحاولة.<br />No internet connection.</p>
+  <p>تأكد من اتصال الهاتف بالإنترنت ثم أعد المحاولة.<br />No internet connection.<br />انٹرنیٹ کنکشن نہیں ہے۔</p>
   <button onclick="location.reload()">إعادة المحاولة</button>
 </main>
 </body>
@@ -56,8 +56,9 @@ self.addEventListener("push", (event) => {
       renotify: true,
       requireInteraction: true,
       vibrate: [400, 150, 400, 150, 400],
-      lang: "ar",
-      dir: "rtl",
+      // لغة تطبيق السائق (العربية أو الإنجليزية أو الأردية)
+      lang: data.lang || "ar",
+      dir: data.dir || "rtl",
       data: { url: data.url || "/" },
     })
   );
