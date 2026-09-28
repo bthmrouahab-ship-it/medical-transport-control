@@ -18,6 +18,7 @@ import {
   type ClinicAppointment,
   type UnrequestedMatch,
   type VehicleRequest,
+  whatsappNumber,
 } from "@shared/transport";
 import { tripPhase, type TripPhase } from "@shared/trips";
 import {
@@ -26,7 +27,6 @@ import {
   Modal,
   Panel,
   PageHeader,
-  Segmented,
   Stat,
   Steps,
   TimeBlock,
@@ -72,13 +72,13 @@ function loadBuildings(): string[] {
   }
 }
 
-function newRequest(appointment: ClinicAppointment, method: VehicleRequest["notificationMethod"]): VehicleRequest {
+function newRequest(appointment: ClinicAppointment): VehicleRequest {
   return {
     id: `REQ-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
     appointmentId: appointment.id,
     direction: "ذهاب",
     status: "بانتظار التوزيع",
-    notificationMethod: method,
+    notificationMethod: "whatsapp",
     createdAt: timeLabel(new Date()),
   };
 }
@@ -433,6 +433,23 @@ function CancelDialog({ appointment, request, onClose, onConfirm }: {
 }
 
 /** بيانات الموعد: المريض، ومن أين إلى أين، والهاتف والاحتياجات. */
+/** رقم الضيف مع زرّين: الاتصال به، أو فتح محادثة واتساب معه. */
+function GuestContact({ mobile }: { mobile: string }) {
+  const number = whatsappNumber(mobile);
+  const pill = "inline-flex h-8 items-center gap-1 rounded-lg px-2.5 font-semibold ring-1 ring-inset transition";
+  return (
+    <span className="inline-flex flex-wrap items-center gap-1.5">
+      <span dir="ltr" className="tabular">{mobile}</span>
+      <a href={`tel:+${number}`} className={cx(pill, "bg-white text-slate-700 ring-slate-300 hover:bg-slate-50 hover:text-ink")} aria-label={`اتصال بالضيف ${mobile}`}>
+        <Phone className="h-3.5 w-3.5" /> اتصال
+      </a>
+      <a href={`https://wa.me/${number}`} target="_blank" rel="noreferrer" className={cx(pill, "bg-emerald-50 text-emerald-700 ring-emerald-200 hover:bg-emerald-100")} aria-label={`واتساب الضيف ${mobile}`}>
+        <MessageCircle className="h-3.5 w-3.5" /> واتساب
+      </a>
+    </span>
+  );
+}
+
 function AppointmentInfo({ appointment, request, driver, from }: { appointment: ClinicAppointment; request?: VehicleRequest; driver?: string; from?: ClinicAppointment | null }) {
   const pickup = from ? from.clinic : appointmentPickupLabel(appointment);
   const returning = request?.direction === "عودة";
@@ -449,7 +466,7 @@ function AppointmentInfo({ appointment, request, driver, from }: { appointment: 
       </div>
       <p className="mt-1 text-sm text-slate-600">{returning ? appointment.clinic : pickup} ← {returning ? pickup : appointment.clinic}</p>
       <p className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
-        {appointment.mobile && <a href={`tel:${appointment.mobile}`} className="inline-flex items-center gap-1 hover:text-ink"><Phone className="h-3.5 w-3.5" /><span dir="ltr">{appointment.mobile}</span></a>}
+        {appointment.mobile && <GuestContact mobile={appointment.mobile} />}
         {assistance && <span className="inline-flex items-center gap-1"><Accessibility className="h-3.5 w-3.5" />{assistance}</span>}
         {request?.vehiclePlate && (
           <span className="inline-flex items-center gap-1 text-slate-600">
@@ -473,7 +490,6 @@ function RequestRow({ appointment, day, match, partner, earlier, now, onRequest,
   onRequest: RequestHandlers["onRequest"];
   onCancelAppointment: () => void;
 }) {
-  const [method, setMethod] = useState<VehicleRequest["notificationMethod"]>(match?.matchedRequest.notificationMethod ?? "whatsapp");
   const deadline = requestWindow(appointment, now);
 
   function requestCar() {
@@ -485,7 +501,7 @@ function RequestRow({ appointment, day, match, partner, earlier, now, onRequest,
       toast.error("لا يوجد موعد قابل للطلب");
       return;
     }
-    onRequest(newRequest(appointment, method), appointment.id);
+    onRequest(newRequest(appointment), appointment.id);
   }
 
   return (
@@ -516,13 +532,6 @@ function RequestRow({ appointment, day, match, partner, earlier, now, onRequest,
         <span className={cx("text-xs", deadline.minutesLeft <= 15 ? "font-semibold text-red-600" : "text-slate-500")}>
           آخر موعد للطلب <span dir="ltr" className="tabular">{timeLabel(deadline.deadline)}</span>
         </span>
-        <Segmented
-          size="sm"
-          label="طريقة تنبيه السائق"
-          value={method}
-          onChange={setMethod}
-          options={[{ value: "whatsapp", label: "واتساب", icon: MessageCircle }, { value: "call", label: "اتصال", icon: Phone }]}
-        />
         <button onClick={requestCar} className={btn("primary")}><BellRing className="h-4 w-4" /> طلب السيارة</button>
         {canCancelAppointment(appointment) && <CancelAppointmentButton onClick={onCancelAppointment} />}
       </div>
