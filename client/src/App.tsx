@@ -1,6 +1,7 @@
 import type { CSSProperties } from "react";
 import { Toaster } from "sonner";
 import ErrorBoundary from "./components/ErrorBoundary";
+import InstallPrompt from "./components/InstallPrompt";
 import RolePortal from "./pages/RolePortal";
 
 const toasterStyle = {
@@ -17,6 +18,7 @@ export default function App() {
     <ErrorBoundary>
       <Toaster position="top-center" richColors theme="light" className="toaster group" style={toasterStyle} />
       <RolePortal />
+      <InstallPrompt />
     </ErrorBoundary>
   );
 }
