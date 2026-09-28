@@ -46,7 +46,7 @@ export const DEFAULT_HOSPITALS: Hospital[] = [
   { id: "bone-joint", name: "مركز العظام والمفاصل", nameEn: "Bone and Joint Center", zone: HMC, lat: 25.285262, lng: 51.543578, aliases: ["العظام والمفاصل", "bone and joint", "bone joint"], verified: true }, // 7GPV+4C4 الدوحة
   { id: "heart", name: "مستشفى القلب", nameEn: "Heart Hospital", zone: HMC, lat: 25.292013, lng: 51.509828, aliases: ["مستشفي القلب", "heart hospital"], verified: true }, // 7GR5+RW4 الدوحة
   { id: "kidney", name: "مركز فهد بن جاسم للكلى", nameEn: "Fahad Bin Jassim Kidney Center", zone: HMC, lat: 25.295237, lng: 51.496453, aliases: ["للكلي", "kidney"], verified: true }, // 7FWW+3HW الدوحة
-  { id: "mcrc", name: "مركز الرعاية الطبية والأبحاث", nameEn: "Medical Care and Research Center", zone: HMC, lat: 25.294313, lng: 51.507937, aliases: ["الرعايه الطبيه والابحاث", "medical care and research"], verified: true }, // 7GV5+P5 الدوحة
+  { id: "mcrc", name: "مركز الرعاية الطبية والأبحاث", nameEn: "Medical Care and Research Center", zone: HMC, lat: 25.294313, lng: 51.507937, aliases: ["الرعايه الطبيه والابحاث", "medical care and research", "medical care research"], verified: true }, // 7GV5+P5 الدوحة
   { id: "cdc", name: "المركز الوطني للأمراض الانتقالية", nameEn: "Communicable Disease Center", zone: HMC, lat: 25.291562, lng: 51.507937, aliases: ["communicable disease", "الامراض الانتقاليه"], verified: true }, // 7GR5+J5 الدوحة
   { id: "amal", name: "المركز الوطني لعلاج وأبحاث السرطان (الأمل)", nameEn: "National Center for Cancer Care and Research", zone: HMC, lat: 25.292813, lng: 51.511078, aliases: ["الامل", "علاج السرطان", "al amal", "cancer care"], verified: true },
   { id: "rumailah", name: "مستشفى الرميلة", nameEn: "Rumailah Hospital", zone: HMC, lat: 25.292887, lng: 51.512578, aliases: ["الرميله", "رميله", "rumailah", "rumaila hospital"], verified: true },
@@ -55,6 +55,11 @@ export const DEFAULT_HOSPITALS: Hospital[] = [
   { id: "hazm-mebaireek", name: "مستشفى حزم مبيريك العام", nameEn: "Hazm Mebaireek General Hospital", zone: "المنطقة الصناعية", lat: 25.18089, lng: 51.4307, aliases: ["حزم مبيريك", "hazm mebaireek"], verified: true },
   { id: "mesaieed", name: "مستشفى مسيعيد", nameEn: "Mesaieed Hospital", zone: "مسيعيد", lat: 25.013462, lng: 51.559984, aliases: ["مسيعيد", "mesaieed", "meissaid"], verified: true },
   { id: "pearl-dental", name: "مركز اللؤلؤة للأسنان", nameEn: "Pearl Dental Center", zone: "الدوحة", lat: 25.315137, lng: 51.472453, aliases: ["اللؤلؤه للاسنان", "مركز اللؤلؤه", "pearl dental", "peral dental", "al luluah dental", "pearl hospital"], verified: true }, // 8F8C+3X4 الدوحة
+  // مراكز أضافها المستخدم من خرائط جوجل (سبتمبر 2026)
+  { id: "expert-dental", name: "مركز اكسبرت لطب الأسنان", nameEn: "Expert Dental Center", zone: "الدوحة", lat: 25.261813, lng: 51.533313, aliases: ["اكسبرت", "expert dental"], verified: true }, // 7G6M+P8 الدوحة
+  { id: "gardenia", name: "مجمع غاردينيا الطبي", nameEn: "Gardenia Medical Complex", zone: "الدوحة", lat: 25.334062, lng: 51.475187, aliases: ["غاردينيا", "جاردينيا", "gardenia"], verified: true }, // 8FMG+J3 الدوحة
+  { id: "psychiatric", name: "مستشفى الطب النفسي", nameEn: "Hamad Psychiatric Hospital", zone: "الثمامة وروضة الخيل", lat: 25.276313, lng: 51.516312, aliases: ["الطب النفسي", "psychiatric"], verified: true }, // 7GG8+GG الدوحة
+  { id: "sama", name: "مركز سما ميديكال كير الطبي", nameEn: "Sama Medical Care", zone: "الدوحة", lat: 25.250812, lng: 51.485312, aliases: ["سما ميديكال", "sama medical"], verified: true }, // 7F2P+84 الدوحة
 ];
 
 export function normalizePlaceName(value: string) {
@@ -114,9 +119,17 @@ export function nearbyHospitals(hospital: Hospital, hospitals: Hospital[], maxKm
  */
 export function syncHospitals(stored: Hospital[], defaults: Hospital[] = DEFAULT_HOSPITALS) {
   const byId = new Map(defaults.map((hospital) => [hospital.id, hospital]));
-  return stored.map((hospital) => {
+  const updated = stored.map((hospital) => {
     const fresh = byId.get(hospital.id);
     if (hospital.verified || !fresh) return hospital;
     return { ...fresh, aliases: Array.from(new Set([...fresh.aliases, ...hospital.aliases])) };
   });
+  // المراكز التي أُضيفت إلى الدليل بعد حفظه في قاعدة البيانات، إلا إن كان المدير أضافها باسم آخر
+  const ids = new Set(stored.map((hospital) => hospital.id));
+  const added = defaults.filter((hospital) => ADDED_LATER.includes(hospital.id) && !ids.has(hospital.id)
+    && !matchHospital(hospital.name, stored) && !matchHospital(hospital.nameEn, stored));
+  return [...updated, ...added];
 }
+
+/** مراكز أُضيفت إلى الدليل بعد إطلاق الموقع: تُضاف إلى الدليل المحفوظ عند دخول المدير. */
+const ADDED_LATER = ["expert-dental", "gardenia", "psychiatric", "sama"];
