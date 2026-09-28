@@ -26,4 +26,8 @@ DirectoryIndex index.html
   <FilesMatch "\.(js|css)$">
     Header set Cache-Control "public, max-age=31536000, immutable"
   </FilesMatch>
+  # عامل الخدمة وملف التثبيت يُحدَّثان مع كل نشر
+  <FilesMatch "^(sw\.js|manifest\.json)$">
+    Header set Cache-Control "no-cache"
+  </FilesMatch>
 </IfModule>
