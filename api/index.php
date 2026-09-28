@@ -3,8 +3,9 @@ declare(strict_types=1);
 
 /**
  * واجهة الخادم لموقع سيارات مجمع الثمامة: /api/index.php?r=<route>
- * GET  session | users | sync&since=N | stats-days | activity
+ * GET  session | users | sync&since=N | stats-days | activity | driver-trips | push-key
  * POST login | logout | change-password | users.create | users.update | users.reset-password | write | location | stats-days.save
+ *      driver-action | push-subscribe | push-unsubscribe
  */
 
 // لا تُعرض أخطاء PHP للزائر (قد تكشف مسارات الخادم)؛ تُسجَّل في سجل الأخطاء فقط
@@ -13,6 +14,8 @@ ini_set('display_errors', '0');
 require __DIR__ . '/lib/bootstrap.php';
 require __DIR__ . '/lib/rules.php';
 require __DIR__ . '/lib/activity.php';
+require __DIR__ . '/lib/push.php';
+require __DIR__ . '/lib/driver.php';
 
 /** محاولات خاطئة قبل الإيقاف: للحساب الواحد، ولعنوان الشبكة (موظفو المكتب قد يشتركون في عنوان واحد) */
 const LOGIN_MAX_FAILURES = ['u' => 10, 'ip' => 50];
@@ -41,11 +44,25 @@ try {
         'GET stats-days' => 'route_stats_days',
         'GET activity' => 'route_activity',
         'POST stats-days.save' => 'route_stats_days_save',
+        'GET driver-trips' => 'route_driver_trips',
+        'POST driver-action' => 'route_driver_action',
+        'GET push-key' => 'route_push_key',
+        'POST push-subscribe' => 'route_push_subscribe',
+        'POST push-unsubscribe' => 'route_push_unsubscribe',
     ];
     $handler = $handlers["$method $route"] ?? null;
     if (!$handler) throw new ApiException(404, 'طلب غير معروف', 'not_found');
     $body = $method === 'POST' ? read_body() : [];
-    send_json(200, $handler(db(), $body));
+    $result = $handler(db(), $body);
+    if (!push_queue()) send_json(200, $result);
+    // إشعارات السائقين تُرسل بعد الرد، فلا ينتظرها مشرف السيارات
+    respond_early(200, $result);
+    try {
+        flush_pushes(db());
+    } catch (Throwable $error) {
+        error_log('[althumama push] ' . $error);
+    }
+    exit;
 } catch (ApiException $error) {
     send_json($error->status, ['error' => $error->getMessage(), 'code' => $error->errorCode]);
 } catch (Throwable $error) {
@@ -355,10 +372,12 @@ function route_write(PDO $pdo, array $body): array
             $entry = describe_write($pdo, $col, $id, $before, $after);
             save_doc($pdo, $col, $id, $after, $rev);
             if ($entry) log_activity($pdo, empty($entry[4]) ? $user : null, $entry[0], $entry[1], $entry[2], $id, $entry[3]);
+            if ($col === 'requests') queue_request_pushes($pdo, $before, $after);
         }
         $pdo->commit();
     } catch (Throwable $error) {
         $pdo->rollBack();
+        push_queue(null, true);
         throw $error;
     }
     return ['rev' => $rev];

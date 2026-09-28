@@ -183,15 +183,24 @@ function describe_write(PDO $pdo, string $col, string $id, ?array $before, ?arra
             $status = $after['status'] ?? '';
             // «تم استلام المريض» تُعرض «تم استلام الضيف»
             $details['status'] = str_replace('المريض', 'الضيف', $status);
+            // رد مشرف المبنى على ما سجّله السائق من تطبيقه (الاستلام أولًا: تأكيده يؤكد الوصول معه)
+            $checks = ['pickup' => "استلام $who في السيارة $plate", 'arrival' => "وصول السيارة $plate لاستلام $who"];
+            foreach ($checks as $kind => $what) {
+                if (in_array("{$kind}Check", $changed, true) && ($after["{$kind}Check"] ?? null) === 'denied') {
+                    return ['request', 'request.check_denied', "نفي $what ($direction) كما سجّله السائق · عادت الرحلة إلى «{$details['status']}»", $details];
+                }
+            }
+            // ما يسجّله السائق من تطبيقه (بموقع هاتفه لحظتها)
+            $byDriver = fn(string $field) => in_array($field, $changed, true) ? ' · سجّله السائق من التطبيق' : '';
             if (in_array('status', $changed, true)) {
                 if ($status === 'تم إرسال السيارة') {
                     $group = !empty($after['groupId']) ? ' ضمن رحلة مجمّعة' : '';
                     return ['request', 'request.dispatch', "إرسال السيارة $plate (" . ($after['driver'] ?? '') . ") لـ $who ($direction)$group", $details];
                 }
-                if ($status === 'وصلت السيارة') return ['request', 'request.car_arrived', "وصول السيارة $plate لاستلام $who ($direction)", $details];
+                if ($status === 'وصلت السيارة') return ['request', 'request.car_arrived', "وصول السيارة $plate لاستلام $who ($direction)" . $byDriver('driverArrivedAt'), $details];
                 if ($status === 'تم استلام المريض') {
                     $details['eta'] = qatar_time($after['etaAt'] ?? null);
-                    return ['request', 'request.pickup', "استلام $who في السيارة $plate ($direction)" . ($details['eta'] ? " · الوصول المتوقع {$details['eta']}" : ''), $details];
+                    return ['request', 'request.pickup', "استلام $who في السيارة $plate ($direction)" . ($details['eta'] ? " · الوصول المتوقع {$details['eta']}" : '') . $byDriver('pickupGps'), $details];
                 }
                 if ($status === 'وصلت الوجهة') {
                     $source = ['gps' => 'GPS', 'estimate' => 'انتهاء المدة التقديرية', 'manual' => 'تأكيد يدوي'][$after['arrivalSource'] ?? ''] ?? '';
@@ -204,6 +213,11 @@ function describe_write(PDO $pdo, string $col, string $id, ?array $before, ?arra
                 }
             }
             if (in_array('groupId', $changed, true)) return ['request', 'request.group', "ضم طلب $who إلى رحلة السيارة $plate", $details];
+            foreach ($checks as $kind => $what) {
+                if (in_array("{$kind}Check", $changed, true) && ($after["{$kind}Check"] ?? null) === 'confirmed') {
+                    return ['request', 'request.check_confirmed', "تأكيد $what ($direction) كما سجّله السائق", $details];
+                }
+            }
             $times = fn(?array $doc) => $doc ? ['etaAt' => qatar_time($doc['etaAt'] ?? null), 'arrivedAt' => qatar_time($doc['arrivedAt'] ?? null)] + $doc : null;
             $changes = changes_text(field_changes($times($before), $times($after), REQUEST_FIELD_LABELS));
             $details['changes'] = $changes;

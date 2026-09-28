@@ -49,9 +49,9 @@ function db(): PDO
     $config = load_config();
     if (!$config) throw new ApiException(503, 'لم يُضبط الموقع بعد. افتح صفحة الإعداد /api/setup.php', 'not_configured');
     $pdo = connect_db($config['db']);
-    // المواقع المضبوطة قبل إضافة سجل العمليات تُنشأ جداولها الجديدة هنا (خارج أي معاملة)
+    // المواقع المضبوطة قبل إضافة جداول جديدة (سجل العمليات، ثم إشعارات السائقين) تُنشأ جداولها هنا (خارج أي معاملة)
     try {
-        $pdo->query('SELECT 1 FROM activity LIMIT 0');
+        $pdo->query('SELECT 1 FROM push_subscriptions LIMIT 0');
     } catch (PDOException) {
         ensure_schema($pdo);
     }
@@ -119,6 +119,21 @@ function ensure_schema(PDO $pdo): void
         first_at INT UNSIGNED NOT NULL,
         locked_until INT UNSIGNED NOT NULL DEFAULT 0
     ) $options");
+    // إعدادات يولّدها الخادم مرة واحدة (مفاتيح إشعارات الهاتف)
+    $pdo->exec("CREATE TABLE IF NOT EXISTS settings (
+        k VARCHAR(40) PRIMARY KEY,
+        v TEXT NOT NULL
+    ) $options");
+    // هواتف السائقين المسجلة لإشعارات الرحلات (المعرّف بصمة عنوان الاشتراك)
+    $pdo->exec("CREATE TABLE IF NOT EXISTS push_subscriptions (
+        id CHAR(64) PRIMARY KEY,
+        user_id INT UNSIGNED NOT NULL,
+        endpoint VARCHAR(1000) NOT NULL,
+        p256dh VARCHAR(200) NOT NULL,
+        auth VARCHAR(100) NOT NULL,
+        created_at VARCHAR(30) NOT NULL,
+        KEY push_user (user_id)
+    ) $options");
 }
 
 // ————— الطلب والرد —————
@@ -131,6 +146,31 @@ function send_json(int $status, array $body): never
     header('X-Content-Type-Options: nosniff');
     echo json_encode($body, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     exit;
+}
+
+/**
+ * يرسل الرد ويُنهي اتصال المتصفح، ثم يكمل الخادم عملًا بعده (مثل إرسال إشعارات السائقين).
+ * الجلسة تُغلق أولًا حتى لا تنتظرها طلبات المستخدم التالية.
+ */
+function respond_early(int $status, array $body): void
+{
+    if (session_status() === PHP_SESSION_ACTIVE) session_write_close();
+    ignore_user_abort(true);
+    $json = (string)json_encode($body, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    http_response_code($status);
+    header('Content-Type: application/json; charset=utf-8');
+    header('Cache-Control: no-store');
+    header('X-Content-Type-Options: nosniff');
+    header('Content-Length: ' . strlen($json));
+    echo $json;
+    if (function_exists('fastcgi_finish_request')) {
+        fastcgi_finish_request();
+    } elseif (function_exists('litespeed_finish_request')) {
+        litespeed_finish_request();
+    } else {
+        while (ob_get_level() > 0) ob_end_flush();
+        flush();
+    }
 }
 
 /** جسم الطلب JSON. الطلبات التي تغيّر البيانات تحتاج ترويسة خاصة لا يرسلها موقع آخر (حماية من CSRF). */

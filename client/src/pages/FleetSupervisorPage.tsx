@@ -74,7 +74,8 @@ import {
 import NonMedicalTripForm from "./NonMedicalTripForm";
 import { RecentActivity } from "@/components/ActivityLog";
 import { useHospitals, useLiveVehicles, useNow } from "@/lib/useShared";
-import { NOTIFY_KEY, deviceNotificationsOn, useArrivalAlerts, useCancellationAlerts, useRedirectAlerts } from "@/lib/arrivalAlerts";
+import { NOTIFY_KEY, deviceNotificationsOn, useArrivalAlerts, useCancellationAlerts, useDenialAlerts, useRedirectAlerts } from "@/lib/arrivalAlerts";
+import { checkStateText, driverCheck } from "@shared/driverChecks";
 
 /**
  * from: الموعد الأول في النقل بين موعدين (الاستلام من مستشفاه).
@@ -230,6 +231,7 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
   // رسالة لمشرف السيارات عند وصول سيارة، وتنبيه على الجهاز إن فعّله
   useArrivalAlerts({ arrivals, appointments, hospitals, driverOf });
   useCancellationAlerts({ requests, appointments });
+  useDenialAlerts({ requests, appointments });
   useRedirectAlerts({ redirects, driverOf, onDispatch: redirectVehicle });
   const [notifyDevice, setNotifyDevice] = useState(deviceNotificationsOn);
 
@@ -684,6 +686,11 @@ function ActiveTrip({ trips, phase, vehicle, driver, hospitals, onArrived }: {
             <span className="text-slate-500">{routeLabel(trip.appointment, trip.from)}</span>
             {isPriority(trip.appointment) && <span className="font-medium text-red-700">· أولوية</span>}
             {trip.request.createdAt && <span className="text-slate-400">· {requestTimes(trip)}</span>}
+            {(["arrival", "pickup"] as const).map((kind) => {
+              // ما سجّله السائق من تطبيقه ورد مشرف المبنى عليه
+              const check = driverCheck(trip.request, kind);
+              return check && <span key={kind} className={cx("w-full text-xs", check.state === "denied" ? "font-semibold text-red-700" : check.state === "pending" ? "text-amber-700" : "text-slate-400")}>{checkStateText(check)}</span>;
+            })}
           </li>
         ))}
       </ul>
