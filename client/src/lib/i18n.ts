@@ -117,6 +117,16 @@ const ar = {
   results: (count: number) => `${count} نتيجة`,
   noResults: "لا توجد مواعيد مطابقة",
   clearFilters: "مسح البحث",
+  // الجنس وحالة السرطان والتصدير
+  gender: "الجنس",
+  genderLabel: (gender: string): string => gender,
+  errGender: "اختر جنس الضيف",
+  cancer: "حالة سرطان",
+  cancerHint: "أولوية في إرسال السيارة",
+  priority: "أولوية",
+  exportExcel: "تصدير Excel",
+  exported: (count: number) => `تم تصدير ${count} موعد`,
+  exportNone: "لا توجد مواعيد للتصدير",
 };
 
 export type ClinicText = typeof ar;
@@ -201,6 +211,15 @@ const en: ClinicText = {
   results: (count) => `${count} results`,
   noResults: "No matching appointments",
   clearFilters: "Clear search",
+  gender: "Gender",
+  genderLabel: (gender) => (gender === "أنثى" ? "Female" : gender === "ذكر" ? "Male" : gender),
+  errGender: "Choose the guest's gender",
+  cancer: "Cancer case",
+  cancerHint: "Priority when sending the car",
+  priority: "Priority",
+  exportExcel: "Export Excel",
+  exported: (count) => `${count} appointments exported`,
+  exportNone: "No appointments to export",
 };
 
 

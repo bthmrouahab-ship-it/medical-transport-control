@@ -11,6 +11,8 @@ import {
   ClipboardPlus,
   Clock3,
   Download,
+  FileSpreadsheet,
+  Ribbon,
   Pencil,
   Phone,
   Search,
@@ -22,14 +24,17 @@ import {
 } from "lucide-react";
 import {
   ASSISTANCE_NEEDS,
+  GENDERS,
   localDateString,
   parseImportedAppointments,
   REQUEST_GRACE_MINUTES,
   requestWindow,
   sameDayAppointments,
+  statusText,
   type AppointmentKind,
   type AssistanceNeed,
   type ClinicAppointment,
+  type Gender,
 } from "@shared/transport";
 import { matchHospital } from "@shared/hospitals";
 import { Badge, DateChooser, EmptyState, Field, Panel, PageHeader, Segmented, Stat, StatusBadge, TimeBlock, btn, choiceClass, cx, formatDay, inputClass, labelClass, longDate } from "@/components/ui-kit";
@@ -103,8 +108,10 @@ export function ClinicHome({ t, lang, appointments, date, onDateChange, onNew, o
         "وقت الموعد": "09:30",
         "نوع الرحلة": "عادي",
         "احتياجات الضيف": "يحتاج مرافق، يحتاج Nurse، كرسي متحرك",
+        "الجنس": "ذكر",
+        "حالة سرطان": "لا",
       }]);
-      worksheet["!cols"] = [{ wch: 22 }, { wch: 28 }, { wch: 14 }, { wch: 14 }, { wch: 16 }, { wch: 14 }, { wch: 14 }, { wch: 18 }, { wch: 30 }];
+      worksheet["!cols"] = [{ wch: 22 }, { wch: 28 }, { wch: 14 }, { wch: 14 }, { wch: 16 }, { wch: 14 }, { wch: 14 }, { wch: 18 }, { wch: 30 }, { wch: 10 }, { wch: 12 }];
       const workbook = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(workbook, worksheet, "المواعيد");
       XLSX.writeFile(workbook, "appointments-template.xlsx");
@@ -133,6 +140,45 @@ export function ClinicHome({ t, lang, appointments, date, onDateChange, onNew, o
         return words.every((word) => text.includes(word));
       });
   }, [appointments, dayAppointments, query, status, scope, filtering]);
+
+  /** تصدير المواعيد المعروضة (بعد البحث والفلترة) إلى Excel: كل خيار في عمود، وبعناوين القالب حتى يمكن استيراده. */
+  async function exportAppointments() {
+    if (!shown.length) {
+      toast.error(t.exportNone);
+      return;
+    }
+    try {
+      const XLSX = await import("xlsx");
+      const yesNo = (value: boolean) => (value ? "نعم" : "لا");
+      const rows = shown.map((appointment) => ({
+        "رقم الموعد": appointment.id,
+        "اسم الضيف أو الرقم": appointment.patientName,
+        "الجنس": appointment.gender ?? "",
+        "اسم العيادة أو المستشفى": appointment.clinic,
+        "رقم المبنى": appointment.buildingNumber,
+        "رقم الشقة": appointment.apartmentNumber,
+        "رقم الموبايل": appointment.mobile,
+        "تاريخ الموعد": appointment.appointmentDate,
+        "وقت الموعد": appointment.appointmentAt,
+        "نوع الرحلة": appointment.kind,
+        ...Object.fromEntries(ASSISTANCE_NEEDS.map((need) => [need, yesNo(appointment.assistance.includes(need))])),
+        "حالة سرطان": yesNo(Boolean(appointment.cancer)),
+        "الحالة": statusText(appointment.status),
+        "سبب الإلغاء": appointment.cancelReason ?? "",
+        "ألغاه": appointment.cancelledBy ?? "",
+      }));
+      const worksheet = XLSX.utils.json_to_sheet(rows);
+      worksheet["!cols"] = [14, 24, 8, 30, 10, 10, 14, 13, 10, 14, 12, 12, 12, 12, 20, 28, 18].map((wch) => ({ wch }));
+      const workbook = XLSX.utils.book_new();
+      workbook.Workbook = { Views: [{ RTL: true }] };
+      XLSX.utils.book_append_sheet(workbook, worksheet, "المواعيد");
+      const stamp = scope === "all" && filtering ? "all" : date;
+      XLSX.writeFile(workbook, `appointments-${stamp}.xlsx`);
+      toast.success(t.exported(shown.length));
+    } catch {
+      toast.error(t.templateError);
+    }
+  }
   const waiting = dayAppointments.filter((appointment) => appointment.status === WAITING).length;
   const cancelled = dayAppointments.filter((appointment) => appointment.status === "ملغي").length;
   return (
@@ -145,6 +191,7 @@ export function ClinicHome({ t, lang, appointments, date, onDateChange, onNew, o
             <input ref={fileInputRef} type="file" accept=".xlsx,.xls" className="hidden" onChange={(event) => importExcel(event.target.files?.[0])} />
             <button onClick={downloadTemplate} className={btn("ghost")}><Download className="h-4 w-4" /> {t.template}</button>
             <button disabled={importing} onClick={() => fileInputRef.current?.click()} className={btn("secondary")}><Upload className="h-4 w-4" /> {importing ? t.importing : t.import}</button>
+            <button onClick={exportAppointments} className={btn("secondary")}><FileSpreadsheet className="h-4 w-4" /> {t.exportExcel}</button>
             <button onClick={onNew} className={btn("primary")}><ClipboardPlus className="h-4 w-4" /> {t.add}</button>
           </>
         )}
@@ -212,6 +259,8 @@ function AppointmentCard({ t, appointment, others, now, onEdit, onDelete }: {
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
             <p className="font-semibold text-ink">{appointment.patientName}</p>
+            {appointment.gender && <Badge>{t.genderLabel(appointment.gender)}</Badge>}
+            {appointment.cancer && <Badge tone="red" icon={Ribbon}>{t.cancer} · {t.priority}</Badge>}
             <span dir="ltr" className="text-xs text-slate-400">{appointment.id}</span>
           </div>
           <p className="mt-1 text-sm text-slate-600">{t.pickup(appointment.buildingNumber, appointment.apartmentNumber)} · {appointment.clinic}</p>
@@ -262,6 +311,8 @@ export function ClinicForm({ t, lang, initial, defaultDate, onBack, onSave }: {
     appointmentAt: initial?.appointmentAt ?? "09:00",
     kind: initial?.kind ?? "عادي" as AppointmentKind,
     assistance: initial?.assistance ?? [] as AssistanceNeed[],
+    gender: initial?.gender,
+    cancer: initial?.cancer ?? false,
   }));
   // موعد ثانٍ لنفس الضيف في نفس اليوم (عند الإضافة فقط)
   const [second, setSecond] = useState({ enabled: false, clinic: "", appointmentAt: "" });
@@ -288,6 +339,10 @@ export function ClinicForm({ t, lang, initial, defaultDate, onBack, onSave }: {
       toast.error(t.errPast(REQUEST_GRACE_MINUTES));
       return;
     }
+    if (!form.gender) {
+      toast.error(t.errGender);
+      return;
+    }
     if (second.enabled && !initial) {
       if (!second.clinic.trim() || !second.appointmentAt) {
         toast.error(t.errSecondIncomplete);
@@ -300,8 +355,11 @@ export function ClinicForm({ t, lang, initial, defaultDate, onBack, onSave }: {
     }
     const clinic = form.clinic.trim();
     const stamp = Date.now().toString().slice(-6);
+    const { cancer, gender, ...rest } = form;
     const first: ClinicAppointment = {
-      ...form,
+      ...rest,
+      gender,
+      ...(cancer ? { cancer: true } : {}),
       patientName: form.patientName.trim(),
       buildingNumber: form.buildingNumber.trim(),
       apartmentNumber: form.apartmentNumber.trim(),
@@ -332,6 +390,14 @@ export function ClinicForm({ t, lang, initial, defaultDate, onBack, onSave }: {
           <Field label={t.building} value={form.buildingNumber} onChange={(value) => setForm({ ...form, buildingNumber: value })} dir="ltr" />
           <Field label={t.apartment} value={form.apartmentNumber} onChange={(value) => setForm({ ...form, apartmentNumber: value })} dir="ltr" />
           <Field label={t.mobile} value={form.mobile} onChange={(value) => setForm({ ...form, mobile: value })} type="tel" dir="ltr" wide />
+          <fieldset className="sm:col-span-2">
+            <legend className={labelClass}>{t.gender}</legend>
+            <div className="grid grid-cols-2 gap-3">
+              {GENDERS.map((gender: Gender) => (
+                <button key={gender} type="button" aria-pressed={form.gender === gender} onClick={() => setForm({ ...form, gender })} className={choiceClass(form.gender === gender)}>{t.genderLabel(gender)}</button>
+              ))}
+            </div>
+          </fieldset>
           <div className="sm:col-span-2"><DateChooser label={t.date} value={form.appointmentDate} onChange={(value) => setForm({ ...form, appointmentDate: value })} labels={t.dateChoice} /></div>
           <Field label={t.time} value={form.appointmentAt} onChange={(value) => setForm({ ...form, appointmentAt: value })} type="time" />
 
@@ -360,6 +426,12 @@ export function ClinicForm({ t, lang, initial, defaultDate, onBack, onSave }: {
               })}
             </div>
           </fieldset>
+
+          <label className={cx(choiceClass(form.cancer), "cursor-pointer sm:col-span-2")}>
+            <input type="checkbox" checked={form.cancer} onChange={(event) => setForm({ ...form, cancer: event.target.checked })} className="h-4 w-4 accent-brand-600" />
+            <Ribbon className="h-4 w-4" /> {t.cancer}
+            <span className="text-xs font-normal text-slate-500">· {t.cancerHint}</span>
+          </label>
 
           {!initial && (
             <fieldset className="rounded-xl bg-slate-50 p-4 ring-1 ring-slate-200 sm:col-span-2">

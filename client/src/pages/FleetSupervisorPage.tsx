@@ -21,6 +21,8 @@ import {
   Sparkles,
   Timer,
   Truck,
+  Ribbon,
+  Clock3,
   Wand2,
 } from "lucide-react";
 import {
@@ -31,6 +33,7 @@ import {
   findUnrequestedMatches,
   groupCapacity,
   isNonMedical,
+  isPriority,
   isTransfer,
   localDateString,
   matchHospitalZone,
@@ -73,8 +76,32 @@ import { RecentActivity } from "@/components/ActivityLog";
 import { useHospitals, useLiveVehicles, useNow } from "@/lib/useShared";
 import { NOTIFY_KEY, deviceNotificationsOn, useArrivalAlerts, useCancellationAlerts, useRedirectAlerts } from "@/lib/arrivalAlerts";
 
-/** from: الموعد الأول في النقل بين موعدين (الاستلام من مستشفاه) */
-type Trip = { request: VehicleRequest; appointment: ClinicAppointment; from?: ClinicAppointment | null };
+/**
+ * from: الموعد الأول في النقل بين موعدين (الاستلام من مستشفاه).
+ * outboundAt: وقت طلب الذهاب لنفس الموعد (مع رحلة العودة).
+ */
+type Trip = { request: VehicleRequest; appointment: ClinicAppointment; from?: ClinicAppointment | null; outboundAt?: string };
+
+/** وقت طلب السيارة من مشرف المبنى: للذهاب، وللعودة (ومعه وقت طلب الذهاب)، وللنقل بين موعدين. */
+function requestTimes(trip: Trip) {
+  const at = trip.request.createdAt;
+  if (!at) return "";
+  if (trip.from) return `طلب النقل ${at}`;
+  if (trip.request.direction === "عودة") return `${trip.outboundAt ? `طلب الذهاب ${trip.outboundAt} · ` : ""}طلب العودة ${at}`;
+  return `طلب الذهاب ${at}`;
+}
+
+/** كم مضى على الطلب (createdAt بصيغة HH:MM اليوم)، أو null إن لم يكن اليوم. */
+function waitedText(createdAt: string, now: Date) {
+  const match = /^(\d{1,2}):(\d{2})$/.exec(createdAt);
+  if (!match) return null;
+  const minutes = now.getHours() * 60 + now.getMinutes() - (Number(match[1]) * 60 + Number(match[2]));
+  if (minutes < 0 || minutes > 12 * 60) return null;
+  return minutes < 1 ? "الآن" : `منذ ${minutesText(minutes)}`;
+}
+
+/** شارة الأولوية (حالة سرطان). */
+const PriorityBadge = () => <Badge tone="red" icon={Ribbon}>أولوية · حالة سرطان</Badge>;
 type VehicleFilter = "all" | "inside" | "outside" | "busy" | "off";
 
 /** مرحلة رحلة سيارة كاملة (قد تحمل أكثر من مريض). */
@@ -123,12 +150,18 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
   const withAppointment = (request: VehicleRequest): Trip | null => {
     const appointment = appointments.find((item) => item.id === request.appointmentId);
     const from = request.fromAppointmentId ? appointments.find((item) => item.id === request.fromAppointmentId) ?? null : null;
-    return appointment ? { request, appointment, from } : null;
+    const outboundAt = request.direction === "عودة"
+      ? requests.filter((item) => item.appointmentId === request.appointmentId && item.direction === "ذهاب").at(-1)?.createdAt
+      : undefined;
+    return appointment ? { request, appointment, from, outboundAt } : null;
   };
   const isTrip = (trip: Trip | null): trip is Trip => Boolean(trip);
   const onDate = (trip: Trip) => trip.appointment.appointmentDate === date;
 
   const pending = requests.filter((request) => request.status === "بانتظار التوزيع").map(withAppointment).filter(isTrip).filter(onDate);
+  // حالات السرطان أولًا، ثم حسب وقت الموعد
+  const pendingShown = [...pending].sort((a, b) => Number(isPriority(b.appointment)) - Number(isPriority(a.appointment))
+    || a.appointment.appointmentAt.localeCompare(b.appointment.appointmentAt));
   const phases = new Map(requests.map((request) => [request.id, tripPhase(request, now, gpsLive(request.vehiclePlate))]));
   // الرحلات الجارية الآن (إلى الاستلام أو إلى الوجهة) مهما كان تاريخ الموعد
   const active = requests
@@ -378,7 +411,7 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
           >
             {pending.length ? (
               <div className="divide-y divide-slate-100">
-                {pending.map((trip) => {
+                {pendingShown.map((trip) => {
                   const suggested = assignVehicleForTrips(dispatchable, [trip.appointment], load, locationRank(trip.request.direction, [trip.request.id]));
                   const redirect = redirectFor.get(trip.request.id);
                   const selectedPlate = selectedVehicles[trip.request.id] || suggested?.plate || "";
@@ -397,11 +430,18 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
                             <p className="font-semibold text-ink">{trip.appointment.patientName}</p>
                             {trip.from ? <Badge tone="cyan">نقل بين موعدين</Badge> : <Badge tone={trip.request.direction === "عودة" ? "amber" : "neutral"}>{trip.request.direction}</Badge>}
                             {isNonMedical(trip.appointment) && <Badge tone="violet">غير طبية</Badge>}
+                            {isPriority(trip.appointment) && <PriorityBadge />}
                             {groupedIds.has(trip.appointment.id) && <Badge tone="violet" icon={Sparkles}>قابلة للجمع</Badge>}
                             {redirect && <Badge tone="cyan" icon={Navigation}>سيارة قريبة {redirect.vehicle.plate} · {redirect.distanceKm} كم</Badge>}
                           </div>
                           <p className="mt-1 text-sm text-slate-600">{routeLabel(trip.appointment, trip.from)}{zone && <span className="text-slate-400"> · {zone}</span>}</p>
-                          <p className="mt-0.5 text-xs text-slate-500">{trip.appointment.kind}{trip.appointment.assistance.length ? ` · ${trip.appointment.assistance.join("، ")}` : ""}</p>
+                          <p className="mt-0.5 text-xs text-slate-500">{trip.appointment.kind}{trip.appointment.gender ? ` · ${trip.appointment.gender}` : ""}{trip.appointment.assistance.length ? ` · ${trip.appointment.assistance.join("، ")}` : ""}</p>
+                          {trip.request.createdAt && (
+                            <p className="mt-1 flex flex-wrap items-center gap-1 text-xs font-medium text-amber-800">
+                              <Clock3 className="h-3.5 w-3.5" /> {requestTimes(trip)}
+                              {waitedText(trip.request.createdAt, now) && <span className="font-normal text-amber-700">· {waitedText(trip.request.createdAt, now)}</span>}
+                            </p>
+                          )}
                         </div>
                       </div>
                       <div className="flex flex-col gap-2 sm:flex-row lg:w-[360px]">
@@ -591,8 +631,9 @@ function TripList({ trips, hospitals }: { trips: Trip[]; hospitals: Hospital[] }
     <ul className="mt-3 space-y-2">
       {trips.map((trip) => (
         <li key={trip.request.id} className="rounded-lg bg-white px-3 py-2 text-xs ring-1 ring-slate-200/70">
-          <p className="font-semibold text-ink">{trip.appointment.patientName} <span dir="ltr" className="font-medium text-slate-500 tabular">{trip.appointment.appointmentAt}</span></p>
+          <p className="font-semibold text-ink">{trip.appointment.patientName} <span dir="ltr" className="font-medium text-slate-500 tabular">{trip.appointment.appointmentAt}</span>{isPriority(trip.appointment) && <span className="ms-1.5 text-red-700">· أولوية</span>}</p>
           <p className="mt-0.5 text-slate-500">{routeLabel(trip.appointment, trip.from)}{matchHospitalZone(trip.appointment, hospitals) ? ` · ${matchHospitalZone(trip.appointment, hospitals)}` : ""}</p>
+          {trip.request.createdAt && <p className="mt-0.5 text-slate-400">{requestTimes(trip)}</p>}
         </li>
       ))}
     </ul>
@@ -641,6 +682,8 @@ function ActiveTrip({ trips, phase, vehicle, driver, hospitals, onArrived }: {
             <span className="font-medium text-ink">{trip.appointment.patientName}</span>
             <span dir="ltr" className="text-slate-500 tabular">{trip.appointment.appointmentAt}</span>
             <span className="text-slate-500">{routeLabel(trip.appointment, trip.from)}</span>
+            {isPriority(trip.appointment) && <span className="font-medium text-red-700">· أولوية</span>}
+            {trip.request.createdAt && <span className="text-slate-400">· {requestTimes(trip)}</span>}
           </li>
         ))}
       </ul>

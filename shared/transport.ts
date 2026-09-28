@@ -35,7 +35,17 @@ export type ClinicAppointment = {
   cancelReason?: string;
   cancelledBy?: string;
   cancelledAt?: string;
+  /** جنس الضيف */
+  gender?: Gender;
+  /** حالة سرطان: أولوية في إرسال السيارة */
+  cancer?: boolean;
 };
+
+export type Gender = "ذكر" | "أنثى";
+export const GENDERS: Gender[] = ["ذكر", "أنثى"];
+
+/** أولوية في إرسال السيارة (حالات السرطان): تظهر أولًا لمشرف السيارات وتأخذ السيارة قبل غيرها في التوزيع. */
+export const isPriority = (appointment: Pick<ClinicAppointment, "cancer">) => Boolean(appointment.cancer);
 
 export type Vehicle = {
   plate: string;
@@ -126,6 +136,21 @@ function normalizeHeader(value: string) {
     .replace(/[أإآ]/g, "ا")
     .replace(/ة/g, "ه")
     .replace(/[\s_\-\/]+/g, "");
+}
+
+function normalizeGender(value: unknown): Gender | undefined {
+  const text = toText(value).toLowerCase();
+  if (!text) return undefined;
+  if (/^(ذكر|رجل|male|m)$/.test(text)) return "ذكر";
+  if (/^(أنثى|انثى|انثي|أنثي|امرأة|امراة|female|f)$/.test(text)) return "أنثى";
+  return undefined;
+}
+
+/** نعم/لا من Excel: نعم، yes، 1، ✓، أو اسم الخيار نفسه. */
+function isYes(value: unknown, extra?: RegExp) {
+  const text = toText(value).toLowerCase();
+  if (!text) return false;
+  return /^(نعم|yes|y|true|1|✓|✔|x)$/.test(text) || Boolean(extra?.test(text));
 }
 
 function readAliased(row: Record<string, unknown>, aliases: string[]) {
@@ -256,6 +281,8 @@ export function migrateAppointment(value: unknown, index = 0): ClinicAppointment
     ...(status === "ملغي"
       ? { cancelReason: toText(raw.cancelReason) || undefined, cancelledBy: toText(raw.cancelledBy) || undefined, cancelledAt: toText(raw.cancelledAt) || undefined }
       : {}),
+    ...(normalizeGender(raw.gender) ? { gender: normalizeGender(raw.gender) } : {}),
+    ...(raw.cancer === true ? { cancer: true } : {}),
   };
 }
 
@@ -291,6 +318,10 @@ export function parseImportedAppointments(
     const appointmentDate = rawDate === undefined || toText(rawDate) === "" ? today : normalizeDate(rawDate);
     const kind = normalizeKind(readAliased(row, ["نوع الرحلة", "نوع الخدمة", "النوع", "trip type"]));
     const assistance = normalizeAssistance(readAliased(row, ["احتياجات الضيف", "احتياجات المريض", "المساعدة", "الاحتياج", "ملاحظات", "assistance"]));
+    // ملف المواعيد المصدَّر: كل احتياج في عمود «نعم/لا»
+    for (const need of ASSISTANCE_NEEDS) if (!assistance.includes(need) && isYes(readAliased(row, [need]))) assistance.push(need);
+    const gender = normalizeGender(readAliased(row, ["الجنس", "gender", "sex"]));
+    const cancer = isYes(readAliased(row, ["حالة سرطان", "سرطان", "cancer"]), /سرطان|cancer/);
 
     const missing = [
       [patientName, "اسم الضيف"],
@@ -328,6 +359,8 @@ export function parseImportedAppointments(
       kind: kind as AppointmentKind,
       assistance,
       status: "بانتظار طلب السيارة",
+      ...(gender ? { gender } : {}),
+      ...(cancer ? { cancer: true } : {}),
     });
   });
 
@@ -479,7 +512,7 @@ export type DispatchPlan = {
 /**
  * خطة توزيع كل الطلبات المنتظرة على السيارات المتاحة الآن (كل سيارة رحلة واحدة):
  * - الرحلات القابلة للجمع (buildTripGroups) تذهب في سيارة واحدة.
- * - رحلات الاحتياجات الخاصة أولًا لأن سياراتها أقل، ثم الأقرب موعدًا.
+ * - حالات السرطان أولًا (أولوية)، ثم رحلات الاحتياجات الخاصة لأن سياراتها أقل، ثم الأقرب موعدًا.
  * - كل رحلة تأخذ السيارة المناسبة الأقل رحلات اليوم، فيتوزع العمل على كل السيارات.
  * - rank (اختياري): تفضيل حسب مكان السيارة لكل رحلة (مثل سيارة خارج المجمع قريبة من ضيف العودة).
  */
@@ -505,7 +538,11 @@ export function planDispatch(
     if (!grouped.has(trip.appointment.id)) units.push({ requestIds: [trip.request.id], appointments: [trip.appointment], direction: trip.request.direction });
   }
   const startOf = (unit: PlannedTrip) => unit.appointments.map((appointment) => `${appointment.appointmentDate} ${appointment.appointmentAt}`).sort()[0];
-  units.sort((a, b) => Number(needsAccessibleVehicle(b.appointments)) - Number(needsAccessibleVehicle(a.appointments)) || startOf(a).localeCompare(startOf(b)));
+  // حالات السرطان أولًا، ثم الاحتياجات الخاصة (سياراتها أقل)، ثم الأقرب موعدًا
+  const priority = (unit: PlannedTrip) => unit.appointments.some(isPriority);
+  units.sort((a, b) => Number(priority(b)) - Number(priority(a))
+    || Number(needsAccessibleVehicle(b.appointments)) - Number(needsAccessibleVehicle(a.appointments))
+    || startOf(a).localeCompare(startOf(b)));
 
   const free = vehicles.filter((vehicle) => vehicle.available);
   const plan: DispatchPlan = { assignments: [], waiting: [] };
@@ -861,7 +898,7 @@ export function buildDriverMessage(
     const pickupEn = firstPlace ? `${firstPlace.en} (after appointment ${from!.appointmentAt})` : `Building ${appointment.buildingNumber}, Apt ${appointment.apartmentNumber}`;
     ar.push(
       "",
-      `${prefix}${rider.ar}: ${appointment.patientName}${isNonMedical(appointment) ? " (رحلة غير طبية)" : ""}`,
+      `${prefix}${rider.ar}: ${appointment.patientName}${appointment.gender ? ` (${appointment.gender})` : ""}${isNonMedical(appointment) ? " (رحلة غير طبية)" : ""}`,
       returning ? `من: ${destination.ar}` : `من: ${pickupAr}`,
       returning ? `إلى: ${pickupAr}` : `إلى: ${destination.ar}`,
       `${isNonMedical(appointment) ? "الوقت" : "الموعد"}: ${appointment.appointmentDate} ${appointment.appointmentAt}`,
@@ -870,7 +907,7 @@ export function buildDriverMessage(
     );
     en.push(
       "",
-      `${prefix}${rider.en}: ${appointment.patientName}${isNonMedical(appointment) ? " (non-medical trip)" : ""}`,
+      `${prefix}${rider.en}: ${appointment.patientName}${appointment.gender ? ` (${appointment.gender === "أنثى" ? "female" : "male"})` : ""}${isNonMedical(appointment) ? " (non-medical trip)" : ""}`,
       returning ? `From: ${destination.en}` : `From: ${pickupEn}`,
       returning ? `To: ${pickupEn}` : `To: ${destination.en}`,
       `${isNonMedical(appointment) ? "Time" : "Appointment"}: ${appointment.appointmentDate} ${appointment.appointmentAt}`,

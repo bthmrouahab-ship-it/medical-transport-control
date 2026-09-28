@@ -8,7 +8,8 @@ declare(strict_types=1);
 
 const APPOINTMENT_STATUSES = ['بانتظار طلب السيارة', 'تم طلب السيارة', 'تم استلام المريض', 'طلب عودة', 'مكتملة', 'ملغي'];
 const APPOINTMENT_FIELDS = ['id', 'patientName', 'clinic', 'buildingNumber', 'apartmentNumber', 'mobile', 'appointmentDate',
-    'appointmentAt', 'hospitalId', 'category', 'kind', 'assistance', 'status', 'cancelReason', 'cancelledBy', 'cancelledAt', '_o'];
+    'appointmentAt', 'hospitalId', 'category', 'kind', 'assistance', 'status', 'cancelReason', 'cancelledBy', 'cancelledAt',
+    'gender', 'cancer', '_o'];
 /** خانات إلغاء الموعد (السبب إلزامي، ومن ألغاه، ومتى) */
 const CANCEL_FIELDS = ['cancelReason', 'cancelledBy', 'cancelledAt'];
 const REQUEST_STATUSES = ['بانتظار التوزيع', 'تم إرسال السيارة', 'وصلت السيارة', 'تم استلام المريض', 'وصلت الوجهة'];
@@ -81,7 +82,9 @@ function valid_appointment(array $data, string $id): bool
         && in_array($data['kind'], ['عادي', 'احتياجات خاصة'], true)
         && in_array($data['status'], APPOINTMENT_STATUSES, true)
         && ($data['category'] ?? 'غير طبية') === 'غير طبية'
-        && is_array($data['assistance'] ?? []) && count($data['assistance'] ?? []) <= 4;
+        && is_array($data['assistance'] ?? []) && count($data['assistance'] ?? []) <= 4
+        && in_array($data['gender'] ?? 'ذكر', ['ذكر', 'أنثى'], true)
+        && is_bool($data['cancer'] ?? false);
 }
 
 /** يعيد سبب الرفض، أو null إن كانت العملية مسموحة. */
@@ -103,7 +106,8 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
             }
             if (has_role($user, ['admin', 'clinic'])) {
                 return only($changed, APPOINTMENT_FIELDS) && !in_array('id', $changed, true)
-                    && in_array($after['status'] ?? null, APPOINTMENT_STATUSES, true) ? null : $denied;
+                    && in_array($after['status'] ?? null, APPOINTMENT_STATUSES, true)
+                    && in_array($after['gender'] ?? 'ذكر', ['ذكر', 'أنثى'], true) && is_bool($after['cancer'] ?? false) ? null : $denied;
             }
             // مشرف المبنى لا يغيّر بيانات المريض ولا وقت الموعد، بل حالة الموعد فقط، أو يلغيه قبل استلام المريض مع ذكر السبب
             if ($role === 'buildingSupervisor') {
