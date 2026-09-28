@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { Accessibility, ArrowLeftRight, Ban, BellRing, Building2, Check, CheckCircle2, ChevronDown, Hospital, Link2, MessageCircle, Phone, RotateCcw, Timer, Truck, XCircle } from "lucide-react";
+import { Accessibility, ArrowLeftRight, Ban, BellRing, Building2, Check, CheckCircle2, ChevronDown, Hospital, Link2, MessageCircle, Phone, Ribbon, RotateCcw, Timer, Truck, XCircle } from "lucide-react";
 import {
   CANCEL_REASONS,
   appointmentPickupLabel,
@@ -444,6 +444,8 @@ function AppointmentInfo({ appointment, request, driver, from }: { appointment: 
         {request && (from ? <Badge tone="cyan" icon={ArrowLeftRight}>نقل بين موعدين</Badge> : <Badge tone={returning ? "amber" : "neutral"}>{request.direction}</Badge>)}
         {isNonMedical(appointment) && <Badge tone="violet">غير طبية</Badge>}
         {appointment.kind === "احتياجات خاصة" && <Badge icon={Accessibility}>احتياجات خاصة</Badge>}
+        {appointment.cancer && <Badge tone="red" icon={Ribbon}>أولوية · حالة سرطان</Badge>}
+        {appointment.gender && <span className="text-xs text-slate-500">{appointment.gender}</span>}
       </div>
       <p className="mt-1 text-sm text-slate-600">{returning ? appointment.clinic : pickup} ← {returning ? pickup : appointment.clinic}</p>
       <p className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">

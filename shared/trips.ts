@@ -277,8 +277,8 @@ export function suggestReturnRedirects(
       pairs.push({ ...trip, vehicle, distanceKm: Math.round(distance * 10) / 10, from: state.from, pickup: hospital.name, special });
     }
   }
-  // الاحتياجات الخاصة أولًا (سياراتها أقل)، ثم الأقرب
-  pairs.sort((a, b) => Number(b.special) - Number(a.special) || a.distanceKm - b.distanceKm);
+  // حالات السرطان أولًا، ثم الاحتياجات الخاصة (سياراتها أقل)، ثم الأقرب
+  pairs.sort((a, b) => Number(Boolean(b.appointment.cancer)) - Number(Boolean(a.appointment.cancer)) || Number(b.special) - Number(a.special) || a.distanceKm - b.distanceKm);
   const usedVehicles = new Set<string>();
   const usedRequests = new Set<string>();
   const result: ReturnRedirect[] = [];

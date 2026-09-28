@@ -16,6 +16,8 @@ import {
   Truck,
   UserPlus,
   UsersRound,
+  Search,
+  FilterX,
   X,
 } from "lucide-react";
 import {
@@ -146,6 +148,24 @@ function UsersTab({ profile, vehicles }: { profile: UserProfile; vehicles: Vehic
   }
 
   const activeCount = users?.filter((user) => user.active).length ?? 0;
+
+  // فلتر الحسابات: بحث بالاسم الظاهر أو اسم الدخول أو السيارة، والدور، والحالة
+  const [query, setQuery] = useState("");
+  const [roleFilter, setRoleFilter] = useState<UserRole | "all">("all");
+  const [stateFilter, setStateFilter] = useState<"all" | "active" | "inactive" | "pending">("all");
+  const filtering = Boolean(query.trim()) || roleFilter !== "all" || stateFilter !== "all";
+  const shownUsers = useMemo(() => {
+    const words = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    return (users ?? []).filter((user) => (roleFilter === "all" || user.role === roleFilter)
+      && (stateFilter === "all"
+        || (stateFilter === "active" && user.active)
+        || (stateFilter === "inactive" && !user.active)
+        || (stateFilter === "pending" && user.active && user.mustChangePassword))
+      && words.every((word) => `${user.displayName} ${user.username} ${user.vehiclePlate ?? ""} ${ROLE_LABELS[user.role]}`.toLowerCase().includes(word)));
+  }, [users, query, roleFilter, stateFilter]);
+  const roleCounts = new Map<UserRole, number>();
+  for (const user of users ?? []) roleCounts.set(user.role, (roleCounts.get(user.role) ?? 0) + 1);
+
   return (
     <>
       <PageHeader
@@ -168,10 +188,34 @@ function UsersTab({ profile, vehicles }: { profile: UserProfile; vehicles: Vehic
         />
       )}
 
-      <Panel icon={UsersRound} title="الحسابات" count={users?.length} description={users ? `${activeCount} حساب مفعّل` : undefined}>
+      <Panel
+        icon={UsersRound}
+        title="الحسابات"
+        count={filtering ? shownUsers.length : users?.length}
+        description={users ? (filtering ? `${shownUsers.length} من ${users.length} حساب` : `${activeCount} حساب مفعّل`) : undefined}
+        actions={filtering && <button type="button" onClick={() => { setQuery(""); setRoleFilter("all"); setStateFilter("all"); }} className={btn("ghost", "sm")}><FilterX className="h-4 w-4" /> مسح الفلاتر</button>}
+      >
+        <div className="grid gap-3 border-b border-slate-100 p-4 sm:grid-cols-[minmax(0,1fr)_190px_190px] sm:px-5">
+          <label className="relative block">
+            <span className="sr-only">بحث في المستخدمين</span>
+            <Search className="pointer-events-none absolute start-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+            <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="بحث: الاسم، اسم الدخول، السيارة..." className={cx(inputClass, "h-10 ps-9")} />
+          </label>
+          <select aria-label="الدور" value={roleFilter} onChange={(event) => setRoleFilter(event.target.value as UserRole | "all")} className={cx(inputClass, "h-10", roleFilter !== "all" && "border-brand-600 bg-brand-50 text-brand-700")}>
+            <option value="all">كل الأدوار</option>
+            {USER_ROLES.map((role) => <option key={role} value={role}>{ROLE_LABELS[role]} ({roleCounts.get(role) ?? 0})</option>)}
+          </select>
+          <select aria-label="حالة الحساب" value={stateFilter} onChange={(event) => setStateFilter(event.target.value as typeof stateFilter)} className={cx(inputClass, "h-10", stateFilter !== "all" && "border-brand-600 bg-brand-50 text-brand-700")}>
+            <option value="all">كل الحالات</option>
+            <option value="active">مفعّل</option>
+            <option value="inactive">موقوف</option>
+            <option value="pending">بانتظار تغيير كلمة المرور</option>
+          </select>
+        </div>
         <div className="divide-y divide-slate-100">
           {users === null && <p className="flex items-center justify-center gap-2 p-8 text-sm text-slate-400"><Loader2 className="h-4 w-4 animate-spin" /> جارٍ التحميل...</p>}
-          {users?.map((user) => {
+          {users !== null && !shownUsers.length && <EmptyState icon={Search} title="لا توجد حسابات مطابقة" />}
+          {shownUsers.map((user) => {
             const isSelf = user.uid === profile.uid;
             const busy = busyUid === user.uid;
             return (
