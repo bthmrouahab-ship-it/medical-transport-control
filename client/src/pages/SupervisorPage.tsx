@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { Accessibility, ArrowLeftRight, Ban, BellRing, Building2, Check, CheckCircle2, ChevronDown, Hospital, Link2, MessageCircle, Phone, Ribbon, RotateCcw, Timer, Truck, XCircle } from "lucide-react";
+import { Accessibility, ArrowLeftRight, Ban, BellRing, Building2, Check, CheckCircle2, ChevronDown, Hospital, Link2, MapPin, Ribbon, RotateCcw, ShieldCheck, Smartphone, Timer, Truck, XCircle } from "lucide-react";
 import {
   CANCEL_REASONS,
   appointmentPickupLabel,
@@ -18,9 +18,12 @@ import {
   type ClinicAppointment,
   type UnrequestedMatch,
   type VehicleRequest,
-  whatsappNumber,
 } from "@shared/transport";
-import { tripPhase, type TripPhase } from "@shared/trips";
+import { tripEndpoints, tripPhase, type TripPhase } from "@shared/trips";
+import { distanceKm } from "@shared/hospitals";
+import { checkLabel, checkStateText, countdownText, driverCheck, pendingCheck, type CheckKind } from "@shared/driverChecks";
+import GuestContact from "@/components/GuestContact";
+import { beep } from "@/lib/beep";
 import {
   Badge,
   EmptyState,
@@ -58,6 +61,8 @@ type RequestHandlers = {
   onTransfer: (appointment: ClinicAppointment, request: VehicleRequest, next: ClinicAppointment) => void;
   /** إلغاء الموعد نفسه (مع طلب السيارة القائم إن وُجد) بسبب مكتوب */
   onCancelAppointment: (appointment: ClinicAppointment, reason: string, request?: VehicleRequest) => void;
+  /** الرد على ما سجّله السائق من تطبيقه (وصوله أو استلام الضيف): تأكيد أو نفي */
+  onCheckReply: (request: VehicleRequest, kind: CheckKind, reply: "confirmed" | "denied") => void;
 };
 
 /** المباني التي يتابعها المشرف على هذا الجهاز (فارغة = كل المباني). */
@@ -83,7 +88,7 @@ function newRequest(appointment: ClinicAppointment): VehicleRequest {
   };
 }
 
-export function SupervisorHome({ uid, appointments, requests, onRequest, onUpdateRequest, onCancel, onReturn, onTransfer, onCancelAppointment }: {
+export function SupervisorHome({ uid, appointments, requests, onRequest, onUpdateRequest, onCancel, onReturn, onTransfer, onCancelAppointment, onCheckReply }: {
   /** رقم حساب المشرف: يرى متابعة طلباته هو فقط */
   uid: string;
   appointments: ClinicAppointment[];
@@ -124,8 +129,13 @@ export function SupervisorHome({ uid, appointments, requests, onRequest, onUpdat
     if (phaseOf(request).kind === "arrived") return "atAppointment";
     return followsRequest(request, uid) ? "progress" : null;
   };
+  // رحلة عودة استلم السائق ضيفها تبقى ظاهرة حتى يرد المشرف على ما سجّله (أو تنتهي المهلة)
+  const awaitingReply = (appointment: ClinicAppointment) => {
+    const request = latest.get(appointment.id);
+    return Boolean(request && pendingCheck(request, now));
+  };
   const visible = todays
-    .filter((appointment) => appointment.status !== "مكتملة" && appointment.status !== "ملغي")
+    .filter((appointment) => (appointment.status !== "مكتملة" || awaitingReply(appointment)) && appointment.status !== "ملغي")
     .flatMap((appointment) => {
       const stage = stageOf(appointment);
       return stage ? [{ appointment, request: latest.get(appointment.id), stage }] : [];
@@ -165,6 +175,7 @@ export function SupervisorHome({ uid, appointments, requests, onRequest, onUpdat
   });
   const dayOf = (appointment: ClinicAppointment) => (appointment.appointmentDate === today ? undefined : formatDay(appointment.appointmentDate, now));
   const driverOf = (request: VehicleRequest) => (request.vehiclePlate && liveGps.get(request.vehiclePlate)?.driver) || request.driver || "";
+  useCheckAlerts(inProgress);
 
   return (
     <>
@@ -215,6 +226,7 @@ export function SupervisorHome({ uid, appointments, requests, onRequest, onUpdat
                   phase={phaseOf(request)}
                   from={fromOf(request)}
                   onUpdateRequest={onUpdateRequest}
+                  onCheckReply={onCheckReply}
                   onCancel={onCancel}
                   onCancelAppointment={canCancelAppointment(appointment, request) ? () => setCancelling({ appointment, request }) : undefined}
                 />
@@ -432,24 +444,105 @@ function CancelDialog({ appointment, request, onClose, onConfirm }: {
   );
 }
 
-/** بيانات الموعد: المريض، ومن أين إلى أين، والهاتف والاحتياجات. */
-/** رقم الضيف مع زرّين: الاتصال به، أو فتح محادثة واتساب معه. */
-function GuestContact({ mobile }: { mobile: string }) {
-  const number = whatsappNumber(mobile);
-  const pill = "inline-flex h-8 items-center gap-1 rounded-lg px-2.5 font-semibold ring-1 ring-inset transition";
+/**
+ * تنبيه في الصفحة (مع صوت قصير) عندما يسجّل السائق من تطبيقه وصوله أو استلام الضيف في طلب يتابعه المشرف،
+ * حتى يؤكده أو ينفيه خلال المهلة. ما كان ينتظر الرد عند فتح الصفحة لا يُنبَّه له.
+ */
+function useCheckAlerts(rows: Required<Row>[]) {
+  const seen = useRef<Set<string> | null>(null);
+  const pending = rows.flatMap(({ appointment, request }) => {
+    const check = pendingCheck(request);
+    return check ? [{ key: `${request.id}:${check.kind}:${check.at.getTime()}`, appointment, request, check }] : [];
+  });
+  const signature = pending.map((item) => item.key).join("|");
+  useEffect(() => {
+    if (!seen.current) {
+      seen.current = new Set(pending.map((item) => item.key));
+      return;
+    }
+    const fresh = pending.filter((item) => !seen.current!.has(item.key));
+    if (!fresh.length) return;
+    fresh.forEach((item) => seen.current!.add(item.key));
+    for (const { appointment, request, check } of fresh) {
+      toast.warning(`السائق سجّل ${check.kind === "arrival" ? "وصول السيارة" : "استلام الضيف"}: ${appointment.patientName}`, {
+        description: `السيارة ${request.vehiclePlate ?? ""} · أكّد أو انفِ خلال 5 دقائق، وإلا يُقبل تلقائيًا`,
+        duration: 20000,
+      });
+    }
+    beep();
+  }, [signature]); // eslint-disable-line react-hooks/exhaustive-deps
+}
+
+const distanceText = (meters: number) => (meters < 1000 ? `${meters} م` : `${(meters / 1000).toFixed(1)} كم`);
+
+/**
+ * ما سجّله السائق من تطبيقه: ينتظر رد مشرف المبنى (تأكيد أو نفي) خلال 5 دقائق مع موقع هاتف السائق
+ * لحظتها وبعده عن نقطة الاستلام، وإلا يُقبل تلقائيًا. بعد الرد (أو انتهاء المهلة) سطر قصير بالنتيجة.
+ */
+function DriverCheckBox({ request, appointment, from, onReply }: {
+  request: VehicleRequest;
+  appointment: ClinicAppointment;
+  from?: ClinicAppointment | null;
+  onReply: (kind: CheckKind, reply: "confirmed" | "denied") => void;
+}) {
+  const now = useNow(1000);
+  const hospitals = useHospitals();
+  const check = pendingCheck(request, now);
+  if (!check) {
+    const done = (["arrival", "pickup"] as CheckKind[]).flatMap((kind) => {
+      const item = driverCheck(request, kind, now);
+      return item ? [item] : [];
+    });
+    if (!done.length) return null;
+    return (
+      <ul className="mt-2 space-y-0.5 text-xs">
+        {done.map((item) => (
+          <li key={item.kind} className={cx("flex items-center gap-1.5", item.state === "denied" ? "font-medium text-red-700" : "text-slate-500")}>
+            {item.state === "denied" ? <XCircle className="h-3.5 w-3.5" /> : <ShieldCheck className="h-3.5 w-3.5" />}
+            {checkStateText(item)}
+          </li>
+        ))}
+      </ul>
+    );
+  }
+  const point = check.kind === "arrival" ? request.arrivalGps : request.pickupGps;
+  const pickup = tripEndpoints(appointment, request.direction, hospitals, from).from;
+  const meters = point && pickup ? Math.round(distanceKm(point, pickup) * 1000) : null;
+  const far = meters !== null && meters > 800;
+  const what = checkLabel(check.kind);
   return (
-    <span className="inline-flex flex-wrap items-center gap-1.5">
-      <span dir="ltr" className="tabular">{mobile}</span>
-      <a href={`tel:+${number}`} className={cx(pill, "bg-white text-slate-700 ring-slate-300 hover:bg-slate-50 hover:text-ink")} aria-label={`اتصال بالضيف ${mobile}`}>
-        <Phone className="h-3.5 w-3.5" /> اتصال
-      </a>
-      <a href={`https://wa.me/${number}`} target="_blank" rel="noreferrer" className={cx(pill, "bg-emerald-50 text-emerald-700 ring-emerald-200 hover:bg-emerald-100")} aria-label={`واتساب الضيف ${mobile}`}>
-        <MessageCircle className="h-3.5 w-3.5" /> واتساب
-      </a>
-    </span>
+    <div role="alert" className="mt-3 rounded-xl bg-amber-50 p-3 ring-1 ring-inset ring-amber-300">
+      <p className="flex items-start gap-1.5 text-sm font-semibold text-amber-950">
+        <Smartphone className="mt-0.5 h-4 w-4 shrink-0" />
+        <span>السائق سجّل {what} من تطبيقه الساعة <span dir="ltr" className="tabular">{timeLabel(check.at)}</span></span>
+      </p>
+      {meters !== null && (
+        <p className={cx("mt-1 flex items-center gap-1.5 text-xs", far ? "font-semibold text-red-700" : "text-amber-900")}>
+          <MapPin className="h-3.5 w-3.5 shrink-0" /> موقع هاتفه لحظتها على بعد {distanceText(meters)} من نقطة الاستلام{far ? " · بعيد عن المكان" : ""}
+        </p>
+      )}
+      <p className="mt-1 text-xs text-amber-900">
+        أكّد أو انفِ خلال <span dir="ltr" className="font-semibold tabular">{countdownText(check.secondsLeft)}</span>، وإلا يُقبل تلقائيًا. يستطيع السائق المتابعة قبل تأكيدك.
+      </p>
+      <div className="mt-2.5 flex flex-wrap gap-2">
+        <button type="button" onClick={() => onReply(check.kind, "confirmed")} className={btn("success", "sm")}>
+          <CheckCircle2 className="h-4 w-4" /> تأكيد {check.kind === "arrival" ? "الوصول" : "الاستلام"}
+        </button>
+        <button
+          type="button"
+          onClick={() => window.confirm(check.kind === "arrival"
+            ? "السيارة لم تصل فعلًا؟ ستعود الرحلة إلى «تم إرسال السيارة» ويصل تنبيه لمشرف السيارات والسائق."
+            : "الضيف لم يُستلم فعلًا؟ ستعود الرحلة إلى «وصلت السيارة» ويصل تنبيه لمشرف السيارات والسائق.") && onReply(check.kind, "denied")}
+          className={btn("danger", "sm")}
+        >
+          <XCircle className="h-4 w-4" /> {check.kind === "arrival" ? "لم تصل السيارة" : "لم يُستلم الضيف"}
+        </button>
+      </div>
+    </div>
   );
 }
 
+/** بيانات الموعد: المريض، ومن أين إلى أين، والهاتف والاحتياجات. */
 function AppointmentInfo({ appointment, request, driver, from }: { appointment: ClinicAppointment; request?: VehicleRequest; driver?: string; from?: ClinicAppointment | null }) {
   const pickup = from ? from.clinic : appointmentPickupLabel(appointment);
   const returning = request?.direction === "عودة";
@@ -539,7 +632,7 @@ function RequestRow({ appointment, day, match, partner, earlier, now, onRequest,
   );
 }
 
-function ProgressRow({ appointment, request, day, driver, phase, from, onUpdateRequest, onCancel, onCancelAppointment }: {
+function ProgressRow({ appointment, request, day, driver, phase, from, onUpdateRequest, onCheckReply, onCancel, onCancelAppointment }: {
   appointment: ClinicAppointment;
   request: VehicleRequest;
   day?: string;
@@ -548,6 +641,7 @@ function ProgressRow({ appointment, request, day, driver, phase, from, onUpdateR
   /** الموعد الأول في النقل بين موعدين */
   from?: ClinicAppointment | null;
   onUpdateRequest: RequestHandlers["onUpdateRequest"];
+  onCheckReply: RequestHandlers["onCheckReply"];
   onCancel: RequestHandlers["onCancel"];
   onCancelAppointment?: () => void;
 }) {
@@ -567,6 +661,9 @@ function ProgressRow({ appointment, request, day, driver, phase, from, onUpdateR
         <div className="min-w-0 flex-1">
           <AppointmentInfo appointment={appointment} request={request} driver={driver} from={from} />
           <div className="mt-2.5"><Steps steps={returning ? RETURN_STEPS : OUTBOUND_STEPS} current={step} /></div>
+          {(request.arrivalCheck || request.pickupCheck) && (
+            <DriverCheckBox request={request} appointment={appointment} from={from} onReply={(kind, reply) => onCheckReply(request, kind, reply)} />
+          )}
           {request.status === "بانتظار التوزيع" && <p className="mt-2 text-xs text-slate-500">بانتظار أن يرسل مشرف السيارات سيارة{from ? ` إلى ${from.clinic}` : ""}</p>}
           {phase.kind === "toDestination" && (
             <div className="mt-2">

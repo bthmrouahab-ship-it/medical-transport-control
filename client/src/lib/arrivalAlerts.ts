@@ -140,6 +140,42 @@ export function useCancellationAlerts({ requests, appointments, enabled = true }
   }, [requests, enabled]);
 }
 
+/**
+ * تنبيه لمشرف السيارات عندما ينفي مشرف المبنى ما سجّله السائق من تطبيقه (وصوله أو استلام الضيف)،
+ * فالرحلة عادت إلى المرحلة السابقة ويجب التواصل مع السائق. ما كان منفيًا عند فتح الصفحة لا يُنبَّه له.
+ */
+export function useDenialAlerts({ requests, appointments, enabled = true }: {
+  requests: VehicleRequest[];
+  appointments: ClinicAppointment[];
+  enabled?: boolean;
+}) {
+  const seen = useRef<Set<string> | null>(null);
+  const latestAppointments = useRef(appointments);
+  latestAppointments.current = appointments;
+  const denials = requests.flatMap((request) => (["arrival", "pickup"] as const)
+    .filter((kind) => (kind === "arrival" ? request.arrivalCheck : request.pickupCheck) === "denied")
+    .map((kind) => ({ key: `${request.id}:${kind}:${kind === "arrival" ? request.arrivalCheckAt : request.pickupCheckAt}`, kind, request })));
+  const signature = denials.map((item) => item.key).join("|");
+
+  useEffect(() => {
+    if (!enabled) return;
+    if (!seen.current) {
+      seen.current = new Set(denials.map((item) => item.key));
+      return;
+    }
+    for (const { key, kind, request } of denials) {
+      if (seen.current.has(key)) continue;
+      seen.current.add(key);
+      const appointment = latestAppointments.current.find((item) => item.id === request.appointmentId);
+      const by = (kind === "arrival" ? request.arrivalCheckBy : request.pickupCheckBy) ?? "مشرف المبنى";
+      const title = kind === "arrival" ? `نفى ${by} وصول السيارة ${request.vehiclePlate ?? ""}` : `نفى ${by} استلام ${appointment?.patientName ?? "الضيف"}`;
+      const body = `${appointment ? `${appointment.patientName} · ` : ""}السائق${request.driver ? ` ${request.driver}` : ""} سجّله من تطبيقه، وعادت الرحلة إلى المرحلة السابقة. تواصل مع السائق.`;
+      toast.error(title, { description: body, duration: 30000 });
+      notifyDevice(title, body, `denied-${request.id}-${kind}`);
+    }
+  }, [signature, enabled]); // eslint-disable-line react-hooks/exhaustive-deps
+}
+
 /** اقتراحات التوجيه التي ظهر تنبيهها في هذه الجلسة. */
 const SEEN_REDIRECTS_KEY = "fox_seen_redirects";
 

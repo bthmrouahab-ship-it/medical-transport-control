@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
-import { Share, SquarePlus, X } from "lucide-react";
-import { btn } from "./ui-kit";
+import { ExternalLink, Share, ShieldAlert, SquarePlus, X } from "lucide-react";
+import { installNeedsChrome, openInChromeLink } from "@/lib/browser";
+import { btn, cx } from "./ui-kit";
 
-// حدث التثبيت في أندرويد (Chrome وEdge وSamsung Internet)؛ غير موجود في أنواع TypeScript.
+// حدث التثبيت في أندرويد (Chrome)؛ غير موجود في أنواع TypeScript.
 interface InstallPromptEvent extends Event {
   prompt: () => Promise<void>;
   userChoice: Promise<{ outcome: "accepted" | "dismissed" }>;
@@ -34,16 +35,18 @@ function recentlyDismissed() {
 }
 
 // شريط أسفل الشاشة يقترح إضافة الموقع إلى الشاشة الرئيسية للهاتف:
-// في أندرويد زر «تثبيت» يفتح نافذة التثبيت، وفي الآيفون (بلا تثبيت تلقائي) شرح الخطوتين.
+// في أندرويد من Chrome زر «تثبيت» يفتح نافذة التثبيت، ومن متصفح آخر (مثل Samsung Internet، الذي يحظر
+// Play Protect تثبيته) زر «فتح في Chrome»، وفي الآيفون (بلا تثبيت تلقائي) شرح الخطوتين.
 export default function InstallPrompt() {
   const [installEvent, setInstallEvent] = useState<InstallPromptEvent | null>(null);
   const [ios] = useState(() => isIos() && !isStandalone());
+  const [needsChrome] = useState(() => installNeedsChrome() && !isStandalone());
   const [hidden, setHidden] = useState(() => isStandalone() || recentlyDismissed());
 
   useEffect(() => {
     const onPrompt = (event: Event) => {
       event.preventDefault();
-      if (isTouchDevice()) setInstallEvent(event as InstallPromptEvent);
+      if (isTouchDevice() && !installNeedsChrome()) setInstallEvent(event as InstallPromptEvent);
     };
     const onInstalled = () => {
       setInstallEvent(null);
@@ -57,7 +60,7 @@ export default function InstallPrompt() {
     };
   }, []);
 
-  if (hidden || (!installEvent && !ios)) return null;
+  if (hidden || (!installEvent && !ios && !needsChrome)) return null;
 
   const dismiss = () => {
     try {
@@ -91,7 +94,12 @@ export default function InstallPrompt() {
           <div className="min-w-0 flex-1">
             <p className="text-sm font-bold text-ink">ثبّت سيارات الثمامة على هاتفك</p>
             <p className="mt-0.5 text-xs leading-6 text-slate-600">
-              {installEvent ? (
+              {needsChrome ? (
+                <>
+                  <ShieldAlert className="me-1 inline size-4 align-text-bottom text-amber-600" aria-hidden />
+                  التثبيت من هذا المتصفح يحظره Google Play Protect. افتح الموقع في Google Chrome وثبّته من هناك.
+                </>
+              ) : installEvent ? (
                 "يفتح من أيقونة على الشاشة الرئيسية بملء الشاشة، مثل التطبيق."
               ) : (
                 <>
@@ -105,6 +113,16 @@ export default function InstallPrompt() {
             <X className="size-5" />
           </button>
         </div>
+        {needsChrome && (
+          <div className="mt-2 flex justify-end gap-2">
+            <button type="button" onClick={dismiss} className={btn("ghost", "sm")}>
+              لاحقًا
+            </button>
+            <a href={openInChromeLink()} className={cx(btn("primary", "sm"))}>
+              <ExternalLink className="size-4" /> فتح في Chrome
+            </a>
+          </div>
+        )}
         {installEvent && (
           <div className="mt-2 flex justify-end gap-2">
             <button type="button" onClick={dismiss} className={btn("ghost", "sm")}>

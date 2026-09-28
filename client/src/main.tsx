@@ -1,6 +1,16 @@
 import { createRoot } from "react-dom/client";
 import App from "./App";
+import { installNeedsChrome } from "./lib/browser";
 import "./index.css";
+
+// ملف التثبيت (manifest) لكل المتصفحات ما عدا متصفحات أندرويد غير Chrome: تثبيتها يحظره Google Play Protect،
+// فيُقترح فيها فتح الموقع في Chrome (InstallPrompt)
+if (!installNeedsChrome()) {
+  const manifest = document.createElement("link");
+  manifest.rel = "manifest";
+  manifest.href = "/manifest.json";
+  document.head.appendChild(manifest);
+}
 
 // تسجيل الدخول وتحميل البيانات المشتركة يتمان داخل بوابة الدخول (RolePortal).
 createRoot(document.getElementById("root")!).render(<App />);

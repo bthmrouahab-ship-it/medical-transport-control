@@ -1,5 +1,5 @@
-// عامل الخدمة: يجعل الموقع قابلًا للتثبيت على الهاتف. لا يخزّن شيئًا، فالبيانات
-// والصفحة تأتي دائمًا من الخادم؛ وعند انقطاع الإنترنت تظهر رسالة بدل صفحة خطأ المتصفح.
+// عامل الخدمة: يجعل الموقع قابلًا للتثبيت على الهاتف، ويعرض إشعارات الرحلات للسائق.
+// لا يخزّن شيئًا، فالبيانات والصفحة تأتي دائمًا من الخادم؛ وعند انقطاع الإنترنت تظهر رسالة بدل صفحة خطأ المتصفح.
 const OFFLINE_PAGE = `<!doctype html>
 <html lang="ar" dir="rtl">
 <head>
@@ -36,5 +36,41 @@ self.addEventListener("fetch", (event) => {
     fetch(event.request).catch(
       () => new Response(OFFLINE_PAGE, { headers: { "Content-Type": "text/html; charset=utf-8" } })
     )
+  );
+});
+
+// إشعار من الخادم (رحلة جديدة، إلغاء رحلة، نفي مشرف المبنى): يظهر دائمًا ولو كان التطبيق مغلقًا
+self.addEventListener("push", (event) => {
+  let data = {};
+  try {
+    data = event.data ? event.data.json() : {};
+  } catch {
+    data = { body: event.data ? event.data.text() : "" };
+  }
+  event.waitUntil(
+    self.registration.showNotification(data.title || "سيارات الثمامة", {
+      body: data.body || "",
+      icon: "/icon-192.png",
+      badge: "/badge-96.png",
+      tag: data.tag || "trip",
+      renotify: true,
+      requireInteraction: true,
+      vibrate: [400, 150, 400, 150, 400],
+      lang: "ar",
+      dir: "rtl",
+      data: { url: data.url || "/" },
+    })
+  );
+});
+
+// الضغط على الإشعار يفتح التطبيق (أو يعيده إلى الواجهة إن كان مفتوحًا)
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const url = (event.notification.data && event.notification.data.url) || "/";
+  event.waitUntil(
+    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((windows) => {
+      const open = windows.find((client) => "focus" in client);
+      return open ? open.focus() : self.clients.openWindow(url);
+    })
   );
 });

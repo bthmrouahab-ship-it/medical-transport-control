@@ -93,7 +93,25 @@ export type VehicleRequest = {
    * بدل العودة إلى المجمع. الطلب «ذهاب» لموعده الثاني.
    */
   fromAppointmentId?: string;
+  /** السائق سجّل وصوله إلى نقطة الاستلام من تطبيقه (ISO)؛ وقت استلامه الضيف هو pickedUpAt */
+  driverArrivedAt?: string;
+  /** موقع هاتف السائق لحظة تسجيل الوصول، ولحظة تسجيل الاستلام */
+  arrivalGps?: GpsPoint;
+  pickupGps?: GpsPoint;
+  /**
+   * رد مشرف المبنى على ما سجّله السائق: pending ينتظر الرد، confirmed أكّده، denied نفاه
+   * (النفي يعيد الطلب إلى المرحلة السابقة). بلا رد خلال CHECK_MINUTES يُعتبر مقبولًا تلقائيًا.
+   */
+  arrivalCheck?: CheckReply;
+  arrivalCheckBy?: string;
+  arrivalCheckAt?: string;
+  pickupCheck?: CheckReply;
+  pickupCheckBy?: string;
+  pickupCheckAt?: string;
 };
+
+export type GpsPoint = { lat: number; lng: number; accuracy?: number | null };
+export type CheckReply = "pending" | "confirmed" | "denied";
 
 export type TripGroupSuggestion = {
   appointmentIds: string[];
@@ -414,6 +432,24 @@ export function migrateRequest(value: unknown): VehicleRequest | null {
   };
   const coordinate = (value: unknown) => (typeof value === "number" && Number.isFinite(value) ? value : undefined);
   const arrivalSource = raw.arrivalSource === "gps" || raw.arrivalSource === "estimate" || raw.arrivalSource === "manual" ? raw.arrivalSource : undefined;
+  const reply = (value: unknown) => (value === "pending" || value === "confirmed" || value === "denied" ? value : undefined);
+  const gps = (value: unknown): GpsPoint | undefined => {
+    const point = value as Record<string, unknown> | null;
+    const lat = coordinate(point?.lat);
+    const lng = coordinate(point?.lng);
+    return lat === undefined || lng === undefined ? undefined : { lat, lng, accuracy: coordinate(point?.accuracy) ?? null };
+  };
+  const check = {
+    driverArrivedAt: isoTime(raw.driverArrivedAt),
+    arrivalGps: gps(raw.arrivalGps),
+    pickupGps: gps(raw.pickupGps),
+    arrivalCheck: reply(raw.arrivalCheck),
+    arrivalCheckBy: toText(raw.arrivalCheckBy) || undefined,
+    arrivalCheckAt: isoTime(raw.arrivalCheckAt),
+    pickupCheck: reply(raw.pickupCheck),
+    pickupCheckBy: toText(raw.pickupCheckBy) || undefined,
+    pickupCheckAt: isoTime(raw.pickupCheckAt),
+  };
   return {
     id,
     appointmentId,
@@ -433,6 +469,8 @@ export function migrateRequest(value: unknown): VehicleRequest | null {
     arrivedAt: isoTime(raw.arrivedAt),
     arrivalSource,
     fromAppointmentId: toText(raw.fromAppointmentId) || undefined,
+    // الخانات الفارغة لا تُضاف، حتى لا تظهر تغييرات وهمية عند المقارنة قبل الحفظ
+    ...Object.fromEntries(Object.entries(check).filter(([, value]) => value !== undefined)),
   };
 }
 

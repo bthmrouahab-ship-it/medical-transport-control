@@ -13,9 +13,13 @@ const APPOINTMENT_FIELDS = ['id', 'patientName', 'clinic', 'buildingNumber', 'ap
 /** خانات إلغاء الموعد (السبب إلزامي، ومن ألغاه، ومتى) */
 const CANCEL_FIELDS = ['cancelReason', 'cancelledBy', 'cancelledAt'];
 const REQUEST_STATUSES = ['بانتظار التوزيع', 'تم إرسال السيارة', 'وصلت السيارة', 'تم استلام المريض', 'وصلت الوجهة'];
+/** رد مشرف المبنى على ما سجّله السائق من تطبيقه (الوصول والاستلام) */
+const CHECK_FIELDS = ['arrivalCheck', 'arrivalCheckBy', 'arrivalCheckAt', 'pickupCheck', 'pickupCheckBy', 'pickupCheckAt'];
+/** مهلة رد مشرف المبنى بالثواني؛ بعدها يُعتبر ما سجّله السائق مقبولًا (نفس القيمة في shared/driverChecks.ts) */
+const CHECK_SECONDS = 300;
 const REQUEST_FIELDS = ['id', 'appointmentId', 'vehiclePlate', 'driver', 'direction', 'status', 'notificationMethod',
     'createdAt', 'groupId', 'notificationSentAt', 'requestedBy', 'pickedUpAt', 'etaAt', 'destLat', 'destLng', 'arrivedAt', 'arrivalSource',
-    'fromAppointmentId', '_o'];
+    'fromAppointmentId', 'driverArrivedAt', 'arrivalGps', 'pickupGps', ...CHECK_FIELDS, '_o'];
 /** خانات مرحلة الطريق إلى الوجهة (تُكتب عند استلام المريض وعند الوصول) */
 const TRIP_FIELDS = ['pickedUpAt', 'etaAt', 'destLat', 'destLng', 'arrivedAt', 'arrivalSource'];
 const VEHICLE_FIELDS = ['plate', 'driver', 'phone', 'kind', 'available', '_o'];
@@ -59,15 +63,44 @@ function follows_request(array $user, ?array $request): bool
     return $owner === null || $owner === (string)$user['id'];
 }
 
-/** أوقات بصيغة ISO، وإحداثيات الوجهة داخل قطر، ومصدر وصول معروف. */
+function is_iso($value): bool
+{
+    return is_text($value, 40) && strtotime($value) !== false;
+}
+
+/** أوقات بصيغة ISO، وإحداثيات الوجهة داخل قطر، ومصدر وصول معروف، وردود مشرف المبنى المعروفة. */
 function valid_trip_fields(array $data): bool
 {
-    foreach (['pickedUpAt', 'etaAt', 'arrivedAt'] as $field) {
-        if (array_key_exists($field, $data) && !(is_text($data[$field], 40) && strtotime($data[$field]) !== false)) return false;
+    foreach (['pickedUpAt', 'etaAt', 'arrivedAt', 'driverArrivedAt', 'arrivalCheckAt', 'pickupCheckAt'] as $field) {
+        if (array_key_exists($field, $data) && !is_iso($data[$field])) return false;
+    }
+    foreach (['arrivalCheck', 'pickupCheck'] as $field) {
+        if (array_key_exists($field, $data) && !in_array($data[$field], ['pending', 'confirmed', 'denied'], true)) return false;
     }
     if (array_key_exists('destLat', $data) && !(is_numeric($data['destLat']) && $data['destLat'] > 24 && $data['destLat'] < 27)) return false;
     if (array_key_exists('destLng', $data) && !(is_numeric($data['destLng']) && $data['destLng'] > 50 && $data['destLng'] < 52.5)) return false;
     return !array_key_exists('arrivalSource', $data) || in_array($data['arrivalSource'], ['gps', 'estimate', 'manual'], true);
+}
+
+/**
+ * رد مشرف المبنى على ما سجّله السائق: يؤكده (في أي وقت ما دام ينتظر الرد) أو ينفيه خلال المهلة
+ * (مع دقيقة سماح). الرد باسمه ووقته، ولا يُغيَّر رد سابق.
+ */
+function valid_check_replies(array $user, array $before, array $after, array $changed): bool
+{
+    foreach (['arrival' => 'driverArrivedAt', 'pickup' => 'pickedUpAt'] as $kind => $since) {
+        $field = $kind . 'Check';
+        if (!in_array($field, $changed, true)) {
+            if (array_intersect($changed, [$field . 'By', $field . 'At'])) return false;
+            continue;
+        }
+        $reply = $after[$field] ?? null;
+        if (($before[$field] ?? null) !== 'pending' || !in_array($reply, ['confirmed', 'denied'], true)) return false;
+        if (($after[$field . 'By'] ?? null) !== $user['display_name'] || !is_iso($after[$field . 'At'] ?? null)) return false;
+        $at = strtotime((string)($before[$since] ?? ''));
+        if ($reply === 'denied' && ($at === false || time() - $at > CHECK_SECONDS + 60)) return false;
+    }
+    return true;
 }
 
 function valid_appointment(array $data, string $id): bool
@@ -163,11 +196,28 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
                 // بيانات الوصول تُكتب مرة واحدة عند الوصول، ولا تُغيَّر بعده (مثل وصول سجّله GPS)
                 return !array_intersect($changed, ['arrivedAt', 'arrivalSource']) || $arriving ? null : $denied;
             }
-            // مشرف المبنى: تأكيد وصول السيارة واستلام المريض، ومعه وقت الاستلام والوقت المتوقع للوصول
+            // مشرف المبنى: تأكيد وصول السيارة واستلام المريض، ومعه وقت الاستلام والوقت المتوقع للوصول،
+            // والرد على ما سجّله السائق (التأكيد، أو النفي الذي يعيد الطلب إلى المرحلة السابقة)
             if ($role === 'buildingSupervisor') {
                 if (!follows_request($user, $before)) return $denied;
-                return only($changed, ['status', 'pickedUpAt', 'etaAt', 'destLat', 'destLng'])
-                    && in_array($after['status'] ?? null, ['وصلت السيارة', 'تم استلام المريض'], true) ? null : $denied;
+                if (!only($changed, ['status', 'pickedUpAt', 'etaAt', 'destLat', 'destLng', 'pickupGps', ...CHECK_FIELDS])) return $denied;
+                if (!valid_check_replies($user, $before, $after, $changed)) return $denied;
+                $from = $before['status'] ?? null;
+                $to = $after['status'] ?? null;
+                $denies = fn(string $field) => in_array($field, $changed, true) && ($after[$field] ?? null) === 'denied';
+                // النفي يعيد الطلب خطوة واحدة فقط: الوصول من «وصلت السيارة» إلى «تم إرسال السيارة»
+                if ($denies('arrivalCheck')) return $from === 'وصلت السيارة' && $to === 'تم إرسال السيارة' && !$denies('pickupCheck') ? null : $denied;
+                // والاستلام إلى «وصلت السيارة» بلا وقت استلام ولا وصول متوقع
+                if ($denies('pickupCheck')) {
+                    return $from === 'تم استلام المريض' && $to === 'وصلت السيارة'
+                        && !array_intersect(array_keys($after), ['pickedUpAt', 'etaAt', 'destLat', 'destLng', 'pickupGps']) ? null : $denied;
+                }
+                if (!in_array('status', $changed, true)) {
+                    return array_intersect($changed, [...TRIP_FIELDS, 'pickupGps']) ? $denied : null;
+                }
+                // موقع السائق يكتبه السائق وحده (يُحذف فقط مع نفي الاستلام)
+                if (in_array('pickupGps', $changed, true)) return $denied;
+                return in_array($to, ['وصلت السيارة', 'تم استلام المريض'], true) ? null : $denied;
             }
             return $denied;
 

@@ -19,6 +19,7 @@ import { useHospitals } from "@/lib/useShared";
 import AppHeader from "@/components/AppHeader";
 import { btn, byAppointmentTime, headerButton, timeLabel } from "@/components/ui-kit";
 import { pickupDetails } from "@shared/trips";
+import { checkReplyChanges, confirmPendingChecks, type CheckKind } from "@shared/driverChecks";
 import { CLINIC_TEXT, useLang } from "@/lib/i18n";
 import { ClinicForm, ClinicHome } from "./ClinicPages";
 import { SupervisorHome } from "./SupervisorPage";
@@ -319,7 +320,9 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
     const pickup = status === "تم استلام المريض" && request && appointment
       ? pickupDetails(request, appointment, hospitals, new Date(), passengers, firstAppointment)
       : {};
-    updateRequests(requests.map((item) => item.id === requestId ? { ...item, status, ...pickup } : item));
+    // ما سجّله السائق وينتظر الرد يُعتبر مؤكدًا من المشرف الذي تقدّم بالحالة بنفسه
+    const confirmed = request ? confirmPendingChecks(request, session.name) : {};
+    updateRequests(requests.map((item) => item.id === requestId ? { ...item, status, ...pickup, ...confirmed } : item));
     if (request && status === "تم استلام المريض") {
       // الموعد الأول في النقل ينتهي عند استلام الضيف منه
       updateAppointments(appointments.map((appointment) => appointment.id === request.appointmentId
@@ -329,6 +332,27 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
     toast.success(status === "وصلت السيارة" ? "تم تسجيل وصول السيارة" : "تم تأكيد استلام الضيف", {
       description: "etaAt" in pickup && pickup.etaAt ? `الوصول المتوقع إلى الوجهة ${timeLabel(new Date(pickup.etaAt))}` : undefined,
     });
+  }
+
+  /**
+   * رد مشرف المبنى على ما سجّله السائق من تطبيقه. النفي يعيد الطلب إلى المرحلة السابقة (ونفي الاستلام
+   * يعيد حالة الموعد كما كانت قبله)، ويصل تنبيه لمشرف السيارات والسائق.
+   */
+  function replyToDriverCheck(request: VehicleRequest, kind: CheckKind, reply: "confirmed" | "denied") {
+    const { set, unset } = checkReplyChanges(request, kind, reply, session.name);
+    updateRequests(requests.map((item) => {
+      if (item.id !== request.id) return item;
+      const next: VehicleRequest = { ...item, ...set };
+      unset.forEach((field) => delete next[field]);
+      return next;
+    }));
+    if (reply === "denied" && kind === "pickup") {
+      updateAppointments(appointments.map((appointment) => appointment.id === request.appointmentId
+        ? { ...appointment, status: request.direction === "عودة" ? "طلب عودة" : "تم طلب السيارة" }
+        : appointment.id === request.fromAppointmentId ? { ...appointment, status: "تم استلام المريض" } : appointment));
+    }
+    if (reply === "confirmed") toast.success(kind === "arrival" ? "تم تأكيد وصول السيارة" : "تم تأكيد استلام الضيف");
+    else toast.warning(kind === "arrival" ? "سُجّل أن السيارة لم تصل" : "سُجّل أن الضيف لم يُستلم", { description: "عادت الرحلة إلى المرحلة السابقة، ووصل تنبيه لمشرف السيارات والسائق." });
   }
 
   /** وصول السيارة إلى الوجهة: بتأكيد مشرف السيارات، أو بانتهاء المدة التقديرية لسيارة بلا GPS. */
@@ -463,6 +487,7 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
               toast.success("تم إرسال الطلب إلى مشرف السيارات");
             }}
             onUpdateRequest={updateRequestStatus}
+            onCheckReply={replyToDriverCheck}
             onCancel={(appointment, request) => {
               updateRequests(requests.filter((item) => item.id !== request.id));
               updateAppointments(appointments.map((item) => item.id === appointment.id
