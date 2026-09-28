@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_HOSPITALS, ORIGIN, distanceKm, insideQatar, matchHospital, nearbyHospitals } from "../shared/hospitals";
+import { DEFAULT_HOSPITALS, ORIGIN, distanceKm, insideQatar, matchHospital, nearbyHospitals, syncHospitals } from "../shared/hospitals";
 import { excelDate, excelMinutes, parseDriverList, summarizeHistory } from "../shared/history";
 
 describe("hospital catalog", () => {
@@ -10,6 +10,21 @@ describe("hospital catalog", () => {
     expect(matchHospital("sidra hosital")?.id).toBe("sidra");
     expect(matchHospital("حمد التخصصي")?.id).toBe("surgical");
     expect(matchHospital("المول")).toBeNull();
+    // المراكز المضافة بأسمائها في ملفات المواعيد
+    expect(matchHospital("Expert Dental center")?.id).toBe("expert-dental");
+    expect(matchHospital("Gardenia medical center")?.id).toBe("gardenia");
+    expect(matchHospital("Psychiatric Hospital")?.id).toBe("psychiatric");
+    expect(matchHospital("sama medical care")?.id).toBe("sama");
+    expect(matchHospital("Medical Care & Research Center")?.id).toBe("mcrc");
+  });
+
+  it("adds the new centers to a directory already saved, unless the admin added them", () => {
+    const stored = DEFAULT_HOSPITALS.filter((hospital) => !["expert-dental", "gardenia", "psychiatric", "sama"].includes(hospital.id));
+    const synced = syncHospitals(stored);
+    expect(synced).toHaveLength(DEFAULT_HOSPITALS.length);
+    const ownGardenia = { ...DEFAULT_HOSPITALS.find((hospital) => hospital.id === "gardenia")!, id: "h-own", name: "غاردينيا", nameEn: "Gardenia" };
+    expect(syncHospitals([...stored, ownGardenia]).filter((hospital) => hospital.id === "gardenia")).toHaveLength(0);
+    expect(syncHospitals(DEFAULT_HOSPITALS)).toHaveLength(DEFAULT_HOSPITALS.length);
   });
 
   it("finds hospitals on the same campus", () => {
