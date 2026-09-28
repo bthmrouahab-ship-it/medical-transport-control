@@ -39,8 +39,8 @@ async function registration() {
   ]);
 }
 
-/** يسجّل هذا الهاتف لإشعارات سيارة السائق (ويجدد التسجيل إن تغيّر). */
-async function subscribe() {
+/** يسجّل هذا الهاتف لإشعارات سيارة السائق بلغته (ويجدد التسجيل إن تغيّر). */
+async function subscribe(lang: string) {
   const worker = await registration();
   if (!worker) throw new Error("عامل الخدمة غير جاهز");
   const { key } = await api<{ key: string }>("push-key");
@@ -53,22 +53,22 @@ async function subscribe() {
     subscription = null;
   }
   subscription ??= await worker.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes(key) });
-  await api("push-subscribe", subscription.toJSON());
+  await api("push-subscribe", { ...subscription.toJSON(), lang });
 }
 
 /** زر «تفعيل الإشعارات»: يطلب الإذن ثم يسجّل الهاتف. */
-export async function enablePush(): Promise<PushState> {
+export async function enablePush(lang: string): Promise<PushState> {
   const permission = await Notification.requestPermission();
   if (permission !== "granted") return permission === "denied" ? "blocked" : "off";
-  await subscribe();
+  await subscribe(lang);
   return "on";
 }
 
-/** عند فتح صفحة السائق والإذن ممنوح: يجدد التسجيل بصمت (هاتف جديد أو دخول سائق آخر). */
-export async function refreshPush() {
+/** عند فتح صفحة السائق (أو تغيير لغته) والإذن ممنوح: يجدد التسجيل بصمت (هاتف جديد أو دخول سائق آخر). */
+export async function refreshPush(lang: string) {
   if (pushState() !== "on") return;
   try {
-    await subscribe();
+    await subscribe(lang);
   } catch {
     /* يُعاد المحاولة عند الفتح التالي */
   }

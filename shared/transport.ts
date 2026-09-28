@@ -896,7 +896,8 @@ export const NON_MEDICAL_DESTINATIONS: { ar: string; en: string }[] = [
 
 export const isNonMedical = (appointment: Pick<ClinicAppointment, "category">) => appointment.category === "غير طبية";
 
-function destinationLabels(appointment: ClinicAppointment, hospitals: Hospital[]) {
+/** اسم الوجهة بالعربية والإنجليزية (من دليل المستشفيات، أو قائمة الرحلات غير الطبية). */
+export function destinationLabels(appointment: ClinicAppointment, hospitals: Hospital[]) {
   if (isNonMedical(appointment)) {
     const known = NON_MEDICAL_DESTINATIONS.find((item) => item.ar === appointment.clinic);
     return { ar: appointment.clinic, en: known?.en ?? appointment.clinic };

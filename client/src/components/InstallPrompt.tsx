@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { ExternalLink, Share, ShieldAlert, SquarePlus, X } from "lucide-react";
 import { installNeedsChrome, openInChromeLink } from "@/lib/browser";
+import { DRIVER_TEXT, storedDriverLang } from "@/lib/driverI18n";
 import { btn, cx } from "./ui-kit";
 
 // حدث التثبيت في أندرويد (Chrome)؛ غير موجود في أنواع TypeScript.
@@ -61,6 +62,9 @@ export default function InstallPrompt() {
   }, []);
 
   if (hidden || (!installEvent && !ios && !needsChrome)) return null;
+  // بلغة تطبيق السائق إن اختارها على هذا الهاتف، وإلا بالعربية
+  const lang = storedDriverLang() ?? "ar";
+  const t = DRIVER_TEXT[lang].install;
 
   const dismiss = () => {
     try {
@@ -85,51 +89,53 @@ export default function InstallPrompt() {
       <div className="h-32" aria-hidden />
       <div
         role="dialog"
-        aria-label="إضافة الموقع إلى الشاشة الرئيسية"
+        aria-label={t.title}
+        dir={DRIVER_TEXT[lang].dir}
+        lang={lang}
         className="fixed inset-x-3 bottom-3 z-50 mx-auto max-w-md rounded-2xl bg-white p-3 shadow-xl ring-1 ring-slate-200"
         style={{ marginBottom: "env(safe-area-inset-bottom)" }}
       >
         <div className="flex items-start gap-3">
           <img src="/icon-192.png" alt="" className="size-10 shrink-0 rounded-xl ring-1 ring-slate-200" />
           <div className="min-w-0 flex-1">
-            <p className="text-sm font-bold text-ink">ثبّت سيارات الثمامة على هاتفك</p>
+            <p className="text-sm font-bold text-ink">{t.title}</p>
             <p className="mt-0.5 text-xs leading-6 text-slate-600">
               {needsChrome ? (
                 <>
                   <ShieldAlert className="me-1 inline size-4 align-text-bottom text-amber-600" aria-hidden />
-                  التثبيت من هذا المتصفح يحظره Google Play Protect. افتح الموقع في Google Chrome وثبّته من هناك.
+                  {t.chromeOnly}
                 </>
               ) : installEvent ? (
-                "يفتح من أيقونة على الشاشة الرئيسية بملء الشاشة، مثل التطبيق."
+                t.fullScreen
               ) : (
                 <>
-                  اضغط زر المشاركة <Share className="mx-0.5 inline size-4 align-text-bottom text-sky-600" aria-label="المشاركة" /> ثم
-                  اختر «إضافة إلى الشاشة الرئيسية» <SquarePlus className="mx-0.5 inline size-4 align-text-bottom text-slate-700" aria-hidden />
+                  {t.iosShare} <Share className="mx-0.5 inline size-4 align-text-bottom text-sky-600" aria-hidden /> {t.iosThen}{" "}
+                  <SquarePlus className="mx-0.5 inline size-4 align-text-bottom text-slate-700" aria-hidden />
                 </>
               )}
             </p>
           </div>
-          <button type="button" onClick={dismiss} className="rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600" aria-label="إغلاق">
+          <button type="button" onClick={dismiss} className="rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600" aria-label={t.close}>
             <X className="size-5" />
           </button>
         </div>
         {needsChrome && (
           <div className="mt-2 flex justify-end gap-2">
             <button type="button" onClick={dismiss} className={btn("ghost", "sm")}>
-              لاحقًا
+              {t.later}
             </button>
             <a href={openInChromeLink()} className={cx(btn("primary", "sm"))}>
-              <ExternalLink className="size-4" /> فتح في Chrome
+              <ExternalLink className="size-4" /> {t.openChrome}
             </a>
           </div>
         )}
         {installEvent && (
           <div className="mt-2 flex justify-end gap-2">
             <button type="button" onClick={dismiss} className={btn("ghost", "sm")}>
-              لاحقًا
+              {t.later}
             </button>
             <button type="button" onClick={install} className={btn("primary", "sm")}>
-              تثبيت
+              {t.install}
             </button>
           </div>
         )}

@@ -126,21 +126,66 @@ function push_queue(?array $item = null, bool $reset = false): array
     return $queue;
 }
 
-/** الضيف والمكان في نص الإشعار. */
+/** نصوص الإشعارات بلغات تطبيق السائق (نفس اللغات في client/src/lib/driverI18n.ts). */
+const PUSH_TEXT = [
+    'ar' => [
+        'dir' => 'rtl', 'new' => 'رحلة جديدة', 'group' => 'رحلة مجمّعة جديدة · %d ضيوف', 'cancel' => 'أُلغيت رحلة',
+        'deniedArrival' => 'لم يؤكد مشرف المبنى وصولك', 'deniedArrivalBody' => 'رحلة %s: تأكد من مكان الاستلام وتواصل مع مشرف السيارات',
+        'deniedPickup' => 'لم يؤكد مشرف المبنى استلام الضيف', 'deniedPickupBody' => 'رحلة %s: تواصل مع مشرف السيارات',
+        'home' => 'مبنى %s، شقة %s',
+    ],
+    'en' => [
+        'dir' => 'ltr', 'new' => 'New trip', 'group' => 'New grouped trip · %d guests', 'cancel' => 'Trip cancelled',
+        'deniedArrival' => 'The building supervisor did not confirm your arrival', 'deniedArrivalBody' => 'Trip of %s: check the pickup place and contact the fleet supervisor',
+        'deniedPickup' => 'The building supervisor did not confirm the pickup', 'deniedPickupBody' => 'Trip of %s: contact the fleet supervisor',
+        'home' => 'Building %s, Apt %s',
+    ],
+    'ur' => [
+        'dir' => 'rtl', 'new' => 'نیا ٹرپ', 'group' => 'نیا مشترکہ ٹرپ · %d مہمان', 'cancel' => 'ٹرپ منسوخ ہو گیا',
+        'deniedArrival' => 'بلڈنگ سپروائزر نے آپ کی آمد کی تصدیق نہیں کی', 'deniedArrivalBody' => '%s کا ٹرپ: پک اپ کی جگہ چیک کریں اور گاڑیوں کے سپروائزر سے رابطہ کریں',
+        'deniedPickup' => 'بلڈنگ سپروائزر نے مہمان کو لینے کی تصدیق نہیں کی', 'deniedPickupBody' => '%s کا ٹرپ: گاڑیوں کے سپروائزر سے رابطہ کریں',
+        'home' => 'بلڈنگ %s، فلیٹ %s',
+    ],
+];
+/** وجهات الرحلات غير الطبية بالإنجليزية (نفس NON_MEDICAL_DESTINATIONS في shared/transport.ts) */
+const NON_MEDICAL_EN = ['الجامعة' => 'University', 'المدرسة' => 'School', 'أنصار جاليري المطار القديم' => 'Ansar Gallery, Old Airport'];
+
+/** اسم الوجهة: كما كتبته العيادة بالعربية، وبالإنجليزية من دليل المستشفيات (للإنجليزية والأردية). */
+function place_name(PDO $pdo, array $appointment, string $lang): string
+{
+    $clinic = (string)($appointment['clinic'] ?? '');
+    if ($lang === 'ar') return $clinic;
+    if (isset(NON_MEDICAL_EN[$clinic])) return NON_MEDICAL_EN[$clinic];
+    static $names = null;
+    if ($names === null) {
+        $names = [];
+        foreach ($pdo->query("SELECT id, data FROM docs WHERE col = 'hospitals' AND data IS NOT NULL") as $row) {
+            $hospital = decode_doc($row['data']);
+            if (!empty($hospital['nameEn'])) $names[$row['id']] = $hospital['nameEn'];
+        }
+    }
+    return $names[(string)($appointment['hospitalId'] ?? '')] ?? $clinic;
+}
+
+/** بيانات الرحلة في الإشعار (يُكتب نصها بلغة كل هاتف عند الإرسال). */
 function push_trip_text(PDO $pdo, array $request): array
 {
-    $appointment = appointment_doc($pdo, (string)($request['appointmentId'] ?? '')) ?? [];
-    $name = trim((string)($appointment['patientName'] ?? ''));
-    $time = (string)($appointment['appointmentAt'] ?? '');
-    $home = 'مبنى ' . ($appointment['buildingNumber'] ?? '') . (($appointment['apartmentNumber'] ?? '') !== '' ? '، شقة ' . $appointment['apartmentNumber'] : '');
-    $place = (string)($appointment['clinic'] ?? '');
-    if (!empty($request['fromAppointmentId'])) {
-        $first = appointment_doc($pdo, (string)$request['fromAppointmentId']) ?? [];
-        $route = ($first['clinic'] ?? '') . " ← $place";
-    } else {
-        $route = ($request['direction'] ?? '') === 'عودة' ? "$place ← $home" : "$home ← $place";
-    }
-    return ['name' => $name, 'time' => $time, 'route' => $route];
+    return [
+        'appointment' => appointment_doc($pdo, (string)($request['appointmentId'] ?? '')) ?? [],
+        'from' => empty($request['fromAppointmentId']) ? null : appointment_doc($pdo, (string)$request['fromAppointmentId']),
+        'returning' => ($request['direction'] ?? '') === 'عودة',
+    ];
+}
+
+/** الضيف والوقت ومن أين إلى أين بلغة الهاتف. */
+function push_trip_parts(PDO $pdo, array $trip, string $lang): array
+{
+    $appointment = $trip['appointment'];
+    $home = sprintf(PUSH_TEXT[$lang]['home'], $appointment['buildingNumber'] ?? '', $appointment['apartmentNumber'] ?? '');
+    $place = place_name($pdo, $appointment, $lang);
+    $route = $trip['from'] ? place_name($pdo, $trip['from'], $lang) . " ← $place" : ($trip['returning'] ? "$place ← $home" : "$home ← $place");
+    if ($lang === 'en') $route = str_replace('←', '→', $route);
+    return ['name' => trim((string)($appointment['patientName'] ?? '')), 'time' => (string)($appointment['appointmentAt'] ?? ''), 'route' => $route];
 }
 
 /** إشعارات السائق الناتجة عن عملية كتابة واحدة على طلب (تُرسل بعد الحفظ). */
@@ -167,29 +212,31 @@ function queue_request_pushes(PDO $pdo, ?array $before, ?array $after): void
     }
 }
 
-/** نص الإشعار لكل سيارة: الرحلات الجديدة في إشعار واحد (رحلة مجمّعة)، وكل إلغاء أو نفي في إشعار. */
-function push_messages(array $items): array
+/** نص الإشعار لكل سيارة بلغة الهاتف: الرحلات الجديدة في إشعار واحد (رحلة مجمّعة)، وكل إلغاء أو نفي في إشعار. */
+function push_messages(PDO $pdo, array $items, string $lang): array
 {
+    $text = PUSH_TEXT[$lang] ?? PUSH_TEXT['ar'];
     $messages = [];
     $join = fn(string ...$parts) => implode(' · ', array_filter(array_map('trim', $parts), fn($part) => $part !== ''));
     $new = array_values(array_filter($items, fn($item) => $item['type'] === 'new'));
     if ($new) {
-        $first = $new[0]['trip'];
-        $messages[] = count($new) > 1
-            ? ['title' => 'رحلة مجمّعة جديدة · ' . count($new) . ' ضيوف', 'body' => $join(...array_map(fn($item) => "{$item['trip']['time']} {$item['trip']['name']}", $new)), 'tag' => 'trip-new']
-            : ['title' => $join('رحلة جديدة', $first['time']), 'body' => $join($first['name'], $first['route']), 'tag' => 'trip-new'];
+        $trips = array_map(fn($item) => push_trip_parts($pdo, $item['trip'], $lang), $new);
+        $messages[] = count($trips) > 1
+            ? ['title' => sprintf($text['group'], count($trips)), 'body' => $join(...array_map(fn($trip) => "{$trip['time']} {$trip['name']}", $trips)), 'tag' => 'trip-new']
+            : ['title' => $join($text['new'], $trips[0]['time']), 'body' => $join($trips[0]['name'], $trips[0]['route']), 'tag' => 'trip-new'];
     }
     foreach ($items as $item) {
-        $trip = $item['trip'];
+        if ($item['type'] === 'new') continue;
+        $trip = push_trip_parts($pdo, $item['trip'], $lang);
         if ($item['type'] === 'cancel') {
-            $messages[] = ['title' => 'أُلغيت رحلة', 'body' => $join($trip['name'], $trip['time'], $trip['route']), 'tag' => 'trip-cancel'];
+            $messages[] = ['title' => $text['cancel'], 'body' => $join($trip['name'], $trip['time'], $trip['route']), 'tag' => 'trip-cancel'];
         } elseif ($item['type'] === 'denied-arrival') {
-            $messages[] = ['title' => 'لم يؤكد مشرف المبنى وصولك', 'body' => "رحلة {$trip['name']}: تأكد من مكان الاستلام وتواصل مع مشرف السيارات", 'tag' => 'trip-denied'];
+            $messages[] = ['title' => $text['deniedArrival'], 'body' => sprintf($text['deniedArrivalBody'], $trip['name']), 'tag' => 'trip-denied'];
         } elseif ($item['type'] === 'denied-pickup') {
-            $messages[] = ['title' => 'لم يؤكد مشرف المبنى استلام الضيف', 'body' => "رحلة {$trip['name']}: تواصل مع مشرف السيارات", 'tag' => 'trip-denied'];
+            $messages[] = ['title' => $text['deniedPickup'], 'body' => sprintf($text['deniedPickupBody'], $trip['name']), 'tag' => 'trip-denied'];
         }
     }
-    return $messages;
+    return array_map(fn($message) => $message + ['lang' => $lang, 'dir' => $text['dir']], $messages);
 }
 
 /** يرسل الإشعارات المنتظرة إلى هواتف سائقي كل سيارة، ويحذف الاشتراكات المنتهية. */
@@ -204,13 +251,17 @@ function flush_pushes(PDO $pdo): void
     $host = preg_replace('/[^A-Za-z0-9.:-]/', '', (string)($_SERVER['HTTP_HOST'] ?? 'localhost'));
     $jobs = [];
     foreach ($byPlate as $plate => $items) {
-        $stmt = $pdo->prepare("SELECT s.id, s.endpoint, s.p256dh, s.auth FROM push_subscriptions s JOIN users u ON u.id = s.user_id
+        $stmt = $pdo->prepare("SELECT s.id, s.endpoint, s.p256dh, s.auth, s.lang FROM push_subscriptions s JOIN users u ON u.id = s.user_id
             WHERE u.role = 'driver' AND u.active = 1 AND u.vehicle_plate = ?");
         $stmt->execute([(string)$plate]);
-        $subscriptions = $stmt->fetchAll();
-        foreach (push_messages($items) as $message) {
-            $payload = json_encode($message + ['url' => '/'], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-            foreach ($subscriptions as $subscription) $jobs[] = [$subscription, $payload];
+        // كل هاتف بلغة سائقه
+        $messages = [];
+        foreach ($stmt->fetchAll() as $subscription) {
+            $lang = isset(PUSH_TEXT[$subscription['lang']]) ? $subscription['lang'] : 'ar';
+            $messages[$lang] ??= push_messages($pdo, $items, $lang);
+            foreach ($messages[$lang] as $message) {
+                $jobs[] = [$subscription, json_encode($message + ['url' => '/'], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)];
+            }
         }
     }
     if (!$jobs) return;
@@ -277,12 +328,14 @@ function route_push_subscribe(PDO $pdo, array $body): array
     if (!valid_push_endpoint($endpoint) || strlen($point) !== 65 || $point[0] !== "\x04" || strlen(b64url_decode($auth)) !== 16) {
         throw new ApiException(400, 'تعذر تفعيل الإشعارات على هذا الهاتف', 'invalid');
     }
+    // لغة الإشعارات: لغة تطبيق السائق
+    $lang = isset(PUSH_TEXT[$body['lang'] ?? '']) ? (string)$body['lang'] : 'ar';
     $id = hash('sha256', $endpoint);
     $stmt = $pdo->prepare('SELECT user_id FROM push_subscriptions WHERE id = ?');
     $stmt->execute([$id]);
     $owner = $stmt->fetchColumn();
-    $pdo->prepare('REPLACE INTO push_subscriptions (id, user_id, endpoint, p256dh, auth, created_at) VALUES (?, ?, ?, ?, ?, ?)')
-        ->execute([$id, $user['id'], $endpoint, $p256dh, $auth, now_iso()]);
+    $pdo->prepare('REPLACE INTO push_subscriptions (id, user_id, endpoint, p256dh, auth, lang, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+        ->execute([$id, $user['id'], $endpoint, $p256dh, $auth, $lang, now_iso()]);
     if ((string)$owner !== (string)$user['id']) {
         log_activity($pdo, $user, 'location', 'push.subscribe', 'تفعيل إشعارات الرحلات على هاتف السائق' . ($user['vehicle_plate'] ? " (السيارة {$user['vehicle_plate']})" : ''), (string)($user['vehicle_plate'] ?? ''));
     }
