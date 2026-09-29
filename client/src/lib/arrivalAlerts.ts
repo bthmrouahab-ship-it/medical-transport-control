@@ -35,7 +35,17 @@ export function deviceNotificationsOn() {
 }
 
 /**
+ * وصول أقدم من هذا حين تعرفه الصفحة (كانت مغلقة أو مجمّدة في الخلفية ثم عادت): يُذكر في رسالة واحدة
+ * بوقت كل سيارة، لا كأنه وصل الآن.
+ */
+export const STALE_ARRIVAL_MINUTES = 5;
+
+const clock = (date: Date) => `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+const carsText = (count: number) => (count === 1 ? "سيارة واحدة" : count === 2 ? "سيارتان" : count <= 10 ? `${count} سيارات` : `${count} سيارة`);
+
+/**
  * رسالة لمشرف السيارات عند وصول سيارة إلى وجهتها: في الصفحة دائمًا، وعلى الجهاز إن فعّله والصفحة في الخلفية.
+ * العنوان يذكر وقت الوصول نفسه، لأن رسالة الصفحة تبقى معلّقة حتى يعود المشرف إليها (sonner يوقفها والصفحة مخفية).
  * الوصولات الموجودة عند أول فتح للصفحة لا تظهر لها رسالة (تظهر في قائمة الوصول فقط).
  */
 export function useArrivalAlerts({ arrivals, appointments, hospitals, driverOf, enabled = true }: {
@@ -65,16 +75,20 @@ export function useArrivalAlerts({ arrivals, appointments, hospitals, driverOf, 
     writeSeen(seen.current);
 
     const { appointments, hospitals, driverOf } = latest.current;
+    const now = Date.now();
+    const stale = fresh.filter((item) => now - item.at.getTime() > STALE_ARRIVAL_MINUTES * 60000);
+    const recent = fresh.filter((item) => !stale.includes(item));
     const byPlate = new Map<string, Arrival[]>();
-    for (const item of fresh) byPlate.set(item.request.vehiclePlate ?? "", [...(byPlate.get(item.request.vehiclePlate ?? "") ?? []), item]);
+    for (const item of recent) byPlate.set(item.request.vehiclePlate ?? "", [...(byPlate.get(item.request.vehiclePlate ?? "") ?? []), item]);
     for (const [plate, items] of Array.from(byPlate)) {
       const source = items[0].source;
+      const at = clock(items[0].at);
       const destinations = Array.from(new Set(items.map((item) => {
         const appointment = appointments.find((entry) => entry.id === item.request.appointmentId);
         return appointment ? tripEndpoints(appointment, item.request.direction, hospitals).destination : "";
       }).filter(Boolean))).join("، ");
       const driver = driverOf(plate, items[0].request.driver);
-      const title = source === "estimate" ? `انتهت المدة التقديرية لرحلة السيارة ${plate}` : `وصلت السيارة ${plate} إلى وجهتها`;
+      const title = source === "estimate" ? `انتهت المدة التقديرية لرحلة السيارة ${plate} الساعة ${at}` : `وصلت السيارة ${plate} إلى وجهتها الساعة ${at}`;
       // بعد الذهاب تكون السيارة متاحة خارج المجمع (عائدة)، وبعد العودة متاحة داخله
       const place = items.some((item) => item.request.direction === "ذهاب") ? "السيارة متاحة خارج المجمع (عائدة إليه)" : "السيارة عادت إلى المجمع ومتاحة";
       const body = `${driver ? `السائق ${driver} · ` : ""}${destinations ? `${destinations} · ` : ""}${place}${source === "gps" ? " (GPS)" : source === "estimate" ? " (بلا GPS)" : ""}`;
@@ -82,6 +96,26 @@ export function useArrivalAlerts({ arrivals, appointments, hospitals, driverOf, 
       if (document.hidden && deviceNotificationsOn()) {
         try {
           new Notification(title, { body, icon: "/favicon.svg", tag: `arrival-${plate}` });
+        } catch {
+          /* المتصفح لا يدعم التنبيه هنا */
+        }
+      }
+    }
+
+    // وصولات فاتت الصفحة: رسالة واحدة بوقت كل سيارة (الأحدث أولًا)، وهي كلها في قائمة الوصول
+    if (stale.length) {
+      const latestByPlate = Array.from(new Map(stale.map((item) => [item.request.vehiclePlate ?? "", item] as const).reverse()).values())
+        .sort((a, b) => b.at.getTime() - a.at.getTime());
+      const count = latestByPlate.length;
+      const title = `وصلت ${carsText(count)} إلى ${count === 1 ? "وجهتها" : "وجهاتها"} أثناء غيابك عن الصفحة`;
+      const shown = latestByPlate.slice(0, 5).map((item) => `${item.request.vehiclePlate ?? ""} الساعة ${clock(item.at)}`).join(" · ");
+      const more = count > 5 ? ` · و${count - 5} أخرى` : "";
+      const hint = deviceNotificationsOn() ? "" : " · لتصلك التنبيهات وأنت في صفحة أخرى فعّل زر الجرس في «وصول السيارات اليوم»";
+      const body = `${shown}${more}${hint}`;
+      toast.info(title, { description: body, duration: 20000 });
+      if (document.hidden && deviceNotificationsOn()) {
+        try {
+          new Notification(title, { body, icon: "/favicon.svg", tag: "arrival-missed" });
         } catch {
           /* المتصفح لا يدعم التنبيه هنا */
         }
