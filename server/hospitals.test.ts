@@ -16,6 +16,22 @@ describe("hospital catalog", () => {
     expect(matchHospital("Psychiatric Hospital")?.id).toBe("psychiatric");
     expect(matchHospital("sama medical care")?.id).toBe("sama");
     expect(matchHospital("Medical Care & Research Center")?.id).toBe("mcrc");
+    // مراكز أكتوبر 2026: مركز الوكرة الصحي ليس مستشفى الوكرة
+    expect(matchHospital("مركز الوكرة الصحي")?.id).toBe("wakra-hc");
+    expect(matchHospital("Al Wakra Health Center")?.id).toBe("wakra-hc");
+    expect(matchHospital("مستشفى الوكرة")?.id).toBe("wakra");
+    expect(matchHospital("مركز الشفلح")?.id).toBe("shafallah");
+    expect(matchHospital("IRIS OPTIC")?.id).toBe("iris-optic");
+    expect(matchHospital("روضة الجيوان")?.id).toBe("al-jiwan");
+    expect(matchHospital("The View Hospital")?.id).toBe("the-view");
+    expect(matchHospital("مستشفى الأمان")?.id).toBe("al-aman");
+    expect(matchHospital("Old Airport Health Center")?.id).toBe("old-airport-hc");
+    expect(matchHospital("طوارئ أطفال السد")?.id).toBe("pediatric-sadd");
+    expect(matchHospital("طوارئ أطفال الريان")).toBeNull();
+    expect(matchHospital("Al Ahli Hospital")?.id).toBe("al-ahli");
+    expect(matchHospital("مركز معيذر الصحي")?.id).toBe("muaither-hc");
+    // وجهة الرحلة غير الطبية «أنصار جاليري المطار القديم» ليست المركز الصحي
+    expect(matchHospital("أنصار جاليري المطار القديم")).toBeNull();
   });
 
   it("adds the new centers to a directory already saved, unless the admin added them", () => {
@@ -25,6 +41,9 @@ describe("hospital catalog", () => {
     const ownGardenia = { ...DEFAULT_HOSPITALS.find((hospital) => hospital.id === "gardenia")!, id: "h-own", name: "غاردينيا", nameEn: "Gardenia" };
     expect(syncHospitals([...stored, ownGardenia]).filter((hospital) => hospital.id === "gardenia")).toHaveLength(0);
     expect(syncHospitals(DEFAULT_HOSPITALS)).toHaveLength(DEFAULT_HOSPITALS.length);
+    // مركز الوكرة الصحي يُضاف رغم أن اسمه يطابق «الوكرة» في الدليل المحفوظ
+    const withoutWakraHc = DEFAULT_HOSPITALS.filter((hospital) => hospital.id !== "wakra-hc");
+    expect(syncHospitals(withoutWakraHc).some((hospital) => hospital.id === "wakra-hc")).toBe(true);
   });
 
   it("finds hospitals on the same campus", () => {
