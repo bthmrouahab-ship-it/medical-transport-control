@@ -174,6 +174,7 @@ function push_trip_text(PDO $pdo, array $request): array
         'appointment' => appointment_doc($pdo, (string)($request['appointmentId'] ?? '')) ?? [],
         'from' => empty($request['fromAppointmentId']) ? null : appointment_doc($pdo, (string)$request['fromAppointmentId']),
         'returning' => ($request['direction'] ?? '') === 'عودة',
+        'nurse' => !empty($request['nurseOnly']),
     ];
 }
 
@@ -185,7 +186,10 @@ function push_trip_parts(PDO $pdo, array $trip, string $lang): array
     $place = place_name($pdo, $appointment, $lang);
     $route = $trip['from'] ? place_name($pdo, $trip['from'], $lang) . " ← $place" : ($trip['returning'] ? "$place ← $home" : "$home ← $place");
     if ($lang === 'en') $route = str_replace('←', '→', $route);
-    return ['name' => trim((string)($appointment['patientName'] ?? '')), 'time' => (string)($appointment['appointmentAt'] ?? ''), 'route' => $route];
+    // عودة الـ Nurse فقط: الراكب الـ Nurse مرافقة الضيف
+    $name = trim((string)($appointment['patientName'] ?? ''));
+    if (!empty($trip['nurse'])) $name = "Nurse · $name";
+    return ['name' => $name, 'time' => (string)($appointment['appointmentAt'] ?? ''), 'route' => $route];
 }
 
 /** إشعارات السائق الناتجة عن عملية كتابة واحدة على طلب (تُرسل بعد الحفظ). */

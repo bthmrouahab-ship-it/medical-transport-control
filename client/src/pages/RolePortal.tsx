@@ -8,6 +8,7 @@ import {
   localDateString,
   migrateAppointment,
   migrateRequest,
+  requestPersons,
   statusText,
   whatsappLink,
   type ClinicAppointment,
@@ -324,13 +325,14 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
     // ما سجّله السائق وينتظر الرد يُعتبر مؤكدًا من المشرف الذي تقدّم بالحالة بنفسه
     const confirmed = request ? confirmPendingChecks(request, session.name) : {};
     updateRequests(requests.map((item) => item.id === requestId ? { ...item, status, ...pickup, ...confirmed } : item));
-    if (request && status === "تم استلام المريض") {
+    // عودة الـ Nurse فقط لا تغيّر حالة موعد الضيف (يبقى في موعده)
+    if (request && status === "تم استلام المريض" && !request.nurseOnly) {
       // الموعد الأول في النقل ينتهي عند استلام الضيف منه
       updateAppointments(appointments.map((appointment) => appointment.id === request.appointmentId
         ? { ...appointment, status: request.direction === "عودة" ? "مكتملة" : "تم استلام المريض" }
         : appointment.id === request.fromAppointmentId ? { ...appointment, status: "مكتملة" } : appointment));
     }
-    toast.success(status === "وصلت السيارة" ? "تم تسجيل وصول السيارة" : "تم تأكيد استلام الضيف", {
+    toast.success(status === "وصلت السيارة" ? "تم تسجيل وصول السيارة" : request?.nurseOnly ? "تم تأكيد استلام الـ Nurse" : "تم تأكيد استلام الضيف", {
       description: "etaAt" in pickup && pickup.etaAt ? `الوصول المتوقع إلى الوجهة ${timeLabel(new Date(pickup.etaAt))}` : undefined,
     });
   }
@@ -347,7 +349,7 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
       unset.forEach((field) => delete next[field]);
       return next;
     }));
-    if (reply === "denied" && kind === "pickup") {
+    if (reply === "denied" && kind === "pickup" && !request.nurseOnly) {
       updateAppointments(appointments.map((appointment) => appointment.id === request.appointmentId
         ? { ...appointment, status: request.direction === "عودة" ? "طلب عودة" : "تم طلب السيارة" }
         : appointment.id === request.fromAppointmentId ? { ...appointment, status: "تم استلام المريض" } : appointment));
@@ -376,7 +378,8 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
       ? { ...request, status: "وصلت الوجهة" as const, arrivedAt, arrivalSource: "manual" as const }
       : request));
     const next = new Map<string, ClinicAppointment["status"]>();
-    for (const request of ended) {
+    // عودة الـ Nurse فقط لا تغيّر حالة موعد الضيف
+    for (const request of ended.filter((item) => !item.nurseOnly)) {
       next.set(request.appointmentId, request.direction === "عودة" ? "مكتملة" : "تم استلام المريض");
       if (request.fromAppointmentId) next.set(request.fromAppointmentId, "مكتملة");
     }
@@ -440,11 +443,15 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
       const allIds = [...requestIds, ...joinRequestIds];
       const trips = next
         .filter((request) => allIds.includes(request.id))
-        .map((request) => ({
-          request,
-          appointment: appointments.find((item) => item.id === request.appointmentId)!,
-          from: request.fromAppointmentId ? appointments.find((item) => item.id === request.fromAppointmentId) ?? null : null,
-        }))
+        .map((request) => {
+          const appointment = appointments.find((item) => item.id === request.appointmentId)!;
+          return {
+            request,
+            appointment,
+            from: request.fromAppointmentId ? appointments.find((item) => item.id === request.fromAppointmentId) ?? null : null,
+            persons: appointment ? requestPersons(request, appointment, next) : 1,
+          };
+        })
         .filter((trip) => trip.appointment);
       return { vehicle, count: allIds.length, message: buildDriverMessage(trips, vehicle, hospitals) };
     });
@@ -515,12 +522,28 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
             onCheckReply={replyToDriverCheck}
             onCancel={(appointment, request) => {
               updateRequests(requests.filter((item) => item.id !== request.id));
-              updateAppointments(appointments.map((item) => item.id === appointment.id
-                ? { ...item, status: request.direction === "عودة" ? "تم استلام المريض" : "بانتظار طلب السيارة" }
-                : item));
+              // إلغاء عودة الـ Nurse فقط لا يغيّر موعد الضيف
+              if (!request.nurseOnly) {
+                updateAppointments(appointments.map((item) => item.id === appointment.id
+                  ? { ...item, status: request.direction === "عودة" ? "تم استلام المريض" : "بانتظار طلب السيارة" }
+                  : item));
+              }
               toast.success("تم إلغاء طلب السيارة");
             }}
             onReturn={(appointment, request) => {
+              // الـ Nurse طُلبت عودتها وحدها ولم تُستلم بعد: تعود مع الضيف في نفس الطلب (والسيارة إن أُرسلت)
+              const nurseTrip = requests.find((item) => item.nurseOnly && item.appointmentId === appointment.id
+                && (item.status === "بانتظار التوزيع" || item.status === "تم إرسال السيارة" || item.status === "وصلت السيارة"));
+              if (nurseTrip) {
+                updateRequests(requests.map((item) => {
+                  if (item.id !== nurseTrip.id) return item;
+                  const { nurseOnly: _nurseOnly, ...rest } = item;
+                  return rest;
+                }));
+                updateAppointments(appointments.map((item) => item.id === appointment.id ? { ...item, status: "طلب عودة" } : item));
+                toast.success("الضيف يعود مع الـ Nurse في نفس الطلب", { description: nurseTrip.vehiclePlate ? `السيارة ${nurseTrip.vehiclePlate} في طريقها` : undefined });
+                return;
+              }
               const returnRequest: VehicleRequest = {
                 id: `REQ-${Date.now()}`,
                 appointmentId: appointment.id,
@@ -533,6 +556,28 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
               updateRequests([...requests, returnRequest]);
               updateAppointments(appointments.map((item) => item.id === appointment.id ? { ...item, status: "طلب عودة" } : item));
               toast.success("تم إرسال طلب العودة");
+            }}
+            onNurseReturn={(appointment, request) => {
+              // الـ Nurse تعود وحدها إلى المجمع ويبقى الضيف في موعده (حالة الموعد لا تتغير)
+              const nurseRequest: VehicleRequest = {
+                id: `REQ-${Date.now()}`,
+                appointmentId: appointment.id,
+                direction: "عودة",
+                status: "بانتظار التوزيع",
+                notificationMethod: request.notificationMethod,
+                createdAt: timeLabel(new Date()),
+                requestedBy: session.uid,
+                nurseOnly: true,
+              };
+              updateRequests([...requests, nurseRequest]);
+              toast.success("تم إرسال طلب عودة الـ Nurse فقط", { description: "يبقى الضيف في «ضيوف في الموعد» حتى تُطلب عودته" });
+            }}
+            onSelfReturn={(appointment) => {
+              // الضيف عاد إلى المجمع بنفسه: ينتهي موعده بلا سيارة عودة
+              updateAppointments(appointments.map((item) => item.id === appointment.id
+                ? { ...item, status: "مكتملة" as const, returnedSelf: true, returnedSelfBy: session.name, returnedSelfAt: new Date().toISOString() }
+                : item));
+              toast.success(`سُجّل أن ${appointment.patientName} عاد بنفسه`);
             }}
             onTransfer={(appointment, request, next) => {
               // بدل العودة إلى المجمع: طلب ذهاب للموعد التالي يبدأ من مستشفى هذا الموعد

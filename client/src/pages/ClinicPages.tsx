@@ -274,6 +274,9 @@ function AppointmentCard({ t, appointment, others, now, onEdit, onDelete }: {
               <CalendarPlus className="h-3.5 w-3.5 shrink-0" /> {t.otherSameDay(other.appointmentAt, other.clinic)}
             </p>
           ))}
+          {appointment.returnedSelf && (
+            <p className="mt-2 w-fit rounded-lg bg-emerald-50 px-2.5 py-1.5 text-xs text-emerald-800 ring-1 ring-inset ring-emerald-200">{t.returnedSelf(appointment.returnedSelfBy)}</p>
+          )}
           {appointment.status === "ملغي" && (
             <p className="mt-2 w-fit rounded-lg bg-red-50 px-2.5 py-1.5 text-xs text-red-800 ring-1 ring-inset ring-red-200">
               <span className="font-semibold">{t.cancelReason}:</span> {appointment.cancelReason || "—"}
