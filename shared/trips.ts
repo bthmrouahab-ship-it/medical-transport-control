@@ -1,5 +1,5 @@
 import { DEFAULT_HOSPITALS, ORIGIN, distanceKm, type Hospital } from "./hospitals";
-import { appointmentHospital, localDateString, type ArrivalSource, type ClinicAppointment, type Vehicle, type VehicleRequest } from "./transport";
+import { appointmentDateTime, appointmentHospital, localDateString, type ArrivalSource, type ClinicAppointment, type Vehicle, type VehicleRequest } from "./transport";
 
 /**
  * الرحلة بعد استلام المريض: تقدير مدة الطريق، ومعرفة متى تصل السيارة وتعود متاحة.
@@ -74,6 +74,28 @@ export function tripEndpoints(
 }
 
 const round6 = (value: number) => Math.round(value * 1e6) / 1e6;
+
+/** وقت طلب السيارة (createdAt «HH:MM») في يوم الموعد، أو null لطلب قديم بلا وقت. */
+export function requestedAt(request: Pick<VehicleRequest, "createdAt">, appointment: Pick<ClinicAppointment, "appointmentDate">) {
+  const match = /^(\d{1,2}):(\d{2})$/.exec(request.createdAt ?? "");
+  return match ? appointmentDateTime({ appointmentDate: appointment.appointmentDate, appointmentAt: `${match[1].padStart(2, "0")}:${match[2]}` }) : null;
+}
+
+/**
+ * متى يحتاج الضيف السيارة (لجمع الرحلات بحسب وقت الطلب):
+ * - العودة: وقت طلبها، فالضيف جاهز عند الطلب.
+ * - الذهاب: وقت الانطلاق اللازم للوصول قبل الموعد (مدة الطريق من المجمع)، أو وقت الطلب إن جاء بعده.
+ * فطلبان متأخران في نفس اللحظة لموعدين متباعدين يحتاجان السيارة معًا.
+ */
+export function neededAt(request: VehicleRequest, appointment: ClinicAppointment, hospitals: Hospital[] = DEFAULT_HOSPITALS) {
+  const requested = requestedAt(request, appointment);
+  const appointmentAt = appointmentDateTime(appointment);
+  if (request.direction === "عودة") return requested ?? appointmentAt;
+  const { from, to } = tripEndpoints(appointment, request.direction, hospitals);
+  const travel = from && to ? estimateTravelMinutes(from, to, appointmentAt) : UNKNOWN_TRAVEL_MINUTES;
+  const departure = new Date(appointmentAt.getTime() - travel * 60000);
+  return requested && requested > departure ? requested : departure;
+}
 
 /** ما يُحفظ مع الطلب لحظة استلام المريض: الوقت، والوقت المتوقع للوصول، وإحداثيات الوجهة. */
 export function pickupDetails(

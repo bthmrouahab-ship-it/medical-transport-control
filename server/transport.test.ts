@@ -246,6 +246,22 @@ describe("medical transport rules", () => {
     expect(mixed).toHaveLength(0);
   });
 
+  it("groups two guests to the same hospital 30 minutes apart even from different buildings", () => {
+    // حالة حقيقية: مبنى 26 الساعة 08:30 ومبنى 27 الساعة 09:00، كلاهما إلى المستشفى الكوبي (دخان)
+    const make = (id: string, building: string, time: string): ClinicAppointment => ({ ...appointment, id, buildingNumber: building, appointmentAt: time, clinic: "The Cuban Hospital", hospitalId: "cuban" });
+    const first = make("C1", "26", "08:30");
+    const second = make("C2", "27", "09:00");
+    expect(calculateTripGroupingScore(first, second).score).toBeLessThan(55);
+    expect(buildTripGroups([first, second].map((item) => ({ appointment: item, direction: "ذهاب" as const })))).toEqual([
+      expect.objectContaining({ appointmentIds: ["C1", "C2"], reason: expect.stringContaining("نفس الوجهة") }),
+    ]);
+    // أكثر من 45 دقيقة: لا تُجمع
+    expect(buildTripGroups([first, make("C3", "27", "09:20")].map((item) => ({ appointment: item, direction: "ذهاب" as const })))).toHaveLength(0);
+    // وجهتان بعيدتان من مبنيين مختلفين بعد 30 دقيقة: لا تُجمعان
+    const far = { ...make("C4", "27", "09:00"), clinic: "مستشفى الوكرة", hospitalId: "wakra" };
+    expect(buildTripGroups([first, far].map((item) => ({ appointment: item, direction: "ذهاب" as const })))).toHaveLength(0);
+  });
+
   it("suggests joining a car already on its way to the same destination", () => {
     const sent: VehicleRequest = { ...request, id: "R-SENT", status: "تم إرسال السيارة", vehiclePlate: "943438" };
     const second: ClinicAppointment = { ...appointment, id: "APT-9", appointmentAt: "09:15" };
