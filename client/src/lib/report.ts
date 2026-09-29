@@ -233,7 +233,7 @@ export function reportHtml(report: Report) {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${escapeHtml(report.title)}</title>
 <style>
-  :root { --ink:#0f1f35; --muted:#64748b; --line:#e2e8f0; --page:#eef2f6; --brand:#b3202f; --navy:#0f2742; --bar:#2a78d6; }
+  :root { --ink:#0f1f35; --muted:#64748b; --line:#e2e8f0; --page:#f4f6f9; --brand:#da291c; --navy:#0b2545; --bar:#2a78d6; }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--page); color: var(--ink); font: 14px/1.6 "IBM Plex Sans Arabic", "Segoe UI", Tahoma, sans-serif; }
   header { background: var(--navy); color: #fff; border-top: 4px solid var(--brand); padding: 28px 32px; }

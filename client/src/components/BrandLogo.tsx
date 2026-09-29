@@ -11,7 +11,7 @@ export function Crescent({ className = "h-9 w-9" }: { className?: string }) {
           <circle cx="39" cy="28" r="21" fill="#000" />
         </mask>
       </defs>
-      <circle cx="30" cy="32" r="26" fill="#e30613" mask={`url(#${maskId})`} />
+      <circle cx="30" cy="32" r="26" fill="#da291c" mask={`url(#${maskId})`} />
     </svg>
   );
 }

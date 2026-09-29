@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Accessibility, ArrowLeftRight, Bell, BellOff, CarFront, CheckCircle2, Flag, History, Languages, LocateFixed, Lock, MapPin, Navigation, Pause, Play, RefreshCw, ShieldCheck, SunMedium, Timer, XCircle } from "lucide-react";
+import { Accessibility, ArrowLeftRight, ArrowUp, Bell, BellOff, CarFront, CheckCircle2, Flag, History, LocateFixed, Lock, MapPin, Moon, Navigation, RefreshCw, ShieldCheck, Sun, SunMedium, SunMoon, Timer, XCircle } from "lucide-react";
 import AppHeader from "@/components/AppHeader";
 import GuestContact from "@/components/GuestContact";
-import { Badge, EmptyState, Segmented, Steps, TimeBlock, btn, cx, timeLabel } from "@/components/ui-kit";
+import { Badge, EmptyState, Segmented, Steps, Switch, TimeBlock, btn, cx, timeLabel } from "@/components/ui-kit";
 import { toast } from "sonner";
 import type { UserProfile } from "@shared/users";
 import { DEFAULT_HOSPITALS, distanceKm, type Hospital } from "@shared/hospitals";
@@ -21,6 +21,7 @@ import { api, ApiError } from "@/lib/api";
 import { beep } from "@/lib/beep";
 import { DRIVER_LANGS, DRIVER_TEXT, useDriverLang, type DriverLang, type DriverText } from "@/lib/driverI18n";
 import { disablePush, enablePush, pushState, refreshPush, type PushState } from "@/lib/push";
+import { DRIVER_THEMES, useDriverTheme } from "@/lib/driverTheme";
 import { useNow } from "@/lib/useShared";
 
 /** أقل فترة بين إرسالين، وأقل مسافة تستدعي إرسالًا أسرع. */
@@ -78,6 +79,7 @@ export default function DriverPage({ profile, onLogout, onChangePassword }: {
   const plate = profile.vehiclePlate ?? "";
   const [lang, setLang] = useDriverLang();
   const t = DRIVER_TEXT[lang];
+  const { theme, dark, setTheme } = useDriverTheme();
   // الرسائل التي تظهر لاحقًا (بعد تحديث الرحلات أو إرسال الموقع) بلغة السائق الحالية
   const text = useRef(t);
   text.current = t;
@@ -298,8 +300,8 @@ export default function DriverPage({ profile, onLogout, onChangePassword }: {
     onLogout();
   }
 
-  const tone = status === "sharing" ? "green" : status === "error" ? "red" : status === "starting" ? "blue" : "neutral";
   const statusKey = status === "sharing" ? "sharing" : status === "starting" ? "starting" : status === "error" ? "error" : "idle";
+  const ThemeIcon = theme === "dark" ? Moon : theme === "light" ? Sun : SunMoon;
 
   const activeTrips = (trips?.requests ?? [])
     .filter((request) => request.status in ORDER && tripPhase(request, now, live).kind !== "arrived")
@@ -312,68 +314,55 @@ export default function DriverPage({ profile, onLogout, onChangePassword }: {
     .sort((a, b) => b.appointment!.appointmentAt.localeCompare(a.appointment!.appointmentAt));
 
   return (
-    <div className="min-h-screen bg-page" dir={t.dir} lang={lang}>
+    <div className={cx("min-h-screen bg-page text-ink dark:bg-slate-950 dark:text-slate-100", dark && "driver-dark")} dir={t.dir} lang={lang}>
       <AppHeader
         role={t.role}
         name={profile.displayName}
         labels={{ changePassword: t.changePassword, logout: t.logout, app: t.app }}
         onChangePassword={onChangePassword}
         onLogout={logout}
-      />
+      >
+        {plate && <LocationBar t={t} plate={plate} status={status} statusKey={statusKey} last={last} sharing={sharing} onToggle={(on) => (on ? start() : stop())} />}
+      </AppHeader>
       <main className="mx-auto max-w-md space-y-4 p-4 sm:p-6">
-        <div className="flex items-center justify-between gap-3">
-          <span className="flex items-center gap-1.5 text-sm font-medium text-slate-600"><Languages className="h-4 w-4" /> {t.language}</span>
+        <div className="flex items-center justify-between gap-2">
           <Segmented size="sm" label={t.language} value={lang} onChange={setLang} options={DRIVER_LANGS} />
+          <button
+            type="button"
+            onClick={() => setTheme(DRIVER_THEMES[(DRIVER_THEMES.indexOf(theme) + 1) % DRIVER_THEMES.length])}
+            aria-label={`${t.theme}: ${t.themes[theme]}`}
+            title={`${t.theme}: ${t.themes[theme]}`}
+            className={cx(btn("secondary", "sm"), "rounded-full")}
+          >
+            <ThemeIcon className="h-4 w-4" /> {t.themes[theme]}
+          </button>
         </div>
         {!plate ? (
-          <p className="rounded-2xl bg-amber-50 p-5 text-sm font-medium text-amber-900 ring-1 ring-inset ring-amber-200">{t.noVehicle}</p>
+          <p className="rounded-2xl bg-amber-50 p-5 text-sm font-medium text-amber-900 ring-1 ring-inset ring-amber-200 dark:bg-amber-500/10 dark:text-amber-200 dark:ring-amber-500/30">{t.noVehicle}</p>
         ) : (
           <>
-            <section className="overflow-hidden rounded-3xl bg-white shadow-card ring-1 ring-slate-200/80">
-              <div className="flex items-center justify-between gap-3 bg-navy-900 px-5 py-4 text-white">
-                <div className="flex items-center gap-3">
-                  <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-white/10"><CarFront className="h-5 w-5" /></span>
-                  <div className="leading-tight">
-                    <p className="text-xs text-slate-300">{t.vehicle}</p>
-                    <p className="text-2xl font-semibold tabular" dir="ltr">{plate}</p>
-                  </div>
-                </div>
-                <Badge tone={tone}>{t.badge[statusKey]}</Badge>
-              </div>
-              <div className="p-5">
-                <div className="flex items-center gap-3">
-                  <span className={cx(
-                    "flex h-12 w-12 shrink-0 items-center justify-center rounded-full",
-                    status === "sharing" ? "bg-emerald-50 text-emerald-600" : status === "error" ? "bg-red-50 text-red-600" : "bg-slate-100 text-slate-400",
-                  )}>
-                    {status === "sharing" ? <LocateFixed className="h-6 w-6 animate-pulse" /> : <MapPin className="h-6 w-6" />}
-                  </span>
-                  <div className="min-w-0">
-                    <p className="font-semibold text-ink">{t.title[statusKey]}</p>
-                    <p className="text-xs text-slate-500">{last ? t.lastUpdate(last.at.toLocaleTimeString("en-GB"), last.accuracy) : t.shareHint}</p>
-                  </div>
-                </div>
-                {error && (
-                  <p role="alert" className="mt-4 rounded-xl bg-red-50 p-3 text-start text-sm leading-6 text-red-700 ring-1 ring-inset ring-red-200">
-                    {t[error.key]}{error.state ? ` (${error.state})` : ""}
-                  </p>
-                )}
-                <button onClick={() => (sharing ? stop() : start())} className={cx(btn(sharing ? "dark" : "primary", "lg"), "mt-4 h-14 w-full rounded-2xl text-base")}>
-                  {sharing ? <><Pause className="h-5 w-5" /> {t.stopSharing}</> : <><Play className="h-5 w-5" /> {t.startSharing}</>}
-                </button>
-                <p className="mt-3 flex items-center justify-center gap-1.5 text-xs text-slate-500"><SunMedium className="h-4 w-4" /> {t.keepScreen}</p>
-              </div>
-            </section>
+            {error && (
+              <p role="alert" className="animate-rise rounded-2xl bg-red-50 p-3.5 text-start text-sm leading-6 text-red-700 ring-1 ring-inset ring-red-200 dark:bg-red-500/10 dark:text-red-200 dark:ring-red-500/30">
+                {t[error.key]}{error.state ? ` (${error.state})` : ""}
+              </p>
+            )}
+            {sharing ? (
+              <p className="flex items-center gap-1.5 px-1 text-xs text-slate-500 dark:text-slate-400"><SunMedium className="h-4 w-4 shrink-0" /> {t.keepScreen}</p>
+            ) : !error && (
+              <p className="flex items-start gap-2 rounded-2xl bg-amber-50 px-3.5 py-3 text-sm leading-6 text-amber-900 ring-1 ring-inset ring-amber-200 dark:bg-amber-500/10 dark:text-amber-200 dark:ring-amber-500/30">
+                <ArrowUp className="mt-1 h-4 w-4 shrink-0 animate-bounce motion-reduce:animate-none" /> {t.sharingOffHint}
+              </p>
+            )}
 
             <PushCard t={t} state={push} onEnable={turnOnPush} />
 
             <section aria-label={t.myTrips} className="space-y-3">
               <div className="flex items-center justify-between gap-2 px-1">
-                <h2 className="text-lg font-bold text-ink">{t.myTrips} {activeTrips.length > 0 && <span className="text-sm font-semibold text-slate-500">({activeTrips.length})</span>}</h2>
+                <h2 className="text-lg font-bold text-ink dark:text-white">{t.myTrips} {activeTrips.length > 0 && <span className="text-sm font-semibold text-slate-500 dark:text-slate-400">({activeTrips.length})</span>}</h2>
                 <button type="button" onClick={() => loadTrips()} className={btn("ghost", "sm")}><RefreshCw className="h-4 w-4" /> {t.refresh}</button>
               </div>
-              {loadError !== null && <p role="alert" className="rounded-xl bg-red-50 p-3 text-sm text-red-700 ring-1 ring-inset ring-red-200">{errorText(loadError, t)}</p>}
-              {!trips && loadError === null && <p className="rounded-2xl bg-white p-5 text-center text-sm text-slate-500 ring-1 ring-slate-200/80">{t.loading}</p>}
+              {loadError !== null && <p role="alert" className="rounded-xl bg-red-50 p-3 text-sm text-red-700 ring-1 ring-inset ring-red-200 dark:bg-red-500/10 dark:text-red-200 dark:ring-red-500/30">{errorText(loadError, t)}</p>}
+              {!trips && loadError === null && <p className="rounded-2xl bg-white p-5 text-center text-sm text-slate-500 shadow-card dark:bg-slate-900 dark:text-slate-400">{t.loading}</p>}
               {trips && (activeTrips.length ? activeTrips.map(({ request, appointment }) => (
                 <TripCard
                   key={request.id}
@@ -391,24 +380,24 @@ export default function DriverPage({ profile, onLogout, onChangePassword }: {
                   onAction={(action) => act(request, action)}
                 />
               )) : (
-                <div className="rounded-2xl bg-white ring-1 ring-slate-200/80">
+                <div className="rounded-2xl bg-white shadow-card dark:bg-slate-900 dark:shadow-none dark:ring-1 dark:ring-white/10">
                   <EmptyState icon={CheckCircle2} title={t.noTrips} hint={push === "on" ? t.noTripsHintPush : t.noTripsHint} />
                 </div>
               ))}
             </section>
 
             {finished.length > 0 && (
-              <details className="rounded-2xl bg-white ring-1 ring-slate-200/80">
-                <summary className="flex cursor-pointer items-center gap-2 px-4 py-3 text-sm font-semibold text-slate-700">
+              <details className="rounded-2xl bg-white shadow-card dark:bg-slate-900 dark:shadow-none dark:ring-1 dark:ring-white/10">
+                <summary className="flex cursor-pointer items-center gap-2 px-4 py-3 text-sm font-semibold text-slate-700 dark:text-slate-200">
                   <History className="h-4 w-4 text-slate-400" /> {t.finishedToday(finished.length)}
                 </summary>
-                <ul className="divide-y divide-slate-100 border-t border-slate-100">
+                <ul className="divide-y divide-slate-100 border-t border-slate-100 dark:divide-white/10 dark:border-white/10">
                   {finished.map(({ request, phase, appointment }) => (
                     <li key={request.id} className="flex items-center justify-between gap-3 px-4 py-2.5 text-sm">
                       <span className="min-w-0 truncate">
-                        <span dir="ltr" className="tabular text-slate-500">{appointment!.appointmentAt}</span> · {request.nurseOnly ? t.nurseOf(appointment!.patientName) : appointment!.patientName} · {request.direction === "عودة" ? t.complex : placeName(appointment!, trips!.hospitals, lang)}
+                        <span dir="ltr" className="tabular text-slate-500 dark:text-slate-400">{appointment!.appointmentAt}</span> · {request.nurseOnly ? t.nurseOf(appointment!.patientName) : appointment!.patientName} · {request.direction === "عودة" ? t.complex : placeName(appointment!, trips!.hospitals, lang)}
                       </span>
-                      {phase.kind === "arrived" && phase.at && <span className="shrink-0 text-xs text-emerald-700">{t.arrived} <span dir="ltr" className="tabular">{timeLabel(phase.at)}</span></span>}
+                      {phase.kind === "arrived" && phase.at && <span className="shrink-0 text-xs text-emerald-700 dark:text-emerald-400">{t.arrived} <span dir="ltr" className="tabular">{timeLabel(phase.at)}</span></span>}
                     </li>
                   ))}
                 </ul>
@@ -421,15 +410,64 @@ export default function DriverPage({ profile, onLogout, onChangePassword }: {
   );
 }
 
+/**
+ * حالة مشاركة الموقع داخل الرأس الثابت: رقم السيارة، ونقطة الحالة (تنبض أثناء البث)، وآخر تحديث،
+ * ومفتاح كبير للتشغيل والإيقاف يبقى ظاهرًا مهما نزل السائق في الصفحة.
+ */
+function LocationBar({ t, plate, status, statusKey, last, sharing, onToggle }: {
+  t: DriverText;
+  plate: string;
+  status: Status;
+  statusKey: keyof DriverText["badge"];
+  last: { accuracy: number; at: Date } | null;
+  sharing: boolean;
+  onToggle: (on: boolean) => void;
+}) {
+  const live = status === "sharing";
+  const tone = live
+    ? { strip: "bg-emerald-400/[0.08]", chip: "bg-emerald-400/15 text-emerald-200", dot: "bg-emerald-400" }
+    : status === "error"
+      ? { strip: "bg-red-500/15", chip: "bg-red-400/20 text-red-100", dot: "bg-red-400" }
+      : status === "starting"
+        ? { strip: "bg-sky-400/[0.08]", chip: "bg-sky-400/15 text-sky-100", dot: "bg-sky-400" }
+        : { strip: "bg-amber-400/[0.08]", chip: "bg-amber-400/15 text-amber-100", dot: "bg-amber-400" };
+  return (
+    <div className={cx("border-t border-white/10 transition-colors duration-300", tone.strip)}>
+      <div className="mx-auto flex max-w-md items-center gap-3 px-4 py-2.5 sm:px-6">
+        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white/10">
+          {live ? <LocateFixed className="h-5 w-5 text-emerald-300" /> : <CarFront className="h-5 w-5 text-slate-200" />}
+        </span>
+        <div className="min-w-0 flex-1 leading-tight">
+          <p className="flex items-center gap-2">
+            <span className="sr-only">{t.vehicle}</span>
+            <span dir="ltr" className="text-lg font-semibold tabular">{plate}</span>
+            <span className={cx("inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-semibold", tone.chip)}>
+              <span className="relative flex h-2 w-2" aria-hidden="true">
+                {live && <span className={cx("absolute inset-0 animate-ping rounded-full opacity-70 motion-reduce:hidden", tone.dot)} />}
+                <span className={cx("relative h-2 w-2 rounded-full", tone.dot)} />
+              </span>
+              {t.badge[statusKey]}
+            </span>
+          </p>
+          <p className="mt-1 truncate text-[11px] text-slate-300" aria-live="polite">
+            {live && last ? t.lastUpdate(last.at.toLocaleTimeString("en-GB"), last.accuracy) : t.title[statusKey]}
+          </p>
+        </div>
+        <Switch size="lg" checked={sharing} onChange={onToggle} label={sharing ? t.stopSharing : t.startSharing} />
+      </div>
+    </div>
+  );
+}
+
 /** تفعيل إشعارات الرحلات على هذا الهاتف، أو سبب عدم توفرها. */
 function PushCard({ t, state, onEnable }: { t: DriverText; state: PushState; onEnable: () => void }) {
   if (state === "on") {
-    return <p className="flex items-center gap-1.5 px-1 text-xs font-medium text-emerald-700"><Bell className="h-4 w-4" /> {t.pushOn}</p>;
+    return <p className="flex items-center gap-1.5 px-1 text-xs font-medium text-emerald-700 dark:text-emerald-400"><Bell className="h-4 w-4" /> {t.pushOn}</p>;
   }
   return (
-    <section className={cx("rounded-2xl p-4 ring-1 ring-inset", state === "off" ? "bg-violet-50 ring-violet-200" : "bg-amber-50 ring-amber-200")}>
-      <p className="flex items-center gap-2 font-semibold text-ink">{state === "off" ? <Bell className="h-5 w-5 text-violet-600" /> : <BellOff className="h-5 w-5 text-amber-600" />} {t.pushTitle}</p>
-      <p className="mt-1 text-sm leading-6 text-slate-600">{t.pushText[state]}</p>
+    <section className={cx("rounded-2xl p-4 ring-1 ring-inset", state === "off" ? "bg-violet-50 ring-violet-200 dark:bg-violet-500/10 dark:ring-violet-500/30" : "bg-amber-50 ring-amber-200 dark:bg-amber-500/10 dark:ring-amber-500/30")}>
+      <p className="flex items-center gap-2 font-semibold text-ink dark:text-white">{state === "off" ? <Bell className="h-5 w-5 text-violet-600 dark:text-violet-300" /> : <BellOff className="h-5 w-5 text-amber-600 dark:text-amber-300" />} {t.pushTitle}</p>
+      <p className="mt-1 text-sm leading-6 text-slate-600 dark:text-slate-300">{t.pushText[state]}</p>
       {state === "off" && <button type="button" onClick={onEnable} className={cx(btn("primary"), "mt-3 w-full")}><Bell className="h-4 w-4" /> {t.pushEnable}</button>}
     </section>
   );
@@ -480,15 +518,15 @@ function TripCard({ t, lang, request, appointment, from, hospitals, group, perso
   const status = t.status[request.status as keyof DriverText["status"]] ?? request.status;
 
   return (
-    <article className={cx("overflow-hidden rounded-2xl bg-white shadow-card ring-1", request.status === "تم إرسال السيارة" ? "ring-amber-300" : "ring-blue-200")}>
+    <article className={cx("overflow-hidden rounded-2xl bg-white shadow-card ring-1 dark:bg-slate-900 dark:shadow-none", request.status === "تم إرسال السيارة" ? "ring-amber-300 dark:ring-amber-500/40" : "ring-blue-200 dark:ring-blue-500/40")}>
       <div className={cx("h-1", request.status === "تم إرسال السيارة" ? "bg-amber-400" : "bg-blue-500")} />
       <div className="p-4">
         <div className="flex gap-3">
           <TimeBlock time={appointment.appointmentAt} />
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-1.5">
-              <p className="font-bold text-ink">{request.nurseOnly ? t.nurseOf(appointment.patientName) : appointment.patientName}</p>
-              {appointment.gender && !request.nurseOnly && <span className="text-xs text-slate-500">{t.gender[appointment.gender]}</span>}
+              <p className="font-bold text-ink dark:text-white">{request.nurseOnly ? t.nurseOf(appointment.patientName) : appointment.patientName}</p>
+              {appointment.gender && !request.nurseOnly && <span className="text-xs text-slate-500 dark:text-slate-400">{t.gender[appointment.gender]}</span>}
             </div>
             <div className="mt-1 flex flex-wrap gap-1.5">
               {from ? <Badge tone="cyan" icon={ArrowLeftRight}>{t.transfer}</Badge> : request.nurseOnly ? <Badge tone="amber">{t.nurseOnly}</Badge> : <Badge tone={returning ? "amber" : "neutral"}>{t.direction[request.direction]}</Badge>}
@@ -499,12 +537,12 @@ function TripCard({ t, lang, request, appointment, from, hospitals, group, perso
           </div>
         </div>
 
-        <ol className="mt-3 space-y-2 rounded-xl bg-slate-50 p-3 text-sm">
-          <li className="flex items-start gap-2"><MapPin className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" /><span><span className="text-xs text-slate-500">{t.pickup}: </span><span className="font-medium text-ink">{pickupLabel}</span></span></li>
-          <li className="flex items-start gap-2"><Flag className="mt-0.5 h-4 w-4 shrink-0 text-blue-600" /><span><span className="text-xs text-slate-500">{t.destination}: </span><span className="font-medium text-ink">{dropLabel}</span></span></li>
+        <ol className="mt-3 space-y-2 rounded-xl bg-slate-50 p-3 text-sm dark:bg-white/[0.04]">
+          <li className="flex items-start gap-2"><MapPin className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" /><span><span className="text-xs text-slate-500 dark:text-slate-400">{t.pickup}: </span><span className="font-medium text-ink dark:text-white">{pickupLabel}</span></span></li>
+          <li className="flex items-start gap-2"><Flag className="mt-0.5 h-4 w-4 shrink-0 text-blue-600 dark:text-blue-400" /><span><span className="text-xs text-slate-500 dark:text-slate-400">{t.destination}: </span><span className="font-medium text-ink dark:text-white">{dropLabel}</span></span></li>
         </ol>
-        {assistance && <p className="mt-2 flex items-center gap-1.5 text-sm text-slate-700"><Accessibility className="h-4 w-4 text-slate-500" /> {assistance}{persons > 1 ? ` · ${t.persons(persons)}` : ""}</p>}
-        {appointment.mobile && appointment.mobile !== "-" && <div className="mt-3 text-sm text-slate-600"><GuestContact mobile={appointment.mobile} size="md" labels={{ call: t.call, whatsapp: t.whatsapp }} /></div>}
+        {assistance && <p className="mt-2 flex items-center gap-1.5 text-sm text-slate-700 dark:text-slate-300"><Accessibility className="h-4 w-4 text-slate-500 dark:text-slate-400" /> {assistance}{persons > 1 ? ` · ${t.persons(persons)}` : ""}</p>}
+        {appointment.mobile && appointment.mobile !== "-" && <div className="mt-3 text-sm text-slate-600 dark:text-slate-300"><GuestContact mobile={appointment.mobile} size="md" labels={{ call: t.call, whatsapp: t.whatsapp }} /></div>}
 
         <div className="mt-3"><Steps steps={t.steps} current={step} /></div>
 
@@ -516,9 +554,9 @@ function TripCard({ t, lang, request, appointment, from, hospitals, group, perso
         </div>
 
         {phase.kind === "toDestination" && (
-          <p className="mt-3 flex flex-wrap items-center gap-x-1.5 rounded-lg bg-blue-50 px-3 py-2 text-sm text-blue-900">
+          <p className="mt-3 flex flex-wrap items-center gap-x-1.5 rounded-lg bg-blue-50 px-3 py-2 text-sm text-blue-900 dark:bg-blue-500/15 dark:text-blue-100">
             <Timer className="h-4 w-4 shrink-0" /> {t.eta} <span dir="ltr" className="font-semibold tabular">{timeLabel(phase.etaAt)}</span>
-            <span className="text-xs text-blue-800/80">· {live ? t.etaAuto : t.etaNeedsSharing}</span>
+            <span className="text-xs text-blue-800/80 dark:text-blue-200/80">· {live ? t.etaAuto : t.etaNeedsSharing}</span>
           </p>
         )}
 
@@ -527,7 +565,7 @@ function TripCard({ t, lang, request, appointment, from, hospitals, group, perso
             {checks.map((check) => (
               <li key={check.kind} className={cx(
                 "flex items-start gap-1.5 rounded-lg px-2.5 py-1.5 text-xs",
-                check.state === "denied" ? "bg-red-50 font-semibold text-red-800 ring-1 ring-inset ring-red-200" : check.state === "pending" ? "bg-amber-50 text-amber-900" : "text-slate-500",
+                check.state === "denied" ? "bg-red-50 font-semibold text-red-800 ring-1 ring-inset ring-red-200 dark:bg-red-500/10 dark:text-red-200 dark:ring-red-500/30" : check.state === "pending" ? "bg-amber-50 text-amber-900 dark:bg-amber-500/10 dark:text-amber-200" : "text-slate-500 dark:text-slate-400",
               )}>
                 {check.state === "denied" ? <XCircle className="mt-px h-3.5 w-3.5 shrink-0" /> : check.state === "pending" ? <Timer className="mt-px h-3.5 w-3.5 shrink-0" /> : <ShieldCheck className="mt-px h-3.5 w-3.5 shrink-0" />}
                 <span>
@@ -550,7 +588,7 @@ function TripCard({ t, lang, request, appointment, from, hospitals, group, perso
             {busy ? t.registering : !live ? <><Lock className="h-5 w-5" /> {t.turnOnSharing}</> : <><next.icon className="h-5 w-5" /> {next.label}</>}
           </button>
         )}
-        {!live && next && <p className="mt-1.5 text-center text-xs text-slate-500">{t.statusNow(status)}</p>}
+        {!live && next && <p className="mt-1.5 text-center text-xs text-slate-500 dark:text-slate-400">{t.statusNow(status)}</p>}
       </div>
     </article>
   );

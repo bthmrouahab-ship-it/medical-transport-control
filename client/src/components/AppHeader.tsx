@@ -3,13 +3,15 @@ import { KeyRound, LogOut } from "lucide-react";
 import { Crescent } from "./BrandLogo";
 
 /** رأس موحّد لكل الصفحات: شريط داكن فيه الشعار واسم النظام والدور، ثم أزرار الحساب. */
-export default function AppHeader({ role, name, actions, onChangePassword, onLogout, labels }: {
+export default function AppHeader({ role, name, actions, onChangePassword, onLogout, labels, children }: {
   role: string;
   name?: string;
   actions?: ReactNode;
   onChangePassword?: () => void;
   onLogout?: () => void;
   labels?: { changePassword: string; logout: string; app?: string };
+  /** شريط إضافي داخل الرأس الثابت (مثل حالة موقع السائق) */
+  children?: ReactNode;
 }) {
   const text = {
     changePassword: labels?.changePassword ?? "تغيير كلمة المرور",
@@ -37,6 +39,7 @@ export default function AppHeader({ role, name, actions, onChangePassword, onLog
           {onLogout && <button onClick={onLogout} aria-label={text.logout} title={text.logout} className={iconButton}><LogOut className="h-[18px] w-[18px]" /></button>}
         </div>
       </div>
+      {children}
     </header>
   );
 }

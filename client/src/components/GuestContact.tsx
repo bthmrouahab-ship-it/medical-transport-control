@@ -13,10 +13,10 @@ export default function GuestContact({ mobile, size = "sm", labels = { call: "ا
   return (
     <span className="inline-flex flex-wrap items-center gap-1.5">
       <span dir="ltr" className="tabular">{mobile}</span>
-      <a href={`tel:+${number}`} className={cx(pill, "bg-white text-slate-700 ring-slate-300 hover:bg-slate-50 hover:text-ink")} aria-label={`${labels.call} ${mobile}`}>
+      <a href={`tel:+${number}`} className={cx(pill, "bg-white text-slate-700 ring-slate-300 hover:bg-slate-50 hover:text-ink dark:bg-slate-800 dark:text-slate-100 dark:ring-slate-600 dark:hover:bg-slate-700")} aria-label={`${labels.call} ${mobile}`}>
         <Phone className="h-3.5 w-3.5" /> {labels.call}
       </a>
-      <a href={`https://wa.me/${number}`} target="_blank" rel="noreferrer" className={cx(pill, "bg-emerald-50 text-emerald-700 ring-emerald-200 hover:bg-emerald-100")} aria-label={`${labels.whatsapp} ${mobile}`}>
+      <a href={`https://wa.me/${number}`} target="_blank" rel="noreferrer" className={cx(pill, "bg-emerald-50 text-emerald-700 ring-emerald-200 hover:bg-emerald-100 dark:bg-emerald-500/15 dark:text-emerald-300 dark:ring-emerald-500/30")} aria-label={`${labels.whatsapp} ${mobile}`}>
         <MessageCircle className="h-3.5 w-3.5" /> {labels.whatsapp}
       </a>
     </span>

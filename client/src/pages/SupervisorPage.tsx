@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
-import { Accessibility, AlertTriangle, ArrowLeftRight, Ban, BellRing, Building2, Check, CheckCircle2, ChevronDown, Footprints, Hospital, Link2, MapPin, Ribbon, RotateCcw, ShieldCheck, Smartphone, Stethoscope, Timer, Truck, Users, XCircle } from "lucide-react";
+import { Accessibility, AlertTriangle, ArrowLeftRight, Ban, BellRing, Building2, Check, CheckCircle2, ChevronDown, Clock3, Footprints, Hospital, Link2, MapPin, Ribbon, RotateCcw, ShieldCheck, Smartphone, Stethoscope, Timer, Truck, Users, XCircle } from "lucide-react";
 import {
   CANCEL_REASONS,
   appointmentPickupLabel,
@@ -22,9 +22,10 @@ import {
   tripPersons,
   type ClinicAppointment,
   type UnrequestedMatch,
+  type Vehicle,
   type VehicleRequest,
 } from "@shared/transport";
-import { tripEndpoints, tripPhase, type TripPhase } from "@shared/trips";
+import { LATE_MINUTES, minutesSince, tripEndpoints, tripPhase, type TripPhase } from "@shared/trips";
 import { distanceKm } from "@shared/hospitals";
 import { checkLabel, checkStateText, countdownText, driverCheck, pendingCheck, type CheckKind } from "@shared/driverChecks";
 import GuestContact from "@/components/GuestContact";
@@ -32,10 +33,11 @@ import { beep } from "@/lib/beep";
 import {
   Badge,
   EmptyState,
+  Expandable,
   Modal,
   Panel,
   PageHeader,
-  Stat,
+  StatusBar,
   Steps,
   TimeBlock,
   btn,
@@ -57,6 +59,7 @@ const RETURN_STEPS = ["طُلبت العودة", "أُرسلت", "وصلت ال�
 const NURSE_STEPS = ["طُلبت عودة الـ Nurse", "أُرسلت", "وصلت السيارة", "استُلمت الـ Nurse"];
 /** ضيوف ذهبوا في أيام سابقة ولم تُسجَّل عودتهم: يُنبَّه عنهم هذا العدد من الأيام */
 export const UNRETURNED_DAYS = 7;
+
 
 type Row = { appointment: ClinicAppointment; request?: VehicleRequest };
 type Stage = "request" | "expired" | "progress" | "atAppointment";
@@ -100,13 +103,15 @@ function newRequest(appointment: ClinicAppointment): VehicleRequest {
   };
 }
 
-export function SupervisorHome({ uid, lead = false, appointments, requests, onRequest, onUpdateRequest, onCancel, onReturn, onTransfer, onCancelAppointment, onCheckReply, onNurseReturn, onSelfReturn }: {
+export function SupervisorHome({ uid, lead = false, appointments, requests, vehicles, onRequest, onUpdateRequest, onCancel, onReturn, onTransfer, onCancelAppointment, onCheckReply, onNurseReturn, onSelfReturn }: {
   /** رقم حساب المشرف: يرى متابعة طلباته هو فقط */
   uid: string;
   /** مسؤول مشرفي المباني: يتابع كل الطلبات (يؤكد وصول السيارة واستلام الضيف ويرد على السائق في أي طلب) */
   lead?: boolean;
   appointments: ClinicAppointment[];
   requests: VehicleRequest[];
+  /** السيارات: رقم هاتف سائق السيارة المرسلة للاتصال به */
+  vehicles: Vehicle[];
 } & RequestHandlers) {
   const [buildings, setBuildings] = useState<string[]>(loadBuildings);
   const [cancelling, setCancelling] = useState<Row | null>(null);
@@ -220,6 +225,9 @@ export function SupervisorHome({ uid, lead = false, appointments, requests, onRe
   const progressRows = [...inProgress, ...nurseProgress].sort((a, b) => byAppointmentTime(a.appointment, b.appointment));
 
   const unreturned = pastAtAppointment.filter(inFilter).map((appointment) => ({ appointment, request: latest.get(appointment.id)! }));
+  // تحتاج انتباه المشرف: ما سجّله السائق ينتظر رده، أو تأخرت السيارة عن الوصول إلى الاستلام
+  const attentionRows = progressRows.filter(({ request }) => Boolean(pendingCheck(request, now)) || lateMinutes(request, now) !== null);
+  const jump = (id: string) => document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
   useCheckAlerts(progressRows);
   useUnreturnedAlert(unreturned.length);
 
@@ -231,16 +239,22 @@ export function SupervisorHome({ uid, lead = false, appointments, requests, onRe
         actions={<BuildingFilter all={visible.length + pastAtAppointment.length} counts={buildingCounts} buildings={buildingNumbers} selected={buildings} onChange={chooseBuildings} />}
       />
 
-      <div className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4 lg:gap-4">
-        <Stat icon={BellRing} tone="amber" label="تحتاج طلب سيارة" value={toRequest.length} hint={matchCount ? `${matchCount} لنفس وجهة رحلة قائمة` : `حتى ${REQUEST_GRACE_MINUTES} د بعد الموعد`} />
-        <Stat icon={Truck} tone="blue" label="طلبات جارية" value={progressRows.length} hint="حتى استلام الضيف" />
-        <Stat icon={Hospital} tone="cyan" label="في الموعد" value={atAppointment.length} hint="يمكن طلب العودة" />
-        <Stat icon={CheckCircle2} tone="green" label="مكتملة اليوم" value={completed} />
+      {/* شريط الحالة: عدادات حية ملونة، والضغط ينقل إلى القسم */}
+      <div className="mb-6">
+        <StatusBar
+          label="حالة طلبات اليوم"
+          items={[
+            { key: "request", label: "تحتاج طلب سيارة", value: toRequest.length, tone: "amber", hint: matchCount ? `${matchCount} لنفس وجهة رحلة قائمة` : `حتى ${REQUEST_GRACE_MINUTES} د بعد الموعد`, onClick: () => jump("sup-request") },
+            { key: "progress", label: "طلبات جارية", value: progressRows.length, tone: "blue", hint: "حتى وصول السيارة إلى الوجهة", onClick: () => jump("sup-progress") },
+            { key: "at", label: "ضيوف في الموعد", value: atAppointment.length, tone: "cyan", hint: `${completed} مكتملة اليوم`, onClick: () => jump("sup-at") },
+            { key: "attention", label: "تحتاج انتباهك", value: attentionRows.length + unreturned.length, tone: "red", hint: `${attentionRows.length} تأخر أو تأكيد · ${unreturned.length} لم تُسجَّل عودتهم`, onClick: () => jump(unreturned.length ? "sup-unreturned" : "sup-progress") },
+          ]}
+        />
       </div>
 
       <div className="space-y-6">
         {unreturned.length > 0 && (
-          <Panel tone="red" icon={AlertTriangle} title="لم تُسجَّل عودتهم" count={unreturned.length} description="ذهبوا إلى مواعيد في أيام سابقة ولم تُطلب لهم سيارة عودة ولم يُسجَّل أنهم عادوا بأنفسهم. تأكد من حالة كل ضيف: هل عاد بنفسه؟">
+          <Panel id="sup-unreturned" tone="red" icon={AlertTriangle} title="لم تُسجَّل عودتهم" count={unreturned.length} description="ذهبوا إلى مواعيد في أيام سابقة ولم تُطلب لهم سيارة عودة ولم يُسجَّل أنهم عادوا بأنفسهم. تأكد من حالة كل ضيف: هل عاد بنفسه؟">
             <div className="divide-y divide-slate-100">
               {unreturned.map(({ appointment, request }) => (
                 <AtAppointmentRow
@@ -263,7 +277,7 @@ export function SupervisorHome({ uid, lead = false, appointments, requests, onRe
           </Panel>
         )}
 
-        <Panel tone="amber" icon={BellRing} title="مواعيد تحتاج طلب سيارة" count={toRequest.length} description={`يمكن الطلب حتى ${REQUEST_GRACE_MINUTES} دقيقة بعد وقت الموعد`}>
+        <Panel id="sup-request" tone="amber" icon={BellRing} title="مواعيد تحتاج طلب سيارة" count={toRequest.length} description={`يمكن الطلب حتى ${REQUEST_GRACE_MINUTES} دقيقة بعد وقت الموعد`}>
           {toRequest.length ? (
             <div className="divide-y divide-slate-100">
               {toRequest.map(({ appointment }) => (
@@ -283,7 +297,7 @@ export function SupervisorHome({ uid, lead = false, appointments, requests, onRe
           ) : <EmptyState icon={CheckCircle2} title="لا توجد مواعيد بانتظار طلب سيارة" hint="تظهر هنا مواعيد العيادات لليوم حتى يُطلب لها سيارة" />}
         </Panel>
 
-        <Panel tone="blue" icon={Truck} title="طلبات جارية" count={progressRows.length} description={lead ? "طلبات كل مشرفي المباني حتى وصول السيارة إلى الوجهة" : "طلباتك حتى وصول السيارة إلى الوجهة"}>
+        <Panel id="sup-progress" tone="blue" icon={Truck} title="طلبات جارية" count={progressRows.length} description={lead ? "طلبات كل مشرفي المباني حتى وصول السيارة إلى الوجهة" : "طلباتك حتى وصول السيارة إلى الوجهة"}>
           {progressRows.length ? (
             <div className="divide-y divide-slate-100">
               {progressRows.map(({ appointment, request }) => (
@@ -300,6 +314,8 @@ export function SupervisorHome({ uid, lead = false, appointments, requests, onRe
                   onCheckReply={onCheckReply}
                   onCancel={onCancel}
                   persons={requestPersons(request, appointment, requests)}
+                  driverPhone={vehicles.find((vehicle) => vehicle.plate === request.vehiclePlate)?.phone}
+                  now={now}
                   onCancelAppointment={!request.nurseOnly && canCancelAppointment(appointment, request) ? () => setCancelling({ appointment, request }) : undefined}
                 />
               ))}
@@ -308,7 +324,7 @@ export function SupervisorHome({ uid, lead = false, appointments, requests, onRe
         </Panel>
 
         {atAppointment.length > 0 && (
-          <Panel tone="cyan" icon={Hospital} title="ضيوف في الموعد" count={atAppointment.length} description="وصلوا إلى الوجهة · عند انتهاء الموعد يطلب أي مشرف سيارة العودة أو النقل إلى موعد الضيف التالي، أو يسجّل أنه عاد بنفسه">
+          <Panel id="sup-at" tone="cyan" icon={Hospital} title="ضيوف في الموعد" count={atAppointment.length} description="وصلوا إلى الوجهة · عند انتهاء الموعد يطلب أي مشرف سيارة العودة أو النقل إلى موعد الضيف التالي، أو يسجّل أنه عاد بنفسه">
             <div className="divide-y divide-slate-100">
               {atAppointment.map(({ appointment, request }) => (
                 <AtAppointmentRow
@@ -333,39 +349,44 @@ export function SupervisorHome({ uid, lead = false, appointments, requests, onRe
 
         {expired.length > 0 && (
           <Panel tone="red" icon={XCircle} title="انتهت مهلة الطلب" count={expired.length} description={`مضى أكثر من ${REQUEST_GRACE_MINUTES} دقيقة على الموعد، ويجب أن تعدّل العيادة الموعد أولًا`}>
-            <ul className="divide-y divide-slate-100">
+            <div className="divide-y divide-slate-100">
               {expired.map(({ appointment }) => (
-                <li key={appointment.id} className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:px-5">
-                  <div className="flex min-w-0 flex-1 gap-4">
-                    <TimeBlock time={appointment.appointmentAt} day={dayOf(appointment)} tone="red" />
-                    <div className="min-w-0 flex-1"><AppointmentInfo appointment={appointment} /></div>
-                  </div>
-                  <div className="flex shrink-0 items-center gap-3">
-                    <span className="text-xs font-medium text-red-700">بانتظار تعديل العيادة</span>
-                    {canCancelAppointment(appointment) && <CancelAppointmentButton onClick={() => setCancelling({ appointment })} />}
-                  </div>
-                </li>
+                <Expandable
+                  key={appointment.id}
+                  label={`تفاصيل موعد ${appointment.patientName}`}
+                  summary={<GuestSummary appointment={appointment} day={dayOf(appointment)} timeTone="red" status={<Badge tone="red" icon={Clock3}>بانتظار تعديل العيادة</Badge>} />}
+                >
+                  <GuestDetails appointment={appointment} />
+                  {canCancelAppointment(appointment) && <div className={moreActions}><CancelAppointmentButton onClick={() => setCancelling({ appointment })} /></div>}
+                </Expandable>
               ))}
-            </ul>
+            </div>
           </Panel>
         )}
 
         {cancelled.length > 0 && (
           <Panel icon={Ban} title="مواعيد ملغاة" count={cancelled.length} description="أُلغيت اليوم مع سبب الإلغاء">
-            <ul className="divide-y divide-slate-100">
+            <div className="divide-y divide-slate-100">
               {cancelled.map((appointment) => (
-                <li key={appointment.id} className="flex gap-4 p-4 opacity-90 sm:px-5">
-                  <TimeBlock time={appointment.appointmentAt} day={dayOf(appointment)} />
-                  <div className="min-w-0 flex-1">
-                    <AppointmentInfo appointment={appointment} />
-                    <p className="mt-2 w-fit rounded-lg bg-red-50 px-2.5 py-1.5 text-xs text-red-800 ring-1 ring-inset ring-red-200">
-                      <span className="font-semibold">سبب الإلغاء:</span> {appointment.cancelReason || "—"}
-                      {appointment.cancelledBy && <span className="text-red-700/80"> · {appointment.cancelledBy}{appointment.cancelledAt && !Number.isNaN(Date.parse(appointment.cancelledAt)) ? ` ${timeLabel(new Date(appointment.cancelledAt))}` : ""}</span>}
-                    </p>
-                  </div>
-                </li>
+                <Expandable
+                  key={appointment.id}
+                  label={`تفاصيل موعد ${appointment.patientName} الملغي`}
+                  summary={(
+                    <GuestSummary
+                      appointment={appointment}
+                      day={dayOf(appointment)}
+                      status={<span className="inline-flex min-w-0 items-center gap-1 text-xs text-red-700"><Ban className="h-3.5 w-3.5 shrink-0" /><span className="truncate">{appointment.cancelReason || "ملغي"}</span></span>}
+                    />
+                  )}
+                >
+                  <GuestDetails appointment={appointment} />
+                  <Note tone="red" icon={Ban}>
+                    <span className="font-semibold">سبب الإلغاء:</span> {appointment.cancelReason || "—"}
+                    {appointment.cancelledBy && <span className="text-red-700/80"> · {appointment.cancelledBy}{appointment.cancelledAt && !Number.isNaN(Date.parse(appointment.cancelledAt)) ? ` ${timeLabel(new Date(appointment.cancelledAt))}` : ""}</span>}
+                  </Note>
+                </Expandable>
               ))}
-            </ul>
+            </div>
           </Panel>
         )}
       </div>
@@ -634,28 +655,93 @@ function DriverCheckBox({ request, appointment, from, onReply }: {
   );
 }
 
-/** بيانات الموعد: المريض، ومن أين إلى أين، والهاتف والاحتياجات. */
-/** persons: عدد الأشخاص في الرحلة (الضيف ومرافقه والـ Nurse) */
-function AppointmentInfo({ appointment, request, driver, from, persons }: { appointment: ClinicAppointment; request?: VehicleRequest; driver?: string; from?: ClinicAppointment | null; persons?: number }) {
+/** سطر الإجراءات الثانوية أسفل البطاقة المفتوحة. */
+const moreActions = "mt-4 flex flex-wrap items-center gap-2 border-t border-slate-200/70 pt-3";
+
+/** دقائق تأخر السيارة عن الوصول إلى نقطة الاستلام (LATE_MINUTES أو أكثر منذ إرسالها)، أو null. */
+function lateMinutes(request: VehicleRequest, now: Date) {
+  const minutes = request.status === "تم إرسال السيارة" ? minutesSince(request.notificationSentAt, now) : null;
+  return minutes !== null && minutes >= LATE_MINUTES ? minutes : null;
+}
+
+/** ملاحظة ملونة داخل البطاقة المفتوحة (موعد سابق، رحلة يمكن الجمع معها، سبب الإلغاء). */
+function Note({ tone, icon: IconComponent, children }: { tone: "cyan" | "amber" | "violet" | "red"; icon: typeof MapPin; children: ReactNode }) {
+  const styles = {
+    cyan: "bg-cyan-50 text-cyan-900 ring-cyan-200",
+    amber: "bg-amber-50 text-amber-900 ring-amber-200",
+    violet: "bg-violet-50 text-violet-800 ring-violet-200",
+    red: "bg-red-50 text-red-800 ring-red-200",
+  };
+  return (
+    <p className={cx("mt-3 flex items-start gap-1.5 rounded-xl px-3 py-2 text-xs leading-5 ring-1 ring-inset", styles[tone])}>
+      <IconComponent className="mt-0.5 h-3.5 w-3.5 shrink-0" /><span>{children}</span>
+    </p>
+  );
+}
+
+/**
+ * ملخص البطاقة المطوية: الوقت والضيف والوجهة وأهم العلامات، ثم سطر الحالة.
+ * عناصر span فقط لأنه داخل زر فتح البطاقة (لا روابط ولا أزرار).
+ */
+function GuestSummary({ appointment, request, from, day, timeTone, status }: {
+  appointment: ClinicAppointment;
+  request?: VehicleRequest;
+  /** الموعد الأول في النقل بين موعدين */
+  from?: ClinicAppointment | null;
+  day?: string;
+  timeTone?: "red";
+  /** شارات الحالة تحت الوجهة */
+  status?: ReactNode;
+}) {
   const pickup = from ? from.clinic : appointmentPickupLabel(appointment);
   const returning = request?.direction === "عودة";
+  return (
+    <>
+      <TimeBlock time={appointment.appointmentAt} day={day} tone={timeTone} />
+      <span className="block min-w-0 flex-1">
+        <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+          <span className="font-semibold text-ink">
+            {request?.nurseOnly ? <>الـ Nurse <span className="font-normal text-slate-500">· مرافقة {appointment.patientName}</span></> : appointment.patientName}
+          </span>
+          {request && (from
+            ? <Badge tone="cyan" icon={ArrowLeftRight}>نقل بين موعدين</Badge>
+            : request.nurseOnly ? <Badge tone="amber" icon={Stethoscope}>عودة الـ Nurse فقط</Badge> : <Badge tone={returning ? "amber" : "neutral"}>{request.direction}</Badge>)}
+          {isNonMedical(appointment) && <Badge tone="violet">غير طبية</Badge>}
+          {appointment.kind === "احتياجات خاصة" && <Badge icon={Accessibility}>احتياجات خاصة</Badge>}
+          {appointment.cancer && <Badge tone="red" icon={Ribbon}>أولوية · حالة سرطان</Badge>}
+        </span>
+        <span className="mt-1 flex items-start gap-1.5 text-sm text-slate-600">
+          <MapPin className="mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-400" />
+          <span className="min-w-0">{returning ? appointment.clinic : pickup} ← <span className="font-medium text-slate-800">{returning ? pickup : appointment.clinic}</span></span>
+        </span>
+        {status && <span className="mt-2 flex flex-wrap items-center gap-1.5">{status}</span>}
+      </span>
+    </>
+  );
+}
+
+/** تفاصيل البطاقة المفتوحة: الاتصال بالضيف وواتساب، واحتياجاته وعدد الأشخاص والسيارة. */
+function GuestDetails({ appointment, request, driver, persons }: {
+  appointment: ClinicAppointment;
+  request?: VehicleRequest;
+  driver?: string;
+  /** عدد الأشخاص في الرحلة (الضيف ومرافقه والـ Nurse، أو الـ Nurse وحدها) */
+  persons?: number;
+}) {
   const assistance = appointment.assistance.join("، ");
   const count = persons ?? tripPersons(appointment, request);
   return (
-    <div className="min-w-0">
-      <div className="flex flex-wrap items-center gap-2">
-        <p className="font-semibold text-ink">{request?.nurseOnly ? <>الـ Nurse <span className="font-normal text-slate-500">· مرافقة {appointment.patientName}</span></> : appointment.patientName}</p>
-        {request && (from ? <Badge tone="cyan" icon={ArrowLeftRight}>نقل بين موعدين</Badge> : request.nurseOnly ? <Badge tone="amber" icon={Stethoscope}>عودة الـ Nurse فقط</Badge> : <Badge tone={returning ? "amber" : "neutral"}>{request.direction}</Badge>)}
-        {isNonMedical(appointment) && <Badge tone="violet">غير طبية</Badge>}
-        {appointment.kind === "احتياجات خاصة" && <Badge icon={Accessibility}>احتياجات خاصة</Badge>}
-        {appointment.cancer && <Badge tone="red" icon={Ribbon}>أولوية · حالة سرطان</Badge>}
-        {appointment.gender && <span className="text-xs text-slate-500">{appointment.gender}</span>}
-      </div>
-      <p className="mt-1 text-sm text-slate-600">{returning ? appointment.clinic : pickup} ← {returning ? pickup : appointment.clinic}</p>
-      <p className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
-        {appointment.mobile && <GuestContact mobile={appointment.mobile} />}
+    <div className="space-y-2.5">
+      {appointment.mobile && appointment.mobile !== "-" && (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-sm text-slate-700">
+          <span className="text-xs font-medium text-slate-500">هاتف الضيف</span>
+          <GuestContact mobile={appointment.mobile} size="md" />
+        </div>
+      )}
+      <p className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-500">
+        {appointment.gender && <span>{appointment.gender}</span>}
         {assistance && !request?.nurseOnly && <span className="inline-flex items-center gap-1"><Accessibility className="h-3.5 w-3.5" />{assistance}</span>}
-        {count > 1 && <span className="inline-flex items-center gap-1"><Users className="h-3.5 w-3.5" />{personsText(count)}</span>}
+        <span className="inline-flex items-center gap-1"><Users className="h-3.5 w-3.5" />{personsText(count)}</span>
         {request?.vehiclePlate && (
           <span className="inline-flex items-center gap-1 text-slate-600">
             <Truck className="h-3.5 w-3.5" /><span dir="ltr" className="font-semibold text-ink">{request.vehiclePlate}</span>{driver ? ` · ${driver}` : ""}
@@ -693,45 +779,51 @@ function RequestRow({ appointment, day, match, partner, earlier, now, onRequest,
   }
 
   return (
-    <div className="flex flex-col gap-4 p-4 sm:p-5 lg:flex-row lg:items-center">
-      <div className="flex min-w-0 flex-1 gap-4">
-        <TimeBlock time={appointment.appointmentAt} day={day} />
-        <div className="min-w-0 flex-1">
-          <AppointmentInfo appointment={appointment} />
-          {earlier && (
-            <p className="mt-2 flex w-fit items-start gap-1.5 rounded-lg bg-cyan-50 px-2.5 py-1.5 text-xs text-cyan-900 ring-1 ring-inset ring-cyan-200">
-              <ArrowLeftRight className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-              <span>للضيف موعد سابق اليوم الساعة <span dir="ltr" className="font-semibold tabular">{earlier.appointmentAt}</span> في {earlier.clinic}. عند انتهائه يمكن نقله مباشرة إلى هذا الموعد من «ضيوف في الموعد»، بدل طلب سيارة من المجمع.</span>
-            </p>
-          )}
-          {match ? (
-            <p className="mt-2 flex w-fit items-start gap-1.5 rounded-lg bg-amber-50 px-2.5 py-1.5 text-xs text-amber-900 ring-1 ring-inset ring-amber-200">
-              <BellRing className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-              <span><span className="font-semibold">{match.sameDestination ? "نفس وجهة" : "وجهة مجاورة لـ"} رحلة {match.matchedAppointment.patientName}</span> (مبنى {match.matchedAppointment.buildingNumber}، {match.matchedAppointment.appointmentAt} · {match.matchedRequest.status}). اطلب الآن لتُجمع معها.</span>
-            </p>
-          ) : partner && (
-            <p className="mt-2 flex w-fit items-center gap-1.5 rounded-lg bg-violet-50 px-2.5 py-1.5 text-xs text-violet-800 ring-1 ring-inset ring-violet-200">
-              <Link2 className="h-3.5 w-3.5 shrink-0" /> رحلة مشتركة ممكنة مع {partner.patientName} (مبنى {partner.buildingNumber}، {partner.appointmentAt})
-            </p>
-          )}
-        </div>
-      </div>
-      <div className="flex flex-wrap items-center gap-2 lg:justify-end">
-        <span className={cx("text-xs", deadline.minutesLeft <= 15 ? "font-semibold text-red-600" : "text-slate-500")}>
-          آخر موعد للطلب <span dir="ltr" className="tabular">{timeLabel(deadline.deadline)}</span>
-        </span>
-        <button onClick={requestCar} className={btn("primary")}><BellRing className="h-4 w-4" /> طلب السيارة</button>
-        {canCancelAppointment(appointment) && <CancelAppointmentButton onClick={onCancelAppointment} />}
-      </div>
-    </div>
+    <Expandable
+      label={`تفاصيل موعد ${appointment.patientName}`}
+      summary={(
+        <GuestSummary
+          appointment={appointment}
+          day={day}
+          status={<>
+            <span className={cx("inline-flex items-center gap-1 text-xs", deadline.minutesLeft <= 15 ? "font-semibold text-red-600" : "text-slate-500")}>
+              <Clock3 className="h-3.5 w-3.5" /> آخر موعد للطلب <span dir="ltr" className="tabular">{timeLabel(deadline.deadline)}</span>
+            </span>
+            {match
+              ? <Badge tone="amber" icon={BellRing}>{match.sameDestination ? "نفس وجهة رحلة قائمة" : "وجهة مجاورة لرحلة قائمة"}</Badge>
+              : partner && <Badge tone="violet" icon={Link2}>رحلة مشتركة ممكنة</Badge>}
+            {earlier && <Badge tone="cyan" icon={ArrowLeftRight}>بعد موعد سابق اليوم</Badge>}
+          </>}
+        />
+      )}
+      action={<button onClick={requestCar} className={btn("primary")}><BellRing className="h-4 w-4" /> طلب السيارة</button>}
+    >
+      <GuestDetails appointment={appointment} />
+      {earlier && (
+        <Note tone="cyan" icon={ArrowLeftRight}>
+          للضيف موعد سابق اليوم الساعة <span dir="ltr" className="font-semibold tabular">{earlier.appointmentAt}</span> في {earlier.clinic}. عند انتهائه يمكن نقله مباشرة إلى هذا الموعد من «ضيوف في الموعد»، بدل طلب سيارة من المجمع.
+        </Note>
+      )}
+      {match ? (
+        <Note tone="amber" icon={BellRing}>
+          <span className="font-semibold">{match.sameDestination ? "نفس وجهة" : "وجهة مجاورة لـ"} رحلة {match.matchedAppointment.patientName}</span> (مبنى {match.matchedAppointment.buildingNumber}، {match.matchedAppointment.appointmentAt} · {match.matchedRequest.status}). اطلب الآن لتُجمع معها.
+        </Note>
+      ) : partner && (
+        <Note tone="violet" icon={Link2}>رحلة مشتركة ممكنة مع {partner.patientName} (مبنى {partner.buildingNumber}، {partner.appointmentAt})</Note>
+      )}
+      {canCancelAppointment(appointment) && <div className={moreActions}><CancelAppointmentButton onClick={onCancelAppointment} /></div>}
+    </Expandable>
   );
 }
 
-function ProgressRow({ appointment, request, byOther = false, day, driver, phase, from, persons, onUpdateRequest, onCheckReply, onCancel, onCancelAppointment }: {
+function ProgressRow({ appointment, request, byOther = false, day, driver, phase, from, persons, driverPhone, now, onUpdateRequest, onCheckReply, onCancel, onCancelAppointment }: {
   appointment: ClinicAppointment;
   request: VehicleRequest;
   /** عدد الأشخاص في الرحلة (الضيف ومرافقه والـ Nurse، أو الـ Nurse وحدها) */
   persons?: number;
+  /** هاتف سائق السيارة المرسلة (من قائمة السيارات) */
+  driverPhone?: string;
+  now: Date;
   /** لمسؤول مشرفي المباني: الطلب طلبه مشرف مبنى آخر */
   byOther?: boolean;
   day?: string;
@@ -753,33 +845,71 @@ function ProgressRow({ appointment, request, byOther = false, day, driver, phase
       ? { label: request.nurseOnly ? "تم استلام الـ Nurse" : "تم استلام الضيف", status: "تم استلام المريض" as const }
       : null;
   const canCancel = request.status === "بانتظار التوزيع" || request.status === "تم إرسال السيارة";
+  // عودة الـ Nurse فقط: الراكب هو الـ Nurse
+  const rider = (text: string) => (request.nurseOnly ? text.replace("الضيف", "الـ Nurse") : text);
+  const check = pendingCheck(request, now);
+  const late = lateMinutes(request, now);
+  const status = check
+    ? <Badge tone="amber" icon={Smartphone}>السائق سجّل {rider(checkLabel(check.kind))} · بانتظار ردك</Badge>
+    : phase.kind === "toDestination"
+      ? <Badge tone="blue" icon={Timer}>في الطريق · الوصول المتوقع <span dir="ltr" className="tabular">{timeLabel(phase.etaAt)}</span>{phase.late ? " (متأخرة)" : ""}</Badge>
+      : late !== null
+        ? <Badge tone="red" icon={AlertTriangle}>تأخرت السيارة · {late} د</Badge>
+        : <Badge tone={step === 0 ? "amber" : "blue"}>{step === 0 ? "بانتظار إرسال سيارة" : rider(statusText(request.status))}</Badge>;
   return (
-    <div className="flex flex-col gap-4 p-4 sm:p-5 lg:flex-row lg:items-center">
-      <div className="flex min-w-0 flex-1 gap-4">
-        <TimeBlock time={appointment.appointmentAt} day={day} />
-        <div className="min-w-0 flex-1">
-          <AppointmentInfo appointment={appointment} request={request} driver={driver} from={from} persons={persons} />
-          {byOther && <p className="mt-1.5 flex items-center gap-1 text-xs text-violet-700"><Building2 className="h-3.5 w-3.5" /> طلب مشرف مبنى آخر{request.createdAt ? ` الساعة ${request.createdAt}` : ""}</p>}
-          <div className="mt-2.5"><Steps steps={request.nurseOnly ? NURSE_STEPS : returning ? RETURN_STEPS : OUTBOUND_STEPS} current={step} /></div>
-          {(request.arrivalCheck || request.pickupCheck) && (
-            <DriverCheckBox request={request} appointment={appointment} from={from} onReply={(kind, reply) => onCheckReply(request, kind, reply)} />
-          )}
-          {request.status === "بانتظار التوزيع" && <p className="mt-2 text-xs text-slate-500">بانتظار أن يرسل مشرف السيارات سيارة{from ? ` إلى ${from.clinic}` : ""}</p>}
-          {phase.kind === "toDestination" && (
-            <div className="mt-2">
-              <Badge tone="blue" icon={Timer}>في الطريق إلى الوجهة · الوصول المتوقع <span dir="ltr" className="tabular">{timeLabel(phase.etaAt)}</span>{phase.late ? " (متأخرة)" : ""}</Badge>
-              <p className="mt-1.5 text-xs text-slate-500">يُتاح طلب العودة بعد وصول السيارة إلى الوجهة</p>
-            </div>
-          )}
-        </div>
-      </div>
-      {(next || canCancel || onCancelAppointment) && (
-        <div className="flex flex-wrap items-center gap-2 lg:justify-end">
-          {next && <button onClick={() => onUpdateRequest(request.id, next.status)} className={btn("dark")}><CheckCircle2 className="h-4 w-4" /> {next.label}</button>}
-          {canCancel && <button onClick={() => window.confirm(request.nurseOnly ? "إلغاء طلب عودة الـ Nurse؟ يبقى الضيف في موعده." : "إلغاء طلب السيارة فقط؟ يبقى الموعد ويمكن طلب سيارة له من جديد.") && onCancel(appointment, request)} className={btn("danger")}><XCircle className="h-4 w-4" /> إلغاء طلب السيارة</button>}
+    <Expandable
+      label={`تفاصيل طلب ${request.nurseOnly ? `الـ Nurse مرافقة ${appointment.patientName}` : appointment.patientName}`}
+      attention={Boolean(check) || late !== null}
+      summary={(
+        <GuestSummary
+          appointment={appointment}
+          request={request}
+          from={from}
+          day={day}
+          status={<>
+            {status}
+            {request.vehiclePlate && <span className="inline-flex items-center gap-1 text-xs text-slate-500"><Truck className="h-3.5 w-3.5" /><span dir="ltr" className="font-semibold text-slate-700">{request.vehiclePlate}</span></span>}
+            {byOther && <Badge tone="violet" icon={Building2}>طلب مشرف مبنى آخر</Badge>}
+          </>}
+        />
+      )}
+      action={next && <button onClick={() => onUpdateRequest(request.id, next.status)} className={btn("dark")}><CheckCircle2 className="h-4 w-4" /> {next.label}</button>}
+    >
+      <GuestDetails appointment={appointment} request={request} driver={driver} persons={persons} />
+      {byOther && request.createdAt && <p className="mt-2 flex items-center gap-1 text-xs text-violet-700"><Building2 className="h-3.5 w-3.5" /> طلبه مشرف مبنى آخر الساعة {request.createdAt}</p>}
+      <div className="mt-3"><Steps steps={request.nurseOnly ? NURSE_STEPS : returning ? RETURN_STEPS : OUTBOUND_STEPS} current={step} /></div>
+      {(request.arrivalCheck || request.pickupCheck) && (
+        <DriverCheckBox request={request} appointment={appointment} from={from} onReply={(kind, reply) => onCheckReply(request, kind, reply)} />
+      )}
+      {request.status === "بانتظار التوزيع" && <p className="mt-2 text-xs text-slate-500">بانتظار أن يرسل مشرف السيارات سيارة{from ? ` إلى ${from.clinic}` : ""}</p>}
+      {driverPhone && (request.status === "تم إرسال السيارة" || request.status === "وصلت السيارة") && (
+        <DriverCall request={request} driver={driver} phone={driverPhone} now={now} />
+      )}
+      {phase.kind === "toDestination" && <p className="mt-2 text-xs text-slate-500">يُتاح طلب العودة بعد وصول السيارة إلى الوجهة</p>}
+      {(canCancel || onCancelAppointment) && (
+        <div className={moreActions}>
+          {canCancel && <button onClick={() => window.confirm(request.nurseOnly ? "إلغاء طلب عودة الـ Nurse؟ يبقى الضيف في موعده." : "إلغاء طلب السيارة فقط؟ يبقى الموعد ويمكن طلب سيارة له من جديد.") && onCancel(appointment, request)} className={btn("danger", "sm")}><XCircle className="h-4 w-4" /> إلغاء طلب السيارة</button>}
           {onCancelAppointment && <CancelAppointmentButton onClick={onCancelAppointment} />}
         </div>
       )}
+    </Expandable>
+  );
+}
+
+/**
+ * الاتصال بسائق السيارة المرسلة (وواتساب)، مع تنبيه إن تأخرت السيارة عن الوصول إلى الاستلام
+ * LATE_MINUTES أو أكثر منذ إرسالها.
+ */
+function DriverCall({ request, driver, phone, now }: { request: VehicleRequest; driver: string; phone: string; now: Date }) {
+  const minutes = request.status === "تم إرسال السيارة" ? minutesSince(request.notificationSentAt, now) : null;
+  const late = minutes !== null && minutes >= LATE_MINUTES;
+  return (
+    <div className={cx("mt-3 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl px-3 py-2.5 text-xs", late ? "bg-amber-50 text-amber-900 ring-1 ring-inset ring-amber-300" : "bg-white text-slate-600 ring-1 ring-inset ring-slate-200/80")}>
+      <span className={cx("inline-flex items-center gap-1", late && "font-semibold")}>
+        {late ? <AlertTriangle className="h-3.5 w-3.5 shrink-0" /> : <Truck className="h-3.5 w-3.5 shrink-0" />}
+        {late ? `تأخرت السيارة: مضت ${minutes} دقيقة على إرسالها ولم تصل` : `السائق${driver ? ` ${driver}` : ""}${minutes !== null ? ` · أُرسلت منذ ${minutes} د` : ""}`}
+      </span>
+      <GuestContact mobile={phone} size="md" labels={{ call: "اتصال بالسائق", whatsapp: "واتساب" }} />
     </div>
   );
 }
@@ -812,37 +942,59 @@ function AtAppointmentRow({ appointment, request, day, driver, phase, next, nurs
 }) {
   // الـ Nurse بانتظار سيارتها: طلب عودة الضيف يضمه إلى نفس الطلب
   const nurseWaiting = Boolean(nurseTrip && BEFORE_PICKUP.includes(nurseTrip.status));
+  const returnButton = (
+    <button key="return" onClick={() => onReturn(appointment, request)} className={btn(overdue || next ? "secondary" : "soft")}>
+      <RotateCcw className="h-4 w-4" /> {nurseWaiting ? "عودة الضيف مع الـ Nurse" : next ? "العودة إلى المجمع" : "طلب العودة"}
+    </button>
+  );
+  const selfButton = (
+    <button
+      key="self"
+      onClick={() => window.confirm(`تأكيد أن ${appointment.patientName} عاد إلى المجمع بنفسه؟ ينتهي موعده بلا سيارة عودة.`) && onSelfReturn(appointment)}
+      className={cx(btn(overdue ? "success" : "ghost"), !overdue && "text-emerald-700 hover:bg-emerald-50")}
+    >
+      <Footprints className="h-4 w-4" /> عاد بنفسه
+    </button>
+  );
+  // الإجراء الرئيسي ظاهر في البطاقة المطوية: النقل إلى الموعد التالي، أو «عاد بنفسه» لمن لم تُسجَّل عودته، أو طلب العودة
+  const primary = next
+    ? (
+      <button onClick={() => onTransfer(appointment, request, next)} className={btn("primary")}>
+        <ArrowLeftRight className="h-4 w-4" /> إلى الموعد التالي <span dir="ltr" className="tabular">{next.appointmentAt}</span>
+      </button>
+    )
+    : overdue ? selfButton : returnButton;
   return (
-    <div className="flex flex-col gap-4 p-4 sm:p-5 lg:flex-row lg:items-center">
-      <div className="flex min-w-0 flex-1 gap-4">
-        <TimeBlock time={appointment.appointmentAt} day={day} tone={overdue ? "red" : undefined} />
-        <div className="min-w-0 flex-1">
-          <AppointmentInfo appointment={appointment} request={request} driver={driver} persons={persons} />
-          <div className="mt-2 flex flex-wrap gap-2">
+    <Expandable
+      label={`تفاصيل ${appointment.patientName} في الموعد`}
+      summary={(
+        <GuestSummary
+          appointment={appointment}
+          request={request}
+          day={day}
+          timeTone={overdue ? "red" : undefined}
+          status={<>
             {phase.kind === "toDestination"
               ? <Badge tone="blue" icon={Timer}>في الطريق · الوصول المتوقع <span dir="ltr" className="tabular">{timeLabel(phase.etaAt)}</span></Badge>
               : phase.kind === "arrived" && phase.at
                 ? <Badge tone={overdue ? "red" : "green"} icon={overdue ? AlertTriangle : CheckCircle2}>وصل إلى الوجهة{overdue ? ` ${formatDay(localDateString(phase.at), new Date())}` : ""} <span dir="ltr" className="tabular">{timeLabel(phase.at)}</span></Badge>
                 : <Badge tone="cyan" icon={CheckCircle2}>تم استلام الضيف</Badge>}
             {nurseTrip && <Badge tone={nurseWaiting ? "amber" : "green"} icon={Stethoscope}>{nurseTripText(nurseTrip)}</Badge>}
-          </div>
-          {overdue && <p className="mt-2 text-xs font-medium text-red-700">لم تُطلب له سيارة عودة ولم يُسجَّل أنه عاد بنفسه. تأكد من حالته.</p>}
-          {next && (
-            <p className="mt-2 flex w-fit items-center gap-1.5 rounded-lg bg-cyan-50 px-2.5 py-1.5 text-xs text-cyan-900 ring-1 ring-inset ring-cyan-200">
-              <ArrowLeftRight className="h-3.5 w-3.5 shrink-0" /> للضيف موعد آخر اليوم الساعة <span dir="ltr" className="font-semibold tabular">{next.appointmentAt}</span> في {next.clinic}
-            </p>
-          )}
-        </div>
-      </div>
-      <div className="flex flex-wrap items-center gap-2 lg:justify-end">
-        {next && (
-          <button onClick={() => onTransfer(appointment, request, next)} className={btn("primary")}>
-            <ArrowLeftRight className="h-4 w-4" /> إلى الموعد التالي <span dir="ltr" className="tabular">{next.appointmentAt}</span>
-          </button>
-        )}
-        <button onClick={() => onReturn(appointment, request)} className={btn("soft")}>
-          <RotateCcw className="h-4 w-4" /> {nurseWaiting ? "عودة الضيف مع الـ Nurse" : next ? "العودة إلى المجمع" : "طلب العودة"}
-        </button>
+            {next && <Badge tone="cyan" icon={ArrowLeftRight}>موعد آخر <span dir="ltr" className="tabular">{next.appointmentAt}</span></Badge>}
+          </>}
+        />
+      )}
+      action={primary}
+    >
+      <GuestDetails appointment={appointment} request={request} driver={driver} persons={persons} />
+      {overdue && <Note tone="red" icon={AlertTriangle}>لم تُطلب له سيارة عودة ولم يُسجَّل أنه عاد بنفسه. تأكد من حالته.</Note>}
+      {next && (
+        <Note tone="cyan" icon={ArrowLeftRight}>
+          للضيف موعد آخر اليوم الساعة <span dir="ltr" className="font-semibold tabular">{next.appointmentAt}</span> في {next.clinic}
+        </Note>
+      )}
+      <div className={moreActions}>
+        {(next || overdue) && returnButton}
         {hasNurse(appointment) && !nurseTrip && (
           <button
             onClick={() => window.confirm(`طلب سيارة لعودة الـ Nurse وحدها إلى المجمع؟ يبقى ${appointment.patientName} في موعده، وتُطلب عودته لاحقًا.`) && onNurseReturn(appointment, request)}
@@ -851,13 +1003,8 @@ function AtAppointmentRow({ appointment, request, day, driver, phase, next, nurs
             <Stethoscope className="h-4 w-4" /> عودة الـ Nurse فقط
           </button>
         )}
-        <button
-          onClick={() => window.confirm(`تأكيد أن ${appointment.patientName} عاد إلى المجمع بنفسه؟ ينتهي موعده بلا سيارة عودة.`) && onSelfReturn(appointment)}
-          className={cx(btn(overdue ? "success" : "ghost"), !overdue && "text-emerald-700 hover:bg-emerald-50")}
-        >
-          <Footprints className="h-4 w-4" /> عاد بنفسه
-        </button>
+        {!overdue && selfButton}
       </div>
-    </div>
+    </Expandable>
   );
 }

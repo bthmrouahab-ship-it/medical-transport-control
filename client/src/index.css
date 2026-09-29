@@ -1,41 +1,61 @@
 @import "tailwindcss";
 
-/* ألوان النظام: أحمر الهلال للأزرار الأساسية، وكحلي للإطار، وخلفية رمادية هادئة تبرز البطاقات البيضاء */
+/*
+ * الوضع الداكن لصفحة السائق فقط (القيادة ليلًا): يُفعَّل بإضافة driver-dark إلى جذر الصفحة حين يكون الهاتف
+ * في الوضع الداكن، فلا تتأثر صفحات الموظفين.
+ */
+@custom-variant dark (&:where(.driver-dark, .driver-dark *));
+
+/*
+ * نظام التصميم: أحمر الهلال الحقيقي (Pantone 485 C) للإجراءات الرئيسية، وكحلي طبي للإطار والعناوين،
+ * وخلفية فاتحة هادئة لساعات العمل الطويلة، وبطاقات بيضاء بلا إطار بظل ناعم.
+ */
 @theme {
   --font-sans: "IBM Plex Sans Arabic", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  --color-page: #eef2f6;
-  --color-ink: #0f1f35;
-  --color-brand-50: #fdf3f4;
-  --color-brand-100: #fbe4e7;
-  --color-brand-200: #f3c1c8;
-  --color-brand-600: #b3202f;
-  --color-brand-700: #951a27;
-  --color-navy-700: #1d3a5f;
-  --color-navy-800: #15304f;
-  --color-navy-900: #0f2742;
-  --shadow-card: 0 1px 2px rgba(15, 31, 53, 0.05), 0 8px 24px -16px rgba(15, 31, 53, 0.18);
+  --color-page: #f4f6f9;
+  --color-ink: #0e1c2f;
+  --color-brand-50: #fef2f1;
+  --color-brand-100: #fde1de;
+  --color-brand-200: #f9c0ba;
+  --color-brand-500: #e5463b;
+  --color-brand-600: #da291c;
+  --color-brand-700: #b71f14;
+  --color-brand-800: #931a12;
+  --color-navy-600: #264b78;
+  --color-navy-700: #1b3a61;
+  --color-navy-800: #122d4f;
+  --color-navy-900: #0b2545;
+  --shadow-card: 0 1px 2px rgba(11, 37, 69, 0.04), 0 6px 20px -8px rgba(11, 37, 69, 0.10);
+  --shadow-raised: 0 2px 4px rgba(11, 37, 69, 0.05), 0 12px 32px -12px rgba(11, 37, 69, 0.18);
+  --shadow-brand: 0 1px 2px rgba(183, 31, 20, 0.25), 0 6px 16px -6px rgba(218, 41, 28, 0.45);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
 * { box-sizing: border-box; }
-html { min-width: 320px; background: #eef2f6; }
+html { min-width: 320px; background: #f4f6f9; }
 body {
   margin: 0;
   min-width: 320px;
-  background: #eef2f6;
-  color: #0f1f35;
+  background: #f4f6f9;
+  color: #0e1c2f;
   font-family: var(--font-sans);
   line-height: 1.6;
   -webkit-font-smoothing: antialiased;
 }
 button, input, select, textarea { font: inherit; }
 button:not(:disabled), [role="button"]:not([aria-disabled="true"]), a[href], select:not(:disabled) { cursor: pointer; }
-button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, summary:focus-visible {
-  outline: 3px solid rgba(37, 99, 235, .45);
-  outline-offset: 2px;
+/* في طبقة base: الحقول ذات الحلقة الخاصة بها (outline-none مع focus:ring) لا تجمع حلقتين */
+@layer base {
+  button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, summary:focus-visible {
+    outline: 3px solid rgba(38, 75, 120, .45);
+    outline-offset: 2px;
+  }
 }
+/* أيقونات Lucide بخط رفيع موحد في كل الصفحات */
+svg.lucide { stroke-width: 1.75; }
 button:active:not(:disabled), a:active { transform: scale(.985); }
 input::placeholder { color: #94a3b8; }
-::selection { background: #fbe4e7; color: #0f1f35; }
+::selection { background: #fde1de; color: #0e1c2f; }
 /* أعمدة الأوقات والأرقام المتراصة */
 .tabular { font-variant-numeric: tabular-nums; }
 /* السيارة على الخريطة: بطاقة باسم السائق ورقم اللوحة، وتحتها نقطة موقعها بلون إشارة GPS */
@@ -74,9 +94,15 @@ input::placeholder { color: #94a3b8; }
 .vehicle-pin__body.is-offline { opacity: .65; }
 .leaflet-container { font-family: var(--font-sans); background: #e5ebf1; }
 .leaflet-tooltip { font-family: var(--font-sans); border-radius: 8px; }
-.leaflet-tooltip.map-label { border: 0; background: #0f2742; color: #fff; font-weight: 600; box-shadow: 0 4px 12px -4px rgba(15, 39, 66, .5); }
-.leaflet-tooltip-top.map-label::before { border-top-color: #0f2742; }
+.leaflet-tooltip.map-label { border: 0; background: #0b2545; color: #fff; font-weight: 600; box-shadow: 0 4px 12px -4px rgba(11, 37, 69, .5); }
+.leaflet-tooltip-top.map-label::before { border-top-color: #0b2545; }
 
 @media (prefers-reduced-motion: no-preference) {
   button, a, input, select { transition: border-color .18s ease, background-color .18s ease, color .18s ease, transform .18s ease, box-shadow .18s ease; }
+  /* ظهور ناعم للبطاقة الموسّعة ولوحات الحوار */
+  .animate-rise { animation: rise .22s ease-out both; }
 }
+@keyframes rise { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+
+/* صفحة السائق في الوضع الداكن: حقول النموذج وشريط التمرير داكنة أيضًا */
+.driver-dark { color-scheme: dark; }
