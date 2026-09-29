@@ -512,6 +512,7 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
             lead={session.role === "buildingLead"}
             appointments={appointments}
             requests={requests}
+            vehicles={fleetVehicles}
             onRequest={(request, appointmentId) => {
               // الطلب باسم المشرف الذي طلبه: هو وحده يتابعه
               updateRequests([...requests, { ...request, requestedBy: session.uid }]);

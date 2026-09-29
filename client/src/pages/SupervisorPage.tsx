@@ -22,6 +22,7 @@ import {
   tripPersons,
   type ClinicAppointment,
   type UnrequestedMatch,
+  type Vehicle,
   type VehicleRequest,
 } from "@shared/transport";
 import { tripEndpoints, tripPhase, type TripPhase } from "@shared/trips";
@@ -57,6 +58,17 @@ const RETURN_STEPS = ["طُلبت العودة", "أُرسلت", "وصلت ال�
 const NURSE_STEPS = ["طُلبت عودة الـ Nurse", "أُرسلت", "وصلت السيارة", "استُلمت الـ Nurse"];
 /** ضيوف ذهبوا في أيام سابقة ولم تُسجَّل عودتهم: يُنبَّه عنهم هذا العدد من الأيام */
 export const UNRETURNED_DAYS = 7;
+/** السيارة المرسلة التي لم تصل إلى الاستلام بعد هذه الدقائق تُعتبر متأخرة (يُقترح الاتصال بالسائق) */
+export const DRIVER_LATE_MINUTES = 15;
+
+/** الدقائق منذ إرسال السيارة (notificationSentAt بصيغة HH:MM اليوم)، أو null إن لم يُعرف. */
+export function minutesSinceDispatch(request: Pick<VehicleRequest, "notificationSentAt">, now: Date) {
+  const match = /^(\d{1,2}):(\d{2})$/.exec(request.notificationSentAt ?? "");
+  if (!match) return null;
+  let minutes = now.getHours() * 60 + now.getMinutes() - (Number(match[1]) * 60 + Number(match[2]));
+  if (minutes < 0) minutes += 24 * 60; // أُرسلت قبل منتصف الليل
+  return minutes <= 12 * 60 ? minutes : null;
+}
 
 type Row = { appointment: ClinicAppointment; request?: VehicleRequest };
 type Stage = "request" | "expired" | "progress" | "atAppointment";
@@ -100,13 +112,15 @@ function newRequest(appointment: ClinicAppointment): VehicleRequest {
   };
 }
 
-export function SupervisorHome({ uid, lead = false, appointments, requests, onRequest, onUpdateRequest, onCancel, onReturn, onTransfer, onCancelAppointment, onCheckReply, onNurseReturn, onSelfReturn }: {
+export function SupervisorHome({ uid, lead = false, appointments, requests, vehicles, onRequest, onUpdateRequest, onCancel, onReturn, onTransfer, onCancelAppointment, onCheckReply, onNurseReturn, onSelfReturn }: {
   /** رقم حساب المشرف: يرى متابعة طلباته هو فقط */
   uid: string;
   /** مسؤول مشرفي المباني: يتابع كل الطلبات (يؤكد وصول السيارة واستلام الضيف ويرد على السائق في أي طلب) */
   lead?: boolean;
   appointments: ClinicAppointment[];
   requests: VehicleRequest[];
+  /** السيارات: رقم هاتف سائق السيارة المرسلة للاتصال به */
+  vehicles: Vehicle[];
 } & RequestHandlers) {
   const [buildings, setBuildings] = useState<string[]>(loadBuildings);
   const [cancelling, setCancelling] = useState<Row | null>(null);
@@ -300,6 +314,8 @@ export function SupervisorHome({ uid, lead = false, appointments, requests, onRe
                   onCheckReply={onCheckReply}
                   onCancel={onCancel}
                   persons={requestPersons(request, appointment, requests)}
+                  driverPhone={vehicles.find((vehicle) => vehicle.plate === request.vehiclePlate)?.phone}
+                  now={now}
                   onCancelAppointment={!request.nurseOnly && canCancelAppointment(appointment, request) ? () => setCancelling({ appointment, request }) : undefined}
                 />
               ))}
@@ -727,11 +743,14 @@ function RequestRow({ appointment, day, match, partner, earlier, now, onRequest,
   );
 }
 
-function ProgressRow({ appointment, request, byOther = false, day, driver, phase, from, persons, onUpdateRequest, onCheckReply, onCancel, onCancelAppointment }: {
+function ProgressRow({ appointment, request, byOther = false, day, driver, phase, from, persons, driverPhone, now, onUpdateRequest, onCheckReply, onCancel, onCancelAppointment }: {
   appointment: ClinicAppointment;
   request: VehicleRequest;
   /** عدد الأشخاص في الرحلة (الضيف ومرافقه والـ Nurse، أو الـ Nurse وحدها) */
   persons?: number;
+  /** هاتف سائق السيارة المرسلة (من قائمة السيارات) */
+  driverPhone?: string;
+  now: Date;
   /** لمسؤول مشرفي المباني: الطلب طلبه مشرف مبنى آخر */
   byOther?: boolean;
   day?: string;
@@ -765,6 +784,9 @@ function ProgressRow({ appointment, request, byOther = false, day, driver, phase
             <DriverCheckBox request={request} appointment={appointment} from={from} onReply={(kind, reply) => onCheckReply(request, kind, reply)} />
           )}
           {request.status === "بانتظار التوزيع" && <p className="mt-2 text-xs text-slate-500">بانتظار أن يرسل مشرف السيارات سيارة{from ? ` إلى ${from.clinic}` : ""}</p>}
+          {driverPhone && (request.status === "تم إرسال السيارة" || request.status === "وصلت السيارة") && (
+            <DriverCall request={request} driver={driver} phone={driverPhone} now={now} />
+          )}
           {phase.kind === "toDestination" && (
             <div className="mt-2">
               <Badge tone="blue" icon={Timer}>في الطريق إلى الوجهة · الوصول المتوقع <span dir="ltr" className="tabular">{timeLabel(phase.etaAt)}</span>{phase.late ? " (متأخرة)" : ""}</Badge>
@@ -780,6 +802,24 @@ function ProgressRow({ appointment, request, byOther = false, day, driver, phase
           {onCancelAppointment && <CancelAppointmentButton onClick={onCancelAppointment} />}
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * الاتصال بسائق السيارة المرسلة (وواتساب)، مع تنبيه إن تأخرت السيارة عن الوصول إلى الاستلام
+ * أكثر من DRIVER_LATE_MINUTES منذ إرسالها.
+ */
+function DriverCall({ request, driver, phone, now }: { request: VehicleRequest; driver: string; phone: string; now: Date }) {
+  const minutes = request.status === "تم إرسال السيارة" ? minutesSinceDispatch(request, now) : null;
+  const late = minutes !== null && minutes >= DRIVER_LATE_MINUTES;
+  return (
+    <div className={cx("mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-lg px-2.5 py-2 text-xs", late ? "bg-amber-50 text-amber-900 ring-1 ring-inset ring-amber-300" : "bg-slate-50 text-slate-600")}>
+      <span className={cx("inline-flex items-center gap-1", late && "font-semibold")}>
+        {late ? <AlertTriangle className="h-3.5 w-3.5 shrink-0" /> : <Truck className="h-3.5 w-3.5 shrink-0" />}
+        {late ? `تأخرت السيارة: مضت ${minutes} دقيقة على إرسالها ولم تصل` : `السائق${driver ? ` ${driver}` : ""}${minutes !== null ? ` · أُرسلت منذ ${minutes} د` : ""}`}
+      </span>
+      <GuestContact mobile={phone} labels={{ call: "اتصال بالسائق", whatsapp: "واتساب" }} />
     </div>
   );
 }
