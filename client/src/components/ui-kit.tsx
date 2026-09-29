@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState, type ComponentType, type ReactNode } from "react";
-import { X } from "lucide-react";
+import { ChevronDown, X } from "lucide-react";
 import { localDateString, statusText, type ClinicAppointment } from "@shared/transport";
 
 /**
@@ -12,15 +12,16 @@ type Icon = ComponentType<{ className?: string }>;
 
 export type Tone = "neutral" | "brand" | "amber" | "blue" | "green" | "violet" | "red" | "cyan";
 
-const TONES: Record<Tone, { soft: string; icon: string; bar: string; dot: string }> = {
-  neutral: { soft: "bg-slate-100 text-slate-700 ring-slate-200", icon: "bg-slate-100 text-slate-600", bar: "", dot: "bg-slate-400" },
-  brand: { soft: "bg-brand-50 text-brand-700 ring-brand-200", icon: "bg-brand-50 text-brand-600", bar: "bg-brand-600", dot: "bg-brand-600" },
-  amber: { soft: "bg-amber-50 text-amber-800 ring-amber-200", icon: "bg-amber-100 text-amber-700", bar: "bg-amber-400", dot: "bg-amber-500" },
-  blue: { soft: "bg-blue-50 text-blue-700 ring-blue-200", icon: "bg-blue-100 text-blue-700", bar: "bg-blue-500", dot: "bg-blue-500" },
-  green: { soft: "bg-emerald-50 text-emerald-700 ring-emerald-200", icon: "bg-emerald-100 text-emerald-700", bar: "bg-emerald-500", dot: "bg-emerald-500" },
-  violet: { soft: "bg-violet-50 text-violet-700 ring-violet-200", icon: "bg-violet-100 text-violet-700", bar: "bg-violet-500", dot: "bg-violet-500" },
-  red: { soft: "bg-red-50 text-red-700 ring-red-200", icon: "bg-red-100 text-red-700", bar: "bg-red-500", dot: "bg-red-500" },
-  cyan: { soft: "bg-cyan-50 text-cyan-800 ring-cyan-200", icon: "bg-cyan-100 text-cyan-700", bar: "bg-cyan-500", dot: "bg-cyan-500" },
+/** soft: شارة، icon: مربع أيقونة، bar: شريط أعلى القسم، dot: نقطة الحالة، halo: هالتها، text: رقم ملون (الوضع الداكن لصفحة السائق) */
+const TONES: Record<Tone, { soft: string; icon: string; bar: string; dot: string; halo: string; text: string }> = {
+  neutral: { soft: "bg-slate-100 text-slate-700 ring-slate-200 dark:bg-slate-800 dark:text-slate-200 dark:ring-slate-700", icon: "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300", bar: "", dot: "bg-slate-400", halo: "ring-slate-400/20", text: "text-slate-700" },
+  brand: { soft: "bg-brand-50 text-brand-700 ring-brand-200 dark:bg-brand-600/15 dark:text-brand-200 dark:ring-brand-600/30", icon: "bg-brand-50 text-brand-600", bar: "bg-brand-600", dot: "bg-brand-600", halo: "ring-brand-600/20", text: "text-brand-700" },
+  amber: { soft: "bg-amber-50 text-amber-800 ring-amber-200 dark:bg-amber-500/15 dark:text-amber-200 dark:ring-amber-500/30", icon: "bg-amber-100 text-amber-700", bar: "bg-amber-400", dot: "bg-amber-500", halo: "ring-amber-500/20", text: "text-amber-700" },
+  blue: { soft: "bg-blue-50 text-blue-700 ring-blue-200 dark:bg-blue-500/15 dark:text-blue-200 dark:ring-blue-500/30", icon: "bg-blue-100 text-blue-700", bar: "bg-blue-500", dot: "bg-blue-500", halo: "ring-blue-500/20", text: "text-blue-700" },
+  green: { soft: "bg-emerald-50 text-emerald-700 ring-emerald-200 dark:bg-emerald-500/15 dark:text-emerald-200 dark:ring-emerald-500/30", icon: "bg-emerald-100 text-emerald-700", bar: "bg-emerald-500", dot: "bg-emerald-500", halo: "ring-emerald-500/20", text: "text-emerald-700" },
+  violet: { soft: "bg-violet-50 text-violet-700 ring-violet-200 dark:bg-violet-500/15 dark:text-violet-200 dark:ring-violet-500/30", icon: "bg-violet-100 text-violet-700", bar: "bg-violet-500", dot: "bg-violet-500", halo: "ring-violet-500/20", text: "text-violet-700" },
+  red: { soft: "bg-red-50 text-red-700 ring-red-200 dark:bg-red-500/15 dark:text-red-200 dark:ring-red-500/30", icon: "bg-red-100 text-red-700", bar: "bg-red-500", dot: "bg-red-500", halo: "ring-red-500/20", text: "text-red-700" },
+  cyan: { soft: "bg-cyan-50 text-cyan-800 ring-cyan-200 dark:bg-cyan-500/15 dark:text-cyan-200 dark:ring-cyan-500/30", icon: "bg-cyan-100 text-cyan-700", bar: "bg-cyan-500", dot: "bg-cyan-500", halo: "ring-cyan-500/20", text: "text-cyan-700" },
 };
 
 export const cx = (...classes: (string | false | null | undefined)[]) => classes.filter(Boolean).join(" ");
@@ -36,15 +37,15 @@ export type ButtonVariant = "primary" | "secondary" | "ghost" | "danger" | "succ
 export function btn(variant: ButtonVariant = "secondary", size: "sm" | "md" | "lg" = "md") {
   const sizes = { sm: "h-9 px-3 text-xs", md: "h-10 px-4 text-sm", lg: "h-12 px-5 text-base" };
   const variants: Record<ButtonVariant, string> = {
-    primary: "bg-brand-600 text-white shadow-sm hover:bg-brand-700",
-    secondary: "bg-white text-slate-700 ring-1 ring-inset ring-slate-300 hover:bg-slate-50 hover:text-ink",
-    ghost: "text-slate-600 hover:bg-slate-100 hover:text-ink",
-    danger: "bg-white text-red-600 ring-1 ring-inset ring-red-200 hover:bg-red-50",
-    success: "bg-emerald-600 text-white shadow-sm hover:bg-emerald-700",
-    dark: "bg-navy-900 text-white shadow-sm hover:bg-navy-800",
-    soft: "bg-brand-50 text-brand-700 ring-1 ring-inset ring-brand-200 hover:bg-brand-100",
+    primary: "bg-brand-600 text-white shadow-brand hover:bg-brand-700 active:bg-brand-800",
+    secondary: "bg-white text-slate-700 shadow-[0_1px_2px_rgba(11,37,69,.06)] ring-1 ring-inset ring-slate-200 hover:bg-slate-50 hover:text-ink dark:bg-slate-800 dark:text-slate-100 dark:ring-slate-700 dark:hover:bg-slate-700",
+    ghost: "text-slate-600 hover:bg-slate-100 hover:text-ink dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white",
+    danger: "bg-white text-red-600 ring-1 ring-inset ring-red-200 hover:bg-red-50 dark:bg-red-500/10 dark:text-red-300 dark:ring-red-500/30",
+    success: "bg-emerald-600 text-white shadow-[0_1px_2px_rgba(5,150,105,.25),0_6px_16px_-6px_rgba(5,150,105,.45)] hover:bg-emerald-700",
+    dark: "bg-navy-900 text-white shadow-[0_1px_2px_rgba(11,37,69,.3),0_6px_16px_-6px_rgba(11,37,69,.45)] hover:bg-navy-800",
+    soft: "bg-brand-50 text-brand-700 ring-1 ring-inset ring-brand-200 hover:bg-brand-100 dark:bg-brand-600/15 dark:text-brand-200 dark:ring-brand-600/30",
   };
-  return cx("inline-flex shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-xl font-semibold transition disabled:cursor-not-allowed disabled:opacity-50", sizes[size], variants[variant]);
+  return cx("inline-flex shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-xl font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 disabled:shadow-none", sizes[size], variants[variant]);
 }
 
 /** زر داخل الشريط العلوي الداكن. */
@@ -53,10 +54,11 @@ export const headerButton = "inline-flex h-10 items-center gap-1.5 rounded-xl px
 /** خيار في نموذج (نوع الرحلة، الاحتياجات، الوجهة): المختار بإطار أحمر الهلال. */
 export const choiceClass = (selected: boolean) => cx(
   "flex min-h-11 items-center gap-2.5 rounded-xl px-4 text-sm font-medium ring-inset transition",
-  selected ? "bg-brand-50 text-brand-700 ring-2 ring-brand-600" : "bg-white text-slate-600 ring-1 ring-slate-300 hover:bg-slate-50",
+  selected ? "bg-brand-50 text-brand-700 ring-2 ring-brand-600" : "bg-slate-50 text-slate-600 ring-1 ring-slate-200 hover:bg-slate-100",
 );
 
-export const inputClass = "h-11 w-full rounded-xl border border-slate-300 bg-white px-3 text-sm text-ink outline-none transition placeholder:text-slate-400 focus:border-brand-600 focus:ring-4 focus:ring-brand-600/10 disabled:bg-slate-50 disabled:text-slate-400";
+/** حقل مملوء بلا إطار ظاهر: خلفية رمادية فاتحة، ويصبح أبيض بإطار أحمر خفيف عند الكتابة. */
+export const inputClass = "h-11 w-full rounded-xl border border-transparent bg-slate-100 px-3.5 text-sm text-ink outline-none transition placeholder:text-slate-400 hover:bg-slate-200/60 focus:border-brand-600/50 focus:bg-white focus:ring-4 focus:ring-brand-600/10 disabled:bg-slate-50 disabled:text-slate-400 dark:bg-slate-800 dark:text-slate-100 dark:focus:bg-slate-900";
 export const labelClass = "mb-1.5 block text-[13px] font-medium text-slate-700";
 
 export function Field({ label, value, onChange, placeholder = "", type = "text", wide, dir, list }: {
@@ -95,7 +97,9 @@ export function PageHeader({ title, subtitle, actions }: { title: string; subtit
  * قسم في الصفحة. لون الشريط العلوي والأيقونة يدلّان على نوعه:
  * amber ينتظر إجراء، blue قيد التنفيذ، green تم، violet اقتراحات، red تنبيه، neutral معلومات.
  */
-export function Panel({ title, description, icon: IconComponent, tone = "neutral", count, actions, children, className, bodyClassName }: {
+export function Panel({ id, title, description, icon: IconComponent, tone = "neutral", count, actions, children, className, bodyClassName }: {
+  /** للانتقال إلى القسم (شريط الحالة) */
+  id?: string;
   title: ReactNode;
   description?: ReactNode;
   icon?: Icon;
@@ -108,7 +112,7 @@ export function Panel({ title, description, icon: IconComponent, tone = "neutral
 }) {
   const style = TONES[tone];
   return (
-    <section className={cx("overflow-hidden rounded-2xl bg-white shadow-card ring-1 ring-slate-200/80", className)}>
+    <section id={id} className={cx("scroll-mt-24 overflow-hidden rounded-2xl bg-white shadow-card ring-1 ring-slate-900/[0.03]", className)}>
       {style.bar && <div className={cx("h-[3px]", style.bar)} />}
       {/* الأزرار تنزل تحت العنوان حين يضيق المكان (الهاتف) بدل أن تضغط الوصف */}
       <header className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2.5 border-b border-slate-100 px-5 py-3.5">
@@ -132,7 +136,7 @@ export function Panel({ title, description, icon: IconComponent, tone = "neutral
 /** بطاقة رقم (مؤشر): العنوان، ثم الرقم، وأيقونة بلون معناه. */
 export function Stat({ label, value, icon: IconComponent, tone = "neutral", hint }: { label: string; value: ReactNode; icon: Icon; tone?: Tone; hint?: ReactNode }) {
   return (
-    <div className="flex items-center gap-3 rounded-2xl bg-white p-3.5 shadow-card ring-1 ring-slate-200/80 sm:gap-4 sm:p-4">
+    <div className="flex items-center gap-3 rounded-2xl bg-white p-3.5 shadow-card ring-1 ring-slate-900/[0.03] sm:gap-4 sm:p-4">
       <span className={cx("flex h-9 w-9 shrink-0 items-center justify-center rounded-xl sm:h-11 sm:w-11", TONES[tone].icon)}><IconComponent className="h-[18px] w-[18px] sm:h-5 sm:w-5" /></span>
       <div className="min-w-0">
         <p className="text-xs font-medium leading-snug text-slate-500 sm:text-[13px]">{label}</p>
@@ -151,9 +155,14 @@ export function Badge({ tone = "neutral", icon: IconComponent, children, classNa
   );
 }
 
-/** نقطة ملونة صغيرة بجانب نص (للحالة)، واللون لا يحمل المعنى وحده بل النص بجانبه. */
+/** نقطة ملونة صغيرة بهالة خفيفة بجانب نص (للحالة)، واللون لا يحمل المعنى وحده بل النص بجانبه. pulse: موجة للحالة الحية (GPS). */
 export function Dot({ tone = "neutral", pulse = false }: { tone?: Tone; pulse?: boolean }) {
-  return <span className={cx("inline-block h-2.5 w-2.5 shrink-0 rounded-full", TONES[tone].dot, pulse && "animate-pulse")} aria-hidden="true" />;
+  return (
+    <span className="relative inline-flex h-2.5 w-2.5 shrink-0" aria-hidden="true">
+      {pulse && <span className={cx("absolute inset-0 animate-ping rounded-full opacity-60 motion-reduce:hidden", TONES[tone].dot)} />}
+      <span className={cx("relative inline-block h-2.5 w-2.5 rounded-full ring-[3px]", TONES[tone].dot, TONES[tone].halo)} />
+    </span>
+  );
 }
 
 /** لون ثابت لكل حالة موعد أو طلب في كل الصفحات. */
@@ -177,9 +186,9 @@ export function StatusBadge({ status, label }: { status: string; label?: string 
 export function EmptyState({ icon: IconComponent, title, hint }: { icon: Icon; title: string; hint?: ReactNode }) {
   return (
     <div className="flex flex-col items-center justify-center px-6 py-10 text-center">
-      <span className="flex h-12 w-12 items-center justify-center rounded-full bg-slate-100 text-slate-400"><IconComponent className="h-6 w-6" /></span>
-      <p className="mt-3 text-sm font-semibold text-slate-600">{title}</p>
-      {hint && <p className="mt-1 max-w-sm text-xs leading-5 text-slate-400">{hint}</p>}
+      <span className="flex h-12 w-12 items-center justify-center rounded-full bg-slate-100 text-slate-400 dark:bg-slate-800 dark:text-slate-500"><IconComponent className="h-6 w-6" /></span>
+      <p className="mt-3 text-sm font-semibold text-slate-600 dark:text-slate-300">{title}</p>
+      {hint && <p className="mt-1 max-w-sm text-xs leading-5 text-slate-400 dark:text-slate-500">{hint}</p>}
     </div>
   );
 }
@@ -195,7 +204,7 @@ export function Segmented<T extends string>({ options, value, onChange, label, s
   full?: boolean;
 }) {
   return (
-    <div role="group" aria-label={label} className={cx("max-w-full gap-1 overflow-x-auto rounded-xl bg-slate-200/70 p-1", full ? "flex w-full" : "inline-flex")}>
+    <div role="group" aria-label={label} className={cx("max-w-full gap-1 overflow-x-auto rounded-xl bg-slate-200/60 p-1 dark:bg-slate-800", full ? "flex w-full" : "inline-flex")}>
       {options.map((option) => {
         const active = option.value === value;
         const IconComponent = option.icon;
@@ -209,7 +218,7 @@ export function Segmented<T extends string>({ options, value, onChange, label, s
               "inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg font-semibold transition",
               full ? "min-w-0 flex-1 justify-center" : "shrink-0",
               size === "sm" ? cx("h-8 text-xs", full ? "px-1.5" : "px-3") : "h-9 px-3.5 text-sm",
-              active ? "bg-white text-ink shadow-sm ring-1 ring-slate-200" : "text-slate-600 hover:text-ink",
+              active ? "bg-white text-ink shadow-[0_1px_3px_rgba(11,37,69,.12)] dark:bg-slate-700 dark:text-white" : "text-slate-600 hover:text-ink dark:text-slate-300 dark:hover:text-white",
             )}
           >
             {IconComponent && <IconComponent className="h-4 w-4" />}{option.label}
@@ -223,10 +232,10 @@ export function Segmented<T extends string>({ options, value, onChange, label, s
 /** الوقت واليوم في عمود ثابت العرض بجانب كل موعد. */
 export function TimeBlock({ time, day, tone = "neutral" }: { time: string; day?: string; tone?: Tone }) {
   return (
-    <div className={cx("flex w-[68px] shrink-0 flex-col items-center justify-center rounded-xl px-2 py-2 text-center", tone === "red" ? "bg-red-50 text-red-700" : "bg-slate-50 text-ink ring-1 ring-inset ring-slate-200/70")}>
+    <span className={cx("flex w-[68px] shrink-0 flex-col items-center justify-center rounded-xl px-2 py-2 text-center", tone === "red" ? "bg-red-50 text-red-700 dark:bg-red-500/15 dark:text-red-200" : "bg-slate-100/80 text-ink dark:bg-slate-800 dark:text-white")}>
       <span dir="ltr" className="text-base font-semibold leading-none tabular">{time}</span>
-      {day && <span className="mt-1 text-[11px] font-medium text-slate-500">{day}</span>}
-    </div>
+      {day && <span className="mt-1 text-[11px] font-medium text-slate-500 dark:text-slate-400">{day}</span>}
+    </span>
   );
 }
 
@@ -241,14 +250,14 @@ export function Steps({ steps, current, tone = "blue" }: { steps: string[]; curr
           <li key={step} className="flex items-center gap-1">
             <span className={cx(
               "inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-medium",
-              done && "bg-slate-100 text-slate-500",
+              done && "bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400",
               active && cx(TONES[tone].soft, "ring-1 ring-inset font-semibold"),
-              !done && !active && "text-slate-400",
+              !done && !active && "text-slate-400 dark:text-slate-500",
             )}>
               <span className={cx("h-1.5 w-1.5 rounded-full", done ? "bg-slate-400" : active ? TONES[tone].dot : "bg-slate-300")} />
               {step}
             </span>
-            {index < steps.length - 1 && <span className="h-px w-3 bg-slate-300" aria-hidden="true" />}
+            {index < steps.length - 1 && <span className="h-px w-3 bg-slate-300 dark:bg-slate-700" aria-hidden="true" />}
           </li>
         );
       })}
@@ -359,14 +368,15 @@ export function DateChooser({ value, onChange, labels = { today: "اليوم", t
           }}
           options={[{ value: "today", label: labels.today }, { value: "tomorrow", label: labels.tomorrow }, { value: "other", label: labels.other }]}
         />
-        {mode === "other" && <input type="date" aria-label={labels.other} value={value} onChange={(event) => event.target.value && onChange(event.target.value)} className={cx(inputClass, "h-11 w-auto")} />}
+        {mode === "other" && <input type="date" aria-label={labels.other} value={value} onChange={(event) => event.target.value && onChange(event.target.value)} className={cx(inputClass, "h-11 w-auto bg-white shadow-card")} />}
       </div>
     </div>
   );
 }
 
-/** مفتاح تشغيل/إيقاف. */
-export function Switch({ checked, onChange, label, disabled }: { checked: boolean; onChange: (checked: boolean) => void; label: string; disabled?: boolean }) {
+/** مفتاح تشغيل/إيقاف بحركة ناعمة (الدائرة تنزلق، وتنضغط قليلًا عند اللمس). lg لصفحة السائق. */
+export function Switch({ checked, onChange, label, disabled, size = "md" }: { checked: boolean; onChange: (checked: boolean) => void; label: string; disabled?: boolean; size?: "md" | "lg" }) {
+  const big = size === "lg";
   return (
     <button
       type="button"
@@ -376,9 +386,95 @@ export function Switch({ checked, onChange, label, disabled }: { checked: boolea
       title={label}
       disabled={disabled}
       onClick={() => onChange(!checked)}
-      className={cx("flex h-6 w-11 shrink-0 items-center rounded-full p-0.5 transition disabled:opacity-50", checked ? "justify-end bg-emerald-500" : "justify-start bg-slate-300")}
+      className={cx(
+        "group inline-flex shrink-0 items-center rounded-full p-0.5 transition-colors duration-200 disabled:opacity-50",
+        big ? "h-8 w-14" : "h-6 w-11",
+        checked ? "bg-emerald-500 shadow-[inset_0_1px_2px_rgba(4,120,87,.35)]" : "bg-slate-300 shadow-[inset_0_1px_2px_rgba(11,37,69,.15)] dark:bg-slate-600",
+      )}
     >
-      <span className="h-5 w-5 rounded-full bg-white shadow-sm" />
+      <span className={cx(
+        "rounded-full bg-white shadow-[0_1px_3px_rgba(11,37,69,.3)] transition-transform duration-300 ease-spring group-active:scale-90",
+        big ? "h-7 w-7" : "h-5 w-5",
+        checked && (big ? "translate-x-6 rtl:-translate-x-6" : "translate-x-5 rtl:-translate-x-5"),
+      )} />
     </button>
+  );
+}
+
+export type StatusItem = { key: string; label: string; value: number; tone: Tone; hint?: ReactNode; onClick?: () => void };
+
+/**
+ * شريط الحالة المقسّم بعدادات حية ملونة (بدل بطاقات الأرقام): أخضر متاح، أزرق جارٍ، كهرماني ينتظر، أحمر متأخر.
+ * الضغط على جزء ينقل إلى القسم المعني. الأحمر يبرز فقط حين يكون العدد أكبر من صفر.
+ */
+export function StatusBar({ items, label }: { items: StatusItem[]; label: string }) {
+  return (
+    <div role="group" aria-label={label} className="grid grid-cols-2 gap-1 rounded-2xl bg-white p-1.5 shadow-card ring-1 ring-slate-900/[0.03] lg:grid-cols-4">
+      {items.map((item) => {
+        const alert = item.tone === "red" && item.value > 0;
+        return (
+          <button
+            key={item.key}
+            type="button"
+            onClick={item.onClick}
+            className={cx("flex min-w-0 items-center gap-3 rounded-xl px-3.5 py-3 text-start transition", alert ? "bg-red-50 hover:bg-red-100/70" : "hover:bg-slate-50")}
+          >
+            <Dot tone={item.value > 0 ? item.tone : "neutral"} pulse={alert} />
+            <span className="min-w-0 flex-1 leading-tight">
+              <span className={cx("block text-[13px] font-semibold leading-snug", alert ? "text-red-800" : "text-slate-700")}>{item.label}</span>
+              {item.hint && <span className="mt-0.5 block truncate text-[11px] text-slate-400">{item.hint}</span>}
+            </span>
+            <span className={cx("text-2xl font-semibold leading-none tabular", item.value > 0 ? TONES[item.tone].text : "text-slate-300")}>{item.value}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
+ * بطاقة قابلة للتوسيع: الملخص (المعلومات الأساسية) ظاهر دائمًا ويفتح البطاقة عند اللمس، والإجراء الرئيسي بجانبه،
+ * والتفاصيل وباقي الإجراءات تنزل بحركة ناعمة. attention: تُفتح وحدها بخط كهرماني حين تحتاج انتباهًا
+ * (تأكيد خلال مهلة، سيارة متأخرة)، ويستطيع المستخدم طيّها حتى يأتي تنبيه جديد.
+ */
+export function Expandable({ summary, action, children, attention = false, label }: {
+  /** بلا روابط أو أزرار داخله (عناصر span فقط): كله زر واحد يفتح البطاقة */
+  summary: ReactNode;
+  action?: ReactNode;
+  children: ReactNode;
+  attention?: boolean;
+  /** اسم الزر لقارئ الشاشة (مثل «تفاصيل ضيف …») */
+  label: string;
+}) {
+  // null: تتبع attention، وبعد لمس المستخدم تتبع اختياره حتى يبدأ تنبيه جديد
+  const [open, setOpen] = useState<boolean | null>(null);
+  const [wasAttention, setWasAttention] = useState(attention);
+  if (attention !== wasAttention) {
+    setWasAttention(attention);
+    if (attention) setOpen(null);
+  }
+  const expanded = open ?? attention;
+  const bodyId = useId();
+  return (
+    <div className={cx(
+      "relative transition-colors duration-300",
+      attention ? "bg-amber-50/40" : expanded ? "bg-slate-50/70" : "hover:bg-slate-50/50",
+    )}>
+      {attention && <span className="absolute inset-y-0 start-0 w-[3px] bg-amber-400" aria-hidden="true" />}
+      <div className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:gap-4 sm:px-5">
+        <button type="button" aria-expanded={expanded} aria-controls={bodyId} aria-label={label} onClick={() => setOpen(!expanded)} className="flex min-w-0 flex-1 items-center gap-4 rounded-xl text-start">
+          {summary}
+          <span className={cx("flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-slate-400 transition duration-300", expanded ? "rotate-180 bg-white text-slate-600 shadow-sm" : "bg-slate-100/80")}>
+            <ChevronDown className="h-4 w-4" />
+          </span>
+        </button>
+        {action && <div className="flex shrink-0 flex-wrap items-center gap-2 [&>*]:flex-1 sm:[&>*]:flex-none sm:justify-end">{action}</div>}
+      </div>
+      <div id={bodyId} className={cx("grid transition-[grid-template-rows] duration-300 ease-out motion-reduce:transition-none", expanded ? "grid-rows-[1fr]" : "grid-rows-[0fr]")}>
+        <div className={cx("overflow-hidden transition-[visibility] duration-300", !expanded && "invisible")}>
+          <div className="px-4 pb-4 sm:px-5 sm:pb-5 sm:ps-[104px]">{children}</div>
+        </div>
+      </div>
+    </div>
   );
 }

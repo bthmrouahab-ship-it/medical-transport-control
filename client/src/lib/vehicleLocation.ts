@@ -30,4 +30,4 @@ export function locationFreshness(location: VehicleLocation, now = Date.now()) {
 }
 
 /** ألوان الخريطة (نفسها في مفتاح الخريطة بلوحة السيارات). */
-export const MAP_COLORS = { hospital: "#0e7490", origin: "#0f2742", toPickup: "#d97706", toDestination: "#2563eb" };
+export const MAP_COLORS = { hospital: "#0e7490", origin: "#0b2545", toPickup: "#d97706", toDestination: "#2563eb" };

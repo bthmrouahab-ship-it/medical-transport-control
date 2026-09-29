@@ -5,16 +5,16 @@ const OFFLINE_PAGE = `<!doctype html>
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<meta name="theme-color" content="#0f2742" />
+<meta name="theme-color" content="#0b2545" />
 <title>لا يوجد اتصال · سيارات الثمامة</title>
 <style>
-  body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #eef2f6; color: #0f1f35;
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #f4f6f9; color: #0f1f35;
     font-family: "IBM Plex Sans Arabic", system-ui, sans-serif; padding: 16px; box-sizing: border-box; }
   main { background: #fff; border-radius: 16px; padding: 28px 24px; max-width: 360px; text-align: center;
     box-shadow: 0 1px 3px rgba(15, 39, 66, 0.12); }
   h1 { font-size: 20px; margin: 0 0 8px; }
   p { margin: 0 0 20px; color: #475569; line-height: 1.7; }
-  button { background: #b3202f; color: #fff; border: 0; border-radius: 10px; padding: 10px 22px; font: inherit;
+  button { background: #da291c; color: #fff; border: 0; border-radius: 10px; padding: 10px 22px; font: inherit;
     font-weight: 600; cursor: pointer; }
 </style>
 </head>

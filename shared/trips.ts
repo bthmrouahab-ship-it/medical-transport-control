@@ -70,6 +70,21 @@ export function tripEndpoints(
 
 const round6 = (value: number) => Math.round(value * 1e6) / 1e6;
 
+/**
+ * التأخر: طلب ينتظر السيارة بعد وقت حاجته، أو سيارة أُرسلت ولم تصل إلى الاستلام، هذه الدقائق أو أكثر
+ * (يظهر أحمر لمشرف السيارات، ولمشرف المبنى مع اقتراح الاتصال بالسائق).
+ */
+export const LATE_MINUTES = 15;
+
+/** الدقائق منذ وقت «HH:MM» اليوم (وقت بعد الآن يعني قبل منتصف الليل)، أو null إن لم يُعرف أو مضى أكثر من 12 ساعة. */
+export function minutesSince(time: string | undefined, now = new Date()) {
+  const match = /^(\d{1,2}):(\d{2})$/.exec(time ?? "");
+  if (!match) return null;
+  let minutes = now.getHours() * 60 + now.getMinutes() - (Number(match[1]) * 60 + Number(match[2]));
+  if (minutes < 0) minutes += 24 * 60;
+  return minutes <= 12 * 60 ? minutes : null;
+}
+
 /** وقت طلب السيارة (createdAt «HH:MM») في يوم الموعد، أو null لطلب قديم بلا وقت. */
 export function requestedAt(request: Pick<VehicleRequest, "createdAt">, appointment: Pick<ClinicAppointment, "appointmentDate">) {
   const match = /^(\d{1,2}):(\d{2})$/.exec(request.createdAt ?? "");

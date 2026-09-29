@@ -90,7 +90,7 @@ export default function LiveMap({ hospitals, locations, trips = [], tripCounts, 
       const radius = 6 + Math.sqrt(count / max) * 16;
       L.circleMarker([hospital.lat, hospital.lng], {
         radius,
-        color: selected ? "#b3202f" : "#ffffff",
+        color: selected ? "#da291c" : "#ffffff",
         weight: selected ? 3 : 2,
         fillColor: MAP_COLORS.hospital,
         fillOpacity: hospital.verified ? 0.75 : 0.45,

@@ -17,7 +17,6 @@ import {
   MapPin,
   MessageCircle,
   Navigation,
-  PauseCircle,
   Phone,
   Plus,
   Radio,
@@ -67,7 +66,7 @@ import {
   type VehicleRules,
 } from "@shared/transport";
 import type { Hospital } from "@shared/hospitals";
-import { arrivalsOn, neededAt, suggestReturnRedirects, tripEndpoints, tripPhase, vehicleAvailability, vehicleLocationState, type TripPhase } from "@shared/trips";
+import { LATE_MINUTES, arrivalsOn, minutesSince, neededAt, suggestReturnRedirects, tripEndpoints, tripPhase, vehicleAvailability, vehicleLocationState, type TripPhase } from "@shared/trips";
 import {
   Badge,
   DateChooser,
@@ -77,8 +76,8 @@ import {
   Panel,
   PageHeader,
   Segmented,
-  Stat,
   StatusBadge,
+  StatusBar,
   Steps,
   Switch,
   TimeBlock,
@@ -127,10 +126,8 @@ function requestTimes(trip: Trip) {
 
 /** كم مضى على الطلب (createdAt بصيغة HH:MM اليوم)، أو null إن لم يكن اليوم. */
 function waitedText(createdAt: string, now: Date) {
-  const match = /^(\d{1,2}):(\d{2})$/.exec(createdAt);
-  if (!match) return null;
-  const minutes = now.getHours() * 60 + now.getMinutes() - (Number(match[1]) * 60 + Number(match[2]));
-  if (minutes < 0 || minutes > 12 * 60) return null;
+  const minutes = minutesSince(createdAt, now);
+  if (minutes === null) return null;
   return minutes < 1 ? "الآن" : `منذ ${minutesText(minutes)}`;
 }
 
@@ -446,6 +443,16 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
     const phase = phases.get(trip.request.id)!;
     return phase.kind === "toDestination" && phase.tracking;
   })).length;
+  // المتأخر: طلب ينتظر السيارة LATE_MINUTES بعد وقت حاجته، أو سيارة أُرسلت ولم تصل إلى الاستلام، أو تجاوزت الوقت المتوقع للوصول
+  const pendingLate = (trip: Trip) => Boolean(trip.at && now.getTime() - trip.at.getTime() >= LATE_MINUTES * 60000);
+  const tripLate = (trips: Trip[]) => trips.some((trip) => {
+    const phase = phases.get(trip.request.id)!;
+    return (phase.kind === "toPickup" && !phase.atPickup && (minutesSince(trip.request.notificationSentAt, now) ?? 0) >= LATE_MINUTES)
+      || (phase.kind === "toDestination" && phase.late);
+  });
+  const latePending = pending.filter(pendingLate);
+  const lateTrips = activeGroups.filter(tripLate);
+  const jump = (id: string) => document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
 
   return (
     <>
@@ -477,11 +484,17 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
       {addingTrip && <NonMedicalTripForm defaultDate={date} onCancel={() => setAddingTrip(false)} onSave={(appointment, request) => { onAddTrip(appointment, request); setAddingTrip(false); }} />}
 
       {view === "appointments" ? <AppointmentsOverview appointments={appointments} requests={requests} date={date} now={now} /> : (<>
-      <div className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4 lg:gap-4">
-        <Stat icon={BellRing} tone="amber" label="بانتظار التوزيع" value={pending.length} hint={date === today ? "طلبات اليوم" : "طلبات التاريخ المحدد"} />
-        <Stat icon={Truck} tone="blue" label="رحلات جارية" value={activeGroups.length} hint={trackingCount ? `${trackingCount} بمتابعة GPS` : "الآن"} />
-        <Stat icon={CheckCircle2} tone="green" label="سيارات متاحة" value={dispatchable.length} hint={`${vehicleCounts.inside} داخل المجمع · ${vehicleCounts.outside} خارجه`} />
-        <Stat icon={PauseCircle} tone="neutral" label="خارج الخدمة" value={vehicleCounts.off} hint={busOffNow ? "والباصات غير متاحة حتى 9:00" : undefined} />
+      {/* شريط الحالة: عدادات حية ملونة، والضغط ينقل إلى القسم */}
+      <div className="mb-6">
+        <StatusBar
+          label="حالة التوزيع الآن"
+          items={[
+            { key: "available", label: "سيارات متاحة", value: dispatchable.length, tone: "green", hint: `${vehicleCounts.inside} داخل المجمع · ${vehicleCounts.outside} خارجه${busOffNow ? " · الباصات من 9:00" : ""}`, onClick: () => jump("fleet-vehicles") },
+            { key: "active", label: "رحلات جارية", value: activeGroups.length, tone: "blue", hint: trackingCount ? `${trackingCount} بمتابعة GPS` : "من الإرسال حتى الوجهة", onClick: () => jump("fleet-active") },
+            { key: "pending", label: "بانتظار التوزيع", value: pending.length, tone: "amber", hint: date === today ? "طلبات اليوم" : "طلبات التاريخ المحدد", onClick: () => jump("fleet-pending") },
+            { key: "late", label: "متأخرة", value: latePending.length + lateTrips.length, tone: "red", hint: `${latePending.length} تنتظر سيارة · ${lateTrips.length} في الطريق`, onClick: () => jump(latePending.length ? "fleet-pending" : "fleet-active") },
+          ]}
+        />
       </div>
 
       <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_380px]">
@@ -506,6 +519,7 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
           )}
 
           <Panel
+            id="fleet-pending"
             tone="amber"
             icon={BellRing}
             title="طلبات بانتظار التوزيع"
@@ -542,6 +556,7 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
                             {trip.from ? <Badge tone="cyan">نقل بين موعدين</Badge> : trip.request.nurseOnly ? <Badge tone="amber">عودة الـ Nurse فقط</Badge> : <Badge tone={trip.request.direction === "عودة" ? "amber" : "neutral"}>{trip.request.direction}</Badge>}
                             {isNonMedical(trip.appointment) && <Badge tone="violet">غير طبية</Badge>}
                             {isPriority(trip.appointment) && <PriorityBadge />}
+                            {pendingLate(trip) && <Badge tone="red" icon={AlertTriangle}>متأخر</Badge>}
                             {groupedIds.has(trip.appointment.id) && <Badge tone="violet" icon={Sparkles}>قابلة للجمع</Badge>}
                             {redirect && <Badge tone="cyan" icon={Navigation}>سيارة قريبة {redirect.vehicle.plate} · {redirect.distanceKm} كم</Badge>}
                           </div>
@@ -626,7 +641,7 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
             </Panel>
           )}
 
-          <Panel tone="blue" icon={Truck} title="رحلات جارية" count={activeGroups.length} description="من إرسال السيارة حتى وصولها إلى الوجهة">
+          <Panel id="fleet-active" tone="blue" icon={Truck} title="رحلات جارية" count={activeGroups.length} description="من إرسال السيارة حتى وصولها إلى الوجهة">
             {activeGroups.length ? (
               <div className="divide-y divide-slate-100">
                 {activeGroups.map((trips) => (
@@ -634,6 +649,7 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
                     key={trips[0].request.groupId ?? trips[0].request.id}
                     trips={trips}
                     phase={groupPhase(trips.map((trip) => phases.get(trip.request.id)!))}
+                    late={tripLate(trips)}
                     vehicle={vehicles.find((item) => item.plate === trips[0].request.vehiclePlate)}
                     driver={driverOf(trips[0].request.vehiclePlate, trips[0].request.driver)}
                     hospitals={hospitals}
@@ -687,7 +703,7 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
             ) : <EmptyState icon={Radio} title="لم تصل سيارات اليوم بعد" hint="مع GPS يُكتشف الوصول تلقائيًا، وبدونه تنتهي الرحلة عند الوقت المتوقع" />}
           </Panel>
 
-          <Panel icon={CarFront} title="السيارات" count={vehicles.length} bodyClassName="p-0">
+          <Panel id="fleet-vehicles" icon={CarFront} title="السيارات" count={vehicles.length} bodyClassName="p-0">
             <div className="border-b border-slate-100 px-4 py-3">
               <Segmented
                 full
@@ -710,7 +726,7 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
                 const live = liveGps.get(vehicle.plate);
                 return (
                   <li key={vehicle.plate} className="flex items-center gap-3 px-4 py-3">
-                    <Dot tone={state.tone} />
+                    <Dot tone={state.tone} pulse={Boolean(live)} />
                     <div className="min-w-0 flex-1">
                       <p className="truncate text-sm font-medium text-ink"><span dir="ltr">{vehicle.plate}</span> · {live?.driver ?? vehicle.driver}</p>
                       <p className="text-xs leading-5 text-slate-500">{kindText(vehicle)} · {state.text}{live ? " · GPS مباشر" : ""}</p>
@@ -719,7 +735,7 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
                           aria-label={`تخصيص الباص ${vehicle.plate}`}
                           value={busRoleOf(vehicle) ?? ""}
                           onChange={(event) => setBusRole(vehicle, event.target.value as BusRole | "")}
-                          className="mt-1 h-8 max-w-full rounded-lg border border-slate-300 bg-white px-2 text-xs text-ink outline-none focus:border-brand-600"
+                          className="mt-1 h-8 max-w-full rounded-lg border border-slate-300 bg-white px-2 text-xs text-ink outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-600/15"
                         >
                           <option value="">باص عادي</option>
                           {BUS_ROLES.map((role) => <option key={role} value={role}>{BUS_ROLE_LABELS[role]}{role === "shuttle" ? " (يلف داخل المجمع)" : role === "clinic" ? " (في خدمة العيادة)" : ""}</option>)}
@@ -786,9 +802,11 @@ function TripList({ trips, hospitals }: { trips: Trip[]; hospitals: Hospital[] }
 const STEPS = ["أُرسلت", "عند الاستلام", "في الطريق", "الوجهة"];
 
 /** رحلة سيارة جارية: مرحلتها، والوقت المتوقع للوصول، ومتابعة GPS، ورسالة السائق. */
-function ActiveTrip({ trips, phase, vehicle, driver, hospitals, onArrived, onEnd }: {
+function ActiveTrip({ trips, phase, late = false, vehicle, driver, hospitals, onArrived, onEnd }: {
   trips: Trip[];
   phase: TripPhase;
+  /** تأخرت: لم تصل إلى الاستلام بعد LATE_MINUTES من إرسالها، أو تجاوزت الوقت المتوقع للوصول */
+  late?: boolean;
   vehicle?: Vehicle;
   driver: string;
   hospitals: Hospital[];
@@ -813,6 +831,7 @@ function ActiveTrip({ trips, phase, vehicle, driver, hospitals, onArrived, onEnd
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          {late && <Badge tone="red" icon={AlertTriangle}>متأخرة</Badge>}
           {phase.kind === "toDestination" && (phase.tracking ? <Badge tone="green" icon={Radio}>GPS مباشر</Badge> : <Badge icon={Timer}>وقت تقديري</Badge>)}
           {seatsLeft > 0 && phase.kind === "toPickup" && <Badge tone="green">{seatsLeft === 1 ? "مقعد متاح" : seatsLeft === 2 ? "مقعدان متاحان" : `${seatsLeft} مقاعد متاحة`}</Badge>}
           <StatusBadge status={trips[0].request.status} />
