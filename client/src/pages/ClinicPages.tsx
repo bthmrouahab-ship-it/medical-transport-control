@@ -12,10 +12,10 @@ import {
   Clock3,
   Download,
   FileSpreadsheet,
+  Filter,
+  Languages,
   Ribbon,
   Pencil,
-  Phone,
-  Search,
   X,
   Trash2,
   Truck,
@@ -37,21 +37,13 @@ import {
   type Gender,
 } from "@shared/transport";
 import { matchHospital } from "@shared/hospitals";
-import { Badge, DateChooser, EmptyState, Field, Panel, PageHeader, Segmented, Stat, StatusBadge, TimeBlock, btn, choiceClass, cx, formatDay, inputClass, labelClass, longDate } from "@/components/ui-kit";
+import { Badge, DateChooser, EmptyState, Field, Panel, PageHeader, Segmented, Stat, StatusBadge, btn, choiceClass, cx, formatDay, labelClass, longDate } from "@/components/ui-kit";
+import { FILTER_LABELS_AR, FILTER_LABELS_EN, FilterTable, useColumnFilters, type FilterColumn } from "@/components/ExcelFilter";
+import { cancelReasonText, enableTranslation, hasArabic, useCancelReason } from "@/lib/translate";
 import type { ClinicText, Lang } from "@/lib/i18n";
 import { useHospitals, useNow } from "@/lib/useShared";
 
 const WAITING = "بانتظار طلب السيارة";
-
-type StatusFilter = "all" | "waiting" | "active" | "done" | "cancelled";
-const STATUS_GROUPS: Record<Exclude<StatusFilter, "all">, string[]> = {
-  waiting: [WAITING],
-  active: ["تم طلب السيارة", "تم استلام المريض", "طلب عودة"],
-  done: ["مكتملة"],
-  cancelled: ["ملغي"],
-};
-/** للبحث: بلا فرق في الأحرف الكبيرة والهمزات والتاء المربوطة */
-const searchable = (text: string) => text.toLowerCase().replace(/[أإآ]/g, "ا").replace(/ة/g, "ه").replace(/ى/g, "ي");
 
 export function ClinicHome({ t, lang, appointments, date, onDateChange, onNew, onEdit, onDelete, onImport }: {
   t: ClinicText;
@@ -124,22 +116,81 @@ export function ClinicHome({ t, lang, appointments, date, onDateChange, onNew, o
   const today = localDateString(now);
   const dayAppointments = appointments.filter((appointment) => appointment.appointmentDate === date);
 
-  // البحث عن مواعيد محددة: نص (الاسم، الموبايل، المبنى، الشقة، الوجهة، رقم الموعد) وحالة، في اليوم المختار أو كل الأيام
-  const [query, setQuery] = useState("");
-  const [status, setStatus] = useState<StatusFilter>("all");
+  // الجدول: اليوم المختار أو كل الأيام، وفلترة كل عمود مثل Excel
   const [scope, setScope] = useState<"day" | "all">("day");
-  const filtering = Boolean(query.trim()) || status !== "all";
-  const shown = useMemo(() => {
-    const words = searchable(query.trim()).split(/\s+/).filter(Boolean);
-    return (scope === "all" && filtering ? [...appointments].sort((a, b) => `${a.appointmentDate} ${a.appointmentAt}`.localeCompare(`${b.appointmentDate} ${b.appointmentAt}`)) : dayAppointments)
-      .filter((appointment) => status === "all" || STATUS_GROUPS[status].includes(appointment.status))
-      .filter((appointment) => {
-        if (!words.length) return true;
-        const text = searchable([appointment.patientName, appointment.mobile, appointment.clinic, appointment.id,
-          `مبنى ${appointment.buildingNumber}`, `شقة ${appointment.apartmentNumber}`, appointment.buildingNumber, appointment.apartmentNumber].join(" "));
-        return words.every((word) => text.includes(word));
-      });
-  }, [appointments, dayAppointments, query, status, scope, filtering]);
+  const byDateTime = (a: ClinicAppointment, b: ClinicAppointment) => `${a.appointmentDate} ${a.appointmentAt}`.localeCompare(`${b.appointmentDate} ${b.appointmentAt}`);
+  const rows = useMemo(() => (scope === "all" ? [...appointments] : dayAppointments).sort(byDateTime), [appointments, dayAppointments, scope]); // eslint-disable-line react-hooks/exhaustive-deps
+  const separator = t.dir === "rtl" ? "، " : ", ";
+  const expiredOf = (appointment: ClinicAppointment) => appointment.status === WAITING && !requestWindow(appointment, now).open;
+  const columns: FilterColumn<ClinicAppointment>[] = [
+    ...(scope === "all" ? [{
+      key: "date",
+      label: t.cols.date,
+      value: (a: ClinicAppointment) => a.appointmentDate,
+      cell: (a: ClinicAppointment) => <span className="whitespace-nowrap text-xs"><span dir="ltr" className="tabular">{a.appointmentDate}</span><span className="block text-slate-400">{formatDay(a.appointmentDate, now, t.days)}</span></span>,
+    }] : []),
+    {
+      key: "time",
+      label: t.cols.time,
+      value: (a) => a.appointmentAt,
+      cell: (a) => <span dir="ltr" className={cx("font-semibold tabular", expiredOf(a) ? "text-red-600" : "text-ink")}>{a.appointmentAt}</span>,
+    },
+    {
+      key: "guest",
+      label: t.cols.guest,
+      value: (a) => a.patientName,
+      cell: (a) => (
+        <div className="min-w-[160px] max-w-[260px] whitespace-normal">
+          <p className="flex flex-wrap items-center gap-1.5 font-semibold text-ink">
+            {a.patientName}
+            {a.cancer && <Badge tone="red" icon={Ribbon}>{t.priority}</Badge>}
+          </p>
+          {sameDayAppointments(a, appointments).map((other) => (
+            <p key={other.id} className="mt-1 flex items-start gap-1 text-[11px] leading-4 text-cyan-800"><CalendarPlus className="mt-px h-3 w-3 shrink-0" /> {t.otherSameDay(other.appointmentAt, other.clinic)}</p>
+          ))}
+          {a.returnedSelf && <p className="mt-1 text-[11px] leading-4 text-emerald-700">{t.returnedSelf(a.returnedSelfBy)}</p>}
+        </div>
+      ),
+    },
+    { key: "gender", label: t.cols.gender, value: (a) => (a.gender ? t.genderLabel(a.gender) : "") },
+    { key: "building", label: t.cols.building, value: (a) => a.buildingNumber, cell: (a) => <span className="tabular">{a.buildingNumber}</span> },
+    { key: "apartment", label: t.cols.apartment, value: (a) => a.apartmentNumber, cell: (a) => <span className="tabular">{a.apartmentNumber}</span> },
+    { key: "mobile", label: t.cols.mobile, value: (a) => (a.mobile === "-" ? "" : a.mobile), cell: (a) => (a.mobile && a.mobile !== "-" ? <span dir="ltr" className="tabular">{a.mobile}</span> : <span className="text-slate-300">—</span>) },
+    { key: "destination", label: t.cols.destination, value: (a) => a.clinic, cell: (a) => <span className="block max-w-[220px] whitespace-normal">{a.clinic}</span> },
+    { key: "kind", label: t.cols.kind, value: (a) => t.kind(a.kind) },
+    { key: "needs", label: t.cols.needs, value: (a) => a.assistance.map(t.need).join(separator), cell: (a) => (a.assistance.length ? <span className="block max-w-[180px] whitespace-normal text-xs">{a.assistance.map(t.need).join(separator)}</span> : <span className="text-slate-300">—</span>) },
+    {
+      key: "status",
+      label: t.cols.status,
+      value: (a) => (expiredOf(a) ? t.expiredShort : t.status(a.status)),
+      cell: (a) => (expiredOf(a) ? <Badge tone="red">{t.expiredShort}</Badge> : <StatusBadge status={a.status} label={t.status(a.status)} />),
+    },
+    {
+      key: "reason",
+      label: t.cols.reason,
+      value: (a) => (a.status === "ملغي" ? cancelReasonText(a.cancelReason, lang) : ""),
+      cell: (a) => <CancelReason t={t} lang={lang} appointment={a} />,
+    },
+    { key: "id", label: t.cols.id, value: (a) => a.id, cell: (a) => <span dir="ltr" className="text-xs text-slate-400">{a.id}</span> },
+    {
+      key: "actions",
+      label: t.cols.actions,
+      filterable: false,
+      cell: (a) => {
+        const editable = a.status === WAITING;
+        return (
+          <div className="flex gap-1.5">
+            <button disabled={!editable} title={editable ? t.edit : t.lockedHint} aria-label={`${t.edit} ${a.patientName}`} onClick={() => onEdit(a)} className={cx(btn(expiredOf(a) ? "primary" : "secondary", "sm"), "w-9 px-0")}><Pencil className="h-3.5 w-3.5" /></button>
+            <button disabled={!editable} title={editable ? t.delete : t.lockedHint} aria-label={`${t.delete} ${a.patientName}`} onClick={() => onDelete(a)} className={cx(btn("danger", "sm"), "w-9 px-0")}><Trash2 className="h-3.5 w-3.5" /></button>
+          </div>
+        );
+      },
+      value: () => "",
+    },
+  ];
+  const table = useColumnFilters(rows, columns);
+  const shown = table.shown;
+  const filtering = table.active > 0;
 
   /** تصدير المواعيد المعروضة (بعد البحث والفلترة) إلى Excel: كل خيار في عمود، وبعناوين القالب حتى يمكن استيراده. */
   async function exportAppointments() {
@@ -172,7 +223,7 @@ export function ClinicHome({ t, lang, appointments, date, onDateChange, onNew, o
       const workbook = XLSX.utils.book_new();
       workbook.Workbook = { Views: [{ RTL: true }] };
       XLSX.utils.book_append_sheet(workbook, worksheet, "المواعيد");
-      const stamp = scope === "all" && filtering ? "all" : date;
+      const stamp = scope === "all" ? "all" : date;
       XLSX.writeFile(workbook, `appointments-${stamp}.xlsx`);
       toast.success(t.exported(shown.length));
     } catch {
@@ -209,87 +260,46 @@ export function ClinicHome({ t, lang, appointments, date, onDateChange, onNew, o
       <Panel
         icon={UsersRound}
         title={t.list}
-        count={filtering ? shown.length : dayAppointments.length}
-        description={filtering ? `${t.results(shown.length)} · ${scope === "all" ? t.scopeAll : longDate(date, lang)}` : longDate(date, lang)}
-        actions={filtering && <button type="button" onClick={() => { setQuery(""); setStatus("all"); }} className={btn("ghost", "sm")}><X className="h-4 w-4" /> {t.clearFilters}</button>}
+        count={shown.length}
+        description={<>{scope === "all" ? t.scopeAll : longDate(date, lang)} · {filtering ? `${t.results(shown.length)} · ${t.filtersOn(table.active)}` : t.filterHint}</>}
+        actions={(
+          <>
+            {(filtering || table.sort) && <button type="button" onClick={table.clear} className={btn("ghost", "sm")}><X className="h-4 w-4" /> {t.clearFilters}</button>}
+            <Segmented size="sm" label={t.cols.date} value={scope} onChange={setScope} options={[{ value: "day", label: t.scopeDay }, { value: "all", label: t.scopeAll }]} />
+          </>
+        )}
       >
-        <div className="grid gap-3 border-b border-slate-100 p-4 sm:grid-cols-[minmax(0,1fr)_200px_auto] sm:items-center sm:px-5">
-          <label className="relative block">
-            <span className="sr-only">{t.search}</span>
-            <Search className="pointer-events-none absolute start-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-            <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t.search} className={cx(inputClass, "h-10 ps-9")} />
-          </label>
-          <select aria-label={t.filterStatus} value={status} onChange={(event) => setStatus(event.target.value as StatusFilter)} className={cx(inputClass, "h-10", status !== "all" && "border-brand-600 bg-brand-50 text-brand-700")}>
-            <option value="all">{t.statusAll}</option>
-            <option value="waiting">{t.statusWaiting}</option>
-            <option value="active">{t.statusActive}</option>
-            <option value="done">{t.statusDone}</option>
-            <option value="cancelled">{t.statusCancelled}</option>
-          </select>
-          <Segmented size="sm" label={t.search} value={scope} onChange={setScope} options={[{ value: "day", label: t.scopeDay }, { value: "all", label: t.scopeAll }]} />
-        </div>
-        {shown.length ? (
-          <div className="divide-y divide-slate-100">
-            {shown.map((appointment) => (
-              <AppointmentCard key={appointment.id} t={t} appointment={appointment} others={sameDayAppointments(appointment, appointments)} now={now} onEdit={onEdit} onDelete={onDelete} />
-            ))}
-          </div>
-        ) : <EmptyState icon={filtering ? Search : UsersRound} title={filtering ? t.noResults : t.empty} />}
+        <FilterTable
+          rows={shown}
+          columns={columns}
+          state={table}
+          rowKey={(a) => a.id}
+          rowClassName={(a) => (a.status === "ملغي" ? "bg-red-50/40" : undefined)}
+          labels={lang === "en" ? FILTER_LABELS_EN : FILTER_LABELS_AR}
+          dir={t.dir}
+          empty={<EmptyState icon={filtering ? Filter : UsersRound} title={filtering || rows.length ? t.noResults : t.empty} />}
+        />
       </Panel>
     </>
   );
 }
 
-function AppointmentCard({ t, appointment, others, now, onEdit, onDelete }: {
-  t: ClinicText;
-  appointment: ClinicAppointment;
-  /** مواعيد الضيف الأخرى في نفس اليوم */
-  others: ClinicAppointment[];
-  now: Date;
-  onEdit: (appointment: ClinicAppointment) => void;
-  onDelete: (appointment: ClinicAppointment) => void;
-}) {
-  const editable = appointment.status === WAITING;
-  const expired = editable && !requestWindow(appointment, now).open;
-  const separator = t.dir === "rtl" ? "، " : ", ";
+/** سبب الإلغاء بلغة الواجهة: الأسباب الجاهزة مترجمة، والمكتوب بالعربية بمترجم المتصفح على الجهاز إن توفر. */
+function CancelReason({ t, lang, appointment }: { t: ClinicText; lang: Lang; appointment: ClinicAppointment }) {
+  const reason = useCancelReason(appointment.cancelReason, lang);
+  if (appointment.status !== "ملغي") return <span className="text-slate-300">—</span>;
   return (
-    <div className="flex flex-col gap-4 p-4 sm:p-5 lg:flex-row lg:items-center">
-      <div className="flex min-w-0 flex-1 gap-4">
-        <TimeBlock time={appointment.appointmentAt} day={formatDay(appointment.appointmentDate, now, t.days)} tone={expired ? "red" : "neutral"} />
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <p className="font-semibold text-ink">{appointment.patientName}</p>
-            {appointment.gender && <Badge>{t.genderLabel(appointment.gender)}</Badge>}
-            {appointment.cancer && <Badge tone="red" icon={Ribbon}>{t.cancer} · {t.priority}</Badge>}
-            <span dir="ltr" className="text-xs text-slate-400">{appointment.id}</span>
-          </div>
-          <p className="mt-1 text-sm text-slate-600">{t.pickup(appointment.buildingNumber, appointment.apartmentNumber)} · {appointment.clinic}</p>
-          <p className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
-            <span>{t.kind(appointment.kind)}</span>
-            {appointment.mobile && <span className="inline-flex items-center gap-1"><Phone className="h-3.5 w-3.5" /><span dir="ltr">{appointment.mobile}</span></span>}
-            {appointment.assistance.length > 0 && <span className="inline-flex items-center gap-1"><Accessibility className="h-3.5 w-3.5" />{appointment.assistance.map(t.need).join(separator)}</span>}
-          </p>
-          {others.map((other) => (
-            <p key={other.id} className="mt-2 flex w-fit items-center gap-1.5 rounded-lg bg-cyan-50 px-2.5 py-1 text-xs text-cyan-900 ring-1 ring-inset ring-cyan-200">
-              <CalendarPlus className="h-3.5 w-3.5 shrink-0" /> {t.otherSameDay(other.appointmentAt, other.clinic)}
-            </p>
-          ))}
-          {appointment.returnedSelf && (
-            <p className="mt-2 w-fit rounded-lg bg-emerald-50 px-2.5 py-1.5 text-xs text-emerald-800 ring-1 ring-inset ring-emerald-200">{t.returnedSelf(appointment.returnedSelfBy)}</p>
-          )}
-          {appointment.status === "ملغي" && (
-            <p className="mt-2 w-fit rounded-lg bg-red-50 px-2.5 py-1.5 text-xs text-red-800 ring-1 ring-inset ring-red-200">
-              <span className="font-semibold">{t.cancelReason}:</span> {appointment.cancelReason || "—"}
-              {appointment.cancelledBy && <span className="text-red-700/80"> · {t.cancelledBy(appointment.cancelledBy)}</span>}
-            </p>
-          )}
-        </div>
-      </div>
-      <div className="flex flex-wrap items-center gap-2 lg:justify-end">
-        {expired ? <Badge tone="red">{t.expired}</Badge> : <StatusBadge status={appointment.status} label={t.status(appointment.status)} />}
-        <button disabled={!editable} title={editable ? t.edit : t.lockedHint} onClick={() => onEdit(appointment)} className={btn(expired ? "primary" : "secondary", "sm")}><Pencil className="h-3.5 w-3.5" /> {t.edit}</button>
-        <button disabled={!editable} title={editable ? t.delete : t.lockedHint} onClick={() => onDelete(appointment)} className={btn("danger", "sm")}><Trash2 className="h-3.5 w-3.5" /> {t.delete}</button>
-      </div>
+    <div className="min-w-[160px] max-w-[260px] whitespace-normal text-xs leading-5 text-red-800">
+      <span dir="auto" title={reason.original ?? undefined}>{reason.text || "—"}</span>
+      {reason.machine && <span className="ms-1 text-[11px] text-slate-400">({t.machineTranslated})</span>}
+      {lang === "en" && !reason.machine && hasArabic(reason.text) && (reason.canEnable
+        ? (
+          <button type="button" onClick={enableTranslation} className="ms-1.5 inline-flex items-center gap-1 rounded-md bg-white px-1.5 py-0.5 text-[11px] font-semibold text-slate-600 ring-1 ring-inset ring-slate-300 hover:bg-slate-50">
+            <Languages className="h-3 w-3" /> {t.translate}
+          </button>
+        )
+        : <span className="ms-1 text-[11px] text-slate-400">({t.writtenInArabic})</span>)}
+      {appointment.cancelledBy && <span className="block text-[11px] text-red-700/70">{t.cancelledBy(appointment.cancelledBy)}</span>}
     </div>
   );
 }
