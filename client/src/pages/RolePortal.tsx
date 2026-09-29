@@ -39,7 +39,7 @@ function PageLoading() {
   return <div className="flex min-h-screen items-center justify-center bg-page text-slate-400" dir="rtl"><Loader2 className="h-6 w-6 animate-spin" /><span className="sr-only">جارٍ التحميل</span></div>;
 }
 
-type Role = "clinic" | "buildingSupervisor" | "fleetSupervisor";
+type Role = "clinic" | "buildingSupervisor" | "buildingLead" | "fleetSupervisor";
 type Session = { role: Role; name: string; uid: string };
 type ClinicView = "home" | "form";
 
@@ -241,6 +241,7 @@ export default function RolePortal() {
 const ROLE_TITLES: Record<Role, string> = {
   clinic: "العيادة",
   buildingSupervisor: "مشرف المبنى",
+  buildingLead: "مسؤول مشرفي المباني",
   fleetSupervisor: "مشرف السيارات",
 };
 
@@ -475,9 +476,10 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
             onSave={saveAppointment}
           />
         )}
-        {session.role === "buildingSupervisor" && (
+        {(session.role === "buildingSupervisor" || session.role === "buildingLead") && (
           <SupervisorHome
             uid={session.uid}
+            lead={session.role === "buildingLead"}
             appointments={appointments}
             requests={requests}
             onRequest={(request, appointmentId) => {

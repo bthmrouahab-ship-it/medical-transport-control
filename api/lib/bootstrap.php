@@ -6,8 +6,10 @@ declare(strict_types=1);
  * لا يُطبع أي شيء عند طلب هذا الملف مباشرة.
  */
 
-const ROLES = ['admin', 'clinic', 'buildingSupervisor', 'fleetSupervisor', 'driver'];
-const OFFICE_ROLES = ['admin', 'clinic', 'buildingSupervisor', 'fleetSupervisor'];
+const ROLES = ['admin', 'clinic', 'buildingSupervisor', 'buildingLead', 'fleetSupervisor', 'driver'];
+const OFFICE_ROLES = ['admin', 'clinic', 'buildingSupervisor', 'buildingLead', 'fleetSupervisor'];
+/** مشرف المبنى، ومسؤول مشرفي المباني (نفس الصلاحيات، ويتابع كل الطلبات لا طلباته فقط) */
+const BUILDING_ROLES = ['buildingSupervisor', 'buildingLead'];
 /** خروج تلقائي بعد ساعة بلا نشاط */
 const IDLE_SECONDS = 3600;
 /** أقصى حجم لطلب واحد (رفع ملف إحصائيات كبير يُقسَّم على عدة طلبات) */

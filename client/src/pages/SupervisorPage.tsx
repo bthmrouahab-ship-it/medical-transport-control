@@ -88,9 +88,11 @@ function newRequest(appointment: ClinicAppointment): VehicleRequest {
   };
 }
 
-export function SupervisorHome({ uid, appointments, requests, onRequest, onUpdateRequest, onCancel, onReturn, onTransfer, onCancelAppointment, onCheckReply }: {
+export function SupervisorHome({ uid, lead = false, appointments, requests, onRequest, onUpdateRequest, onCancel, onReturn, onTransfer, onCancelAppointment, onCheckReply }: {
   /** رقم حساب المشرف: يرى متابعة طلباته هو فقط */
   uid: string;
+  /** مسؤول مشرفي المباني: يتابع كل الطلبات (يؤكد وصول السيارة واستلام الضيف ويرد على السائق في أي طلب) */
+  lead?: boolean;
   appointments: ClinicAppointment[];
   requests: VehicleRequest[];
 } & RequestHandlers) {
@@ -116,7 +118,9 @@ export function SupervisorHome({ uid, appointments, requests, onRequest, onUpdat
    * - متابعة طلب الذهاب حتى وصول السيارة إلى الوجهة لمن طلبها فقط.
    * - بعد وصول الوجهة (مرضى في الموعد): لكل مشرفي المباني، وأي مشرف يطلب العودة.
    * - متابعة طلب العودة (وصول السيارة واستلام المريض) لمن طلبها فقط.
+   * مسؤول مشرفي المباني يتابع كل الطلبات.
    */
+  const follows = (request: VehicleRequest) => lead || followsRequest(request, uid);
   // الموعد الذي طُلب نقل ضيفه إلى موعده التالي يُتابَع من الموعد التالي
   const transferredFrom = new Set(requests.flatMap((request) => (request.fromAppointmentId ? [request.fromAppointmentId] : [])));
   const fromOf = (request?: VehicleRequest) => (request?.fromAppointmentId ? appointments.find((item) => item.id === request.fromAppointmentId) ?? null : null);
@@ -124,10 +128,10 @@ export function SupervisorHome({ uid, appointments, requests, onRequest, onUpdat
     if (transferredFrom.has(appointment.id)) return null;
     const request = latest.get(appointment.id);
     if (!request) return requestWindow(appointment, now).open ? "request" : "expired";
-    if (request.direction === "عودة") return followsRequest(request, uid) ? "progress" : null;
-    if (BEFORE_PICKUP.includes(request.status)) return followsRequest(request, uid) ? "progress" : null;
+    if (request.direction === "عودة") return follows(request) ? "progress" : null;
+    if (BEFORE_PICKUP.includes(request.status)) return follows(request) ? "progress" : null;
     if (phaseOf(request).kind === "arrived") return "atAppointment";
-    return followsRequest(request, uid) ? "progress" : null;
+    return follows(request) ? "progress" : null;
   };
   // رحلة عودة استلم السائق ضيفها تبقى ظاهرة حتى يرد المشرف على ما سجّله (أو تنتهي المهلة)
   const awaitingReply = (appointment: ClinicAppointment) => {
@@ -180,8 +184,8 @@ export function SupervisorHome({ uid, appointments, requests, onRequest, onUpdat
   return (
     <>
       <PageHeader
-        title="طلبات السيارات"
-        subtitle={`${longDate(today)} · مواعيد اليوم`}
+        title={lead ? "كل طلبات السيارات" : "طلبات السيارات"}
+        subtitle={`${longDate(today)} · مواعيد اليوم${lead ? " · طلبات كل مشرفي المباني" : ""}`}
         actions={<BuildingFilter all={visible.length} counts={buildingCounts} buildings={buildingNumbers} selected={buildings} onChange={chooseBuildings} />}
       />
 
@@ -213,7 +217,7 @@ export function SupervisorHome({ uid, appointments, requests, onRequest, onUpdat
           ) : <EmptyState icon={CheckCircle2} title="لا توجد مواعيد بانتظار طلب سيارة" hint="تظهر هنا مواعيد العيادات لليوم حتى يُطلب لها سيارة" />}
         </Panel>
 
-        <Panel tone="blue" icon={Truck} title="طلبات جارية" count={inProgress.length} description="طلباتك حتى وصول السيارة إلى الوجهة">
+        <Panel tone="blue" icon={Truck} title="طلبات جارية" count={inProgress.length} description={lead ? "طلبات كل مشرفي المباني حتى وصول السيارة إلى الوجهة" : "طلباتك حتى وصول السيارة إلى الوجهة"}>
           {inProgress.length ? (
             <div className="divide-y divide-slate-100">
               {inProgress.map(({ appointment, request }) => (
@@ -221,6 +225,7 @@ export function SupervisorHome({ uid, appointments, requests, onRequest, onUpdat
                   key={appointment.id}
                   appointment={appointment}
                   request={request}
+                  byOther={lead && Boolean(request.requestedBy) && request.requestedBy !== uid}
                   day={dayOf(appointment)}
                   driver={driverOf(request)}
                   phase={phaseOf(request)}
@@ -632,9 +637,11 @@ function RequestRow({ appointment, day, match, partner, earlier, now, onRequest,
   );
 }
 
-function ProgressRow({ appointment, request, day, driver, phase, from, onUpdateRequest, onCheckReply, onCancel, onCancelAppointment }: {
+function ProgressRow({ appointment, request, byOther = false, day, driver, phase, from, onUpdateRequest, onCheckReply, onCancel, onCancelAppointment }: {
   appointment: ClinicAppointment;
   request: VehicleRequest;
+  /** لمسؤول مشرفي المباني: الطلب طلبه مشرف مبنى آخر */
+  byOther?: boolean;
   day?: string;
   driver: string;
   phase: TripPhase;
@@ -660,6 +667,7 @@ function ProgressRow({ appointment, request, day, driver, phase, from, onUpdateR
         <TimeBlock time={appointment.appointmentAt} day={day} />
         <div className="min-w-0 flex-1">
           <AppointmentInfo appointment={appointment} request={request} driver={driver} from={from} />
+          {byOther && <p className="mt-1.5 flex items-center gap-1 text-xs text-violet-700"><Building2 className="h-3.5 w-3.5" /> طلب مشرف مبنى آخر{request.createdAt ? ` الساعة ${request.createdAt}` : ""}</p>}
           <div className="mt-2.5"><Steps steps={returning ? RETURN_STEPS : OUTBOUND_STEPS} current={step} /></div>
           {(request.arrivalCheck || request.pickupCheck) && (
             <DriverCheckBox request={request} appointment={appointment} from={from} onReply={(kind, reply) => onCheckReply(request, kind, reply)} />

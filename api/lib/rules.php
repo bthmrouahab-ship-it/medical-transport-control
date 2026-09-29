@@ -54,11 +54,12 @@ function has_role(array $user, array $roles): bool
 }
 
 /**
- * طلب الذهاب يتابعه مشرف المبنى الذي طلبه فقط، ورحلة العودة يتابعها كل مشرفي المباني.
+ * الطلب (ذهابًا أو عودة) يتابعه مشرف المبنى الذي طلبه فقط، ومسؤول مشرفي المباني يتابع كل الطلبات.
  * الطلب القديم أو الذي أضافه مشرف السيارات بلا مالك يتابعه أي مشرف مبنى.
  */
 function follows_request(array $user, ?array $request): bool
 {
+    if ($user['role'] === 'buildingLead') return true;
     $owner = $request['requestedBy'] ?? null;
     return $owner === null || $owner === (string)$user['id'];
 }
@@ -142,8 +143,8 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
                     && in_array($after['status'] ?? null, APPOINTMENT_STATUSES, true)
                     && in_array($after['gender'] ?? 'ذكر', ['ذكر', 'أنثى'], true) && is_bool($after['cancer'] ?? false) ? null : $denied;
             }
-            // مشرف المبنى لا يغيّر بيانات المريض ولا وقت الموعد، بل حالة الموعد فقط، أو يلغيه قبل استلام المريض مع ذكر السبب
-            if ($role === 'buildingSupervisor') {
+            // مشرف المبنى (ومسؤولهم) لا يغيّر بيانات المريض ولا وقت الموعد، بل حالة الموعد فقط، أو يلغيه قبل استلام المريض مع ذكر السبب
+            if (has_role($user, BUILDING_ROLES)) {
                 if (($before['status'] ?? null) === 'ملغي') return $denied;
                 if (($after['status'] ?? null) === 'ملغي') {
                     $reason = trim((string)($after['cancelReason'] ?? ''));
@@ -160,14 +161,14 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
         case 'requests':
             if ($after === null) {
                 if ($role === 'admin') return null;
-                return $role === 'buildingSupervisor' && follows_request($user, $before) ? null : $denied;
+                return has_role($user, BUILDING_ROLES) && follows_request($user, $before) ? null : $denied;
             }
             if ($before === null) {
                 // الطلب الجديد يبدأ دائمًا بانتظار التوزيع، والسيارة يحددها مشرف السيارات لاحقًا
-                if (!has_role($user, ['admin', 'buildingSupervisor', 'fleetSupervisor'])) return $denied;
+                if (!has_role($user, ['admin', ...BUILDING_ROLES, 'fleetSupervisor'])) return $denied;
                 // طلب مشرف المبنى يُسجَّل باسمه (حتى يتابعه وحده)، والرحلة غير الطبية من مشرف السيارات بلا مالك
                 $owner = $after['requestedBy'] ?? null;
-                if ($role === 'buildingSupervisor' && $owner !== (string)$user['id']) return 'بيانات الطلب غير صالحة';
+                if (has_role($user, BUILDING_ROLES) && $owner !== (string)$user['id']) return 'بيانات الطلب غير صالحة';
                 if ($role === 'fleetSupervisor' && $owner !== null) return 'بيانات الطلب غير صالحة';
                 $valid = only(array_keys($after), REQUEST_FIELDS)
                     && ($after['id'] ?? null) === $id
@@ -196,9 +197,9 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
                 // بيانات الوصول تُكتب مرة واحدة عند الوصول، ولا تُغيَّر بعده (مثل وصول سجّله GPS)
                 return !array_intersect($changed, ['arrivedAt', 'arrivalSource']) || $arriving ? null : $denied;
             }
-            // مشرف المبنى: تأكيد وصول السيارة واستلام المريض، ومعه وقت الاستلام والوقت المتوقع للوصول،
-            // والرد على ما سجّله السائق (التأكيد، أو النفي الذي يعيد الطلب إلى المرحلة السابقة)
-            if ($role === 'buildingSupervisor') {
+            // مشرف المبنى (لطلباته) ومسؤول مشرفي المباني (لكل الطلبات): تأكيد وصول السيارة واستلام المريض، ومعه
+            // وقت الاستلام والوقت المتوقع للوصول، والرد على ما سجّله السائق (التأكيد، أو النفي الذي يعيد الطلب إلى المرحلة السابقة)
+            if (has_role($user, BUILDING_ROLES)) {
                 if (!follows_request($user, $before)) return $denied;
                 if (!only($changed, ['status', 'pickedUpAt', 'etaAt', 'destLat', 'destLng', 'pickupGps', ...CHECK_FIELDS])) return $denied;
                 if (!valid_check_replies($user, $before, $after, $changed)) return $denied;
