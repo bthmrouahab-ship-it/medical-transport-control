@@ -364,6 +364,29 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
       : request));
   }
 
+  /**
+   * إنهاء رحلة عالقة من مشرف السيارات (أُرسلت السيارة ولم يُسجَّل استلام الضيف): تُعتبر الرحلة منتهية
+   * فتصبح السيارة متاحة، وتتقدم حالة الموعد كما عند الاستلام (العودة والموعد الأول في النقل: مكتملة).
+   */
+  function endTrips(requestIds: string[]) {
+    const arrivedAt = new Date().toISOString();
+    const ended = requests.filter((request) => requestIds.includes(request.id) && (request.status === "تم إرسال السيارة" || request.status === "وصلت السيارة"));
+    if (!ended.length) return;
+    updateRequests(requests.map((request) => ended.includes(request)
+      ? { ...request, status: "وصلت الوجهة" as const, arrivedAt, arrivalSource: "manual" as const }
+      : request));
+    const next = new Map<string, ClinicAppointment["status"]>();
+    for (const request of ended) {
+      next.set(request.appointmentId, request.direction === "عودة" ? "مكتملة" : "تم استلام المريض");
+      if (request.fromAppointmentId) next.set(request.fromAppointmentId, "مكتملة");
+    }
+    const moves: Partial<Record<ClinicAppointment["status"], ClinicAppointment["status"]>> = { "تم طلب السيارة": "تم استلام المريض", "طلب عودة": "مكتملة", "تم استلام المريض": "مكتملة" };
+    updateAppointments(appointments.map((appointment) => next.has(appointment.id) && moves[appointment.status] === next.get(appointment.id)
+      ? { ...appointment, status: next.get(appointment.id)! }
+      : appointment));
+    toast.success(`انتهت رحلة السيارة ${ended[0].vehiclePlate ?? ""}، وأصبحت متاحة`);
+  }
+
   function openEditAppointment(appointment: ClinicAppointment) {
     if (appointment.status !== "بانتظار طلب السيارة") {
       toast.error(t.errLocked);
@@ -547,6 +570,7 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
             onDispatch={dispatch}
             onDispatchMany={dispatchMany}
             onArrived={markArrived}
+            onEndTrip={endTrips}
             onExport={exportStats}
             date={selectedDate}
             onDateChange={setSelectedDate}

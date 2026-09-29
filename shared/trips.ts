@@ -1,5 +1,5 @@
 import { DEFAULT_HOSPITALS, ORIGIN, distanceKm, type Hospital } from "./hospitals";
-import { appointmentDateTime, appointmentHospital, localDateString, type ArrivalSource, type ClinicAppointment, type Vehicle, type VehicleRequest } from "./transport";
+import { appointmentDateTime, appointmentHospital, isRushHour, localDateString, type ArrivalSource, type ClinicAppointment, type Vehicle, type VehicleRequest } from "./transport";
 
 /**
  * الرحلة بعد استلام المريض: تقدير مدة الطريق، ومعرفة متى تصل السيارة وتعود متاحة.
@@ -19,13 +19,8 @@ export const UNKNOWN_TRAVEL_MINUTES = 35;
  */
 export const GPS_GRACE_MINUTES = 45;
 
-/** وقت الذروة في قطر: من الأحد إلى الخميس، صباحًا 6:30–8:30 وظهرًا 13:00–16:00. */
-export function isRushHour(at: Date) {
-  const day = at.getDay();
-  if (day === 5 || day === 6) return false;
-  const minutes = at.getHours() * 60 + at.getMinutes();
-  return (minutes >= 390 && minutes <= 510) || (minutes >= 780 && minutes <= 960);
-}
+// وقت الذروة (isRushHour) في shared/transport.ts: يحتاجه أيضًا باص المجمع
+export { isRushHour };
 
 /**
  * تقدير مدة الطريق بالدقائق، مقرّبة لأعلى إلى 5 دقائق:
@@ -280,6 +275,8 @@ export function suggestReturnRedirects(
   vehicles: Vehicle[],
   states: Map<string, VehicleLocationState>,
   hospitals: Hospital[] = DEFAULT_HOSPITALS,
+  /** قواعد السيارة الأخرى (الباصات: vehicleRestriction)، وإلا كل سيارة تناسب */
+  fits: (vehicle: Vehicle, trip: { request: VehicleRequest; appointment: ClinicAppointment }) => boolean = () => true,
 ): ReturnRedirect[] {
   const origin: Point = { lat: ORIGIN.lat, lng: ORIGIN.lng };
   const pairs: (ReturnRedirect & { special: boolean })[] = [];
@@ -293,7 +290,7 @@ export function suggestReturnRedirects(
     for (const vehicle of vehicles) {
       const state = states.get(vehicle.plate);
       if (!vehicle.available || state?.kind !== "outside" || !state.canRedirect || !state.position) continue;
-      if (special && vehicle.kind !== "احتياجات خاصة") continue;
+      if ((special && vehicle.kind !== "احتياجات خاصة") || !fits(vehicle, trip)) continue;
       const distance = distanceKm(state.position, hospital);
       if (distance >= distanceKm(origin, hospital)) continue;
       pairs.push({ ...trip, vehicle, distanceKm: Math.round(distance * 10) / 10, from: state.from, pickup: hospital.name, special });

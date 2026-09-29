@@ -22,8 +22,13 @@ const REQUEST_FIELDS = ['id', 'appointmentId', 'vehiclePlate', 'driver', 'direct
     'fromAppointmentId', 'driverArrivedAt', 'arrivalGps', 'pickupGps', ...CHECK_FIELDS, '_o'];
 /** خانات مرحلة الطريق إلى الوجهة (تُكتب عند استلام المريض وعند الوصول) */
 const TRIP_FIELDS = ['pickedUpAt', 'etaAt', 'destLat', 'destLng', 'arrivedAt', 'arrivalSource'];
-const VEHICLE_FIELDS = ['plate', 'driver', 'phone', 'kind', 'available', '_o'];
+const VEHICLE_FIELDS = ['plate', 'driver', 'phone', 'kind', 'available', 'busRole', '_o'];
 const VEHICLE_KINDS = ['سيدان', 'احتياجات خاصة', 'باص'];
+/** تخصيص الباص: باص المجمع، أو باص الرحلات غير الطبية (نفس القيم في shared/transport.ts) */
+const BUS_ROLE_VALUES = ['shuttle', 'nonMedical'];
+const BUS_ROLE_LABELS = ['shuttle' => 'باص المجمع', 'nonMedical' => 'باص الرحلات غير الطبية'];
+/** إنهاء مشرف السيارات لرحلة عالقة يقدّم حالة الموعد كما عند استلام الضيف: [قبل => بعد] */
+const TRIP_END_APPOINTMENT_STATUS = ['تم طلب السيارة' => 'تم استلام المريض', 'طلب عودة' => 'مكتملة', 'تم استلام المريض' => 'مكتملة'];
 const HOSPITAL_FIELDS = ['id', 'name', 'nameEn', 'zone', 'lat', 'lng', 'aliases', 'verified', '_o'];
 /** المجموعات التي تُزامن مع موظفي المكتب */
 const SYNC_COLLECTIONS = ['appointments', 'requests', 'fleet', 'hospitals', 'vehicleLocations', 'meta'];
@@ -62,6 +67,13 @@ function follows_request(array $user, ?array $request): bool
     if ($user['role'] === 'buildingLead') return true;
     $owner = $request['requestedBy'] ?? null;
     return $owner === null || $owner === (string)$user['id'];
+}
+
+/** تخصيص الباص صالح: غير موجود، أو قيمة معروفة لسيارة من نوع باص. */
+function valid_bus_role(array $vehicle): bool
+{
+    return !array_key_exists('busRole', $vehicle)
+        || (in_array($vehicle['busRole'], BUS_ROLE_VALUES, true) && ($vehicle['kind'] ?? null) === 'باص');
 }
 
 function is_iso($value): bool
@@ -143,6 +155,11 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
                     && in_array($after['status'] ?? null, APPOINTMENT_STATUSES, true)
                     && in_array($after['gender'] ?? 'ذكر', ['ذكر', 'أنثى'], true) && is_bool($after['cancer'] ?? false) ? null : $denied;
             }
+            // مشرف السيارات: عند إنهاء رحلة عالقة (لم يُسجَّل استلام ضيفها) تتقدم حالة الموعد كما عند الاستلام فقط
+            if ($role === 'fleetSupervisor') {
+                return only($changed, ['status'])
+                    && (TRIP_END_APPOINTMENT_STATUS[$before['status'] ?? ''] ?? null) === ($after['status'] ?? null) ? null : $denied;
+            }
             // مشرف المبنى (ومسؤولهم) لا يغيّر بيانات المريض ولا وقت الموعد، بل حالة الموعد فقط، أو يلغيه قبل استلام المريض مع ذكر السبب
             if (has_role($user, BUILDING_ROLES)) {
                 if (($before['status'] ?? null) === 'ملغي') return $denied;
@@ -188,11 +205,15 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
                 return only($changed, REQUEST_FIELDS) && !array_intersect($changed, ['id', 'appointmentId', 'fromAppointmentId'])
                     && in_array($after['status'] ?? null, REQUEST_STATUSES, true) ? null : $denied;
             }
-            // مشرف السيارات: إرسال السيارة وجمع الرحلات، وتأكيد وصولها إلى الوجهة (يدويًا أو بانتهاء المدة التقديرية)
+            // مشرف السيارات: إرسال السيارة وجمع الرحلات، وتأكيد وصولها إلى الوجهة (يدويًا أو بانتهاء المدة التقديرية)،
+            // وإنهاء رحلة عالقة قبل تسجيل الاستلام (يدويًا فقط) حتى تتفرغ السيارة
             if ($role === 'fleetSupervisor') {
                 if (!only($changed, ['vehiclePlate', 'driver', 'status', 'groupId', 'notificationSentAt', 'arrivedAt', 'arrivalSource'])) return $denied;
                 $to = $after['status'] ?? null;
-                $arriving = $to === 'وصلت الوجهة' && ($before['status'] ?? null) === 'تم استلام المريض';
+                $from = $before['status'] ?? null;
+                $ending = in_array($from, ['تم إرسال السيارة', 'وصلت السيارة'], true)
+                    && ($after['arrivalSource'] ?? null) === 'manual' && is_iso($after['arrivedAt'] ?? null);
+                $arriving = $to === 'وصلت الوجهة' && ($from === 'تم استلام المريض' || $ending);
                 if (in_array('status', $changed, true) && $to !== 'تم إرسال السيارة' && !$arriving) return $denied;
                 // بيانات الوصول تُكتب مرة واحدة عند الوصول، ولا تُغيَّر بعده (مثل وصول سجّله GPS)
                 return !array_intersect($changed, ['arrivedAt', 'arrivalSource']) || $arriving ? null : $denied;
@@ -223,14 +244,15 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
             return $denied;
 
         case 'fleet':
-            // المدير يعدّل كل البيانات، ومشرف السيارات يغيّر حالة الإتاحة فقط
+            // المدير يعدّل كل البيانات، ومشرف السيارات يغيّر حالة الإتاحة وتخصيص الباص فقط
             if ($after === null) return $role === 'admin' ? null : $denied;
             if ($role === 'admin') {
                 return only(array_keys($after), VEHICLE_FIELDS) && ($after['plate'] ?? null) === $id
-                    && in_array($after['kind'] ?? null, VEHICLE_KINDS, true) ? null : 'بيانات السيارة غير صالحة';
+                    && in_array($after['kind'] ?? null, VEHICLE_KINDS, true) && valid_bus_role($after) ? null : 'بيانات السيارة غير صالحة';
             }
+            // مشرف السيارات يغيّر إتاحة السيارة، وتخصيص الباص (باص المجمع أو الرحلات غير الطبية)
             if ($role === 'fleetSupervisor' && $before !== null) {
-                return only($changed, ['available']) && is_bool($after['available'] ?? null) ? null : $denied;
+                return only($changed, ['available', 'busRole']) && is_bool($after['available'] ?? null) && valid_bus_role($after) ? null : $denied;
             }
             return $denied;
 

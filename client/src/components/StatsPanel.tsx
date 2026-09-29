@@ -17,7 +17,7 @@ import {
   type StatsFilter,
   type TripStat,
 } from "@shared/stats";
-import { localDateString, type ClinicAppointment, type Vehicle, type VehicleRequest } from "@shared/transport";
+import { localDateString, mergeVehicle, type ClinicAppointment, type Vehicle, type VehicleRequest } from "@shared/transport";
 import { saveState } from "@/lib/appStore";
 import { authErrorMessage } from "@/lib/auth";
 import { dayRange, fetchAllActivity } from "@/lib/activity";
@@ -308,7 +308,7 @@ function HistoryImport({ fleet, hospitals, imported }: { fleet: Vehicle[]; hospi
     for (const item of preview.drivers) {
       const data = { plate: item.plate, driver: item.drivers.join(" / "), phone: item.phone, kind: item.kind };
       const index = next.findIndex((vehicle) => vehicle.plate === item.plate);
-      if (index >= 0) next[index] = { ...next[index], ...data };
+      if (index >= 0) next[index] = mergeVehicle(next[index], data);
       else next.push({ ...data, available: true });
     }
     saveState("fox_fleet", next);
