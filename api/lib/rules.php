@@ -136,8 +136,11 @@ function valid_appointment(array $data, string $id): bool
         && is_bool($data['returnedSelf'] ?? false);
 }
 
-/** يعيد سبب الرفض، أو null إن كانت العملية مسموحة. */
-function authorize_write(array $user, string $col, string $id, ?array $before, ?array $after): ?string
+/**
+ * يعيد سبب الرفض، أو null إن كانت العملية مسموحة.
+ * $appointmentOf (اختياري): يقرأ الموعد المحفوظ برقمه (لطلب السيارة الجديد).
+ */
+function authorize_write(array $user, string $col, string $id, ?array $before, ?array $after, ?callable $appointmentOf = null): ?string
 {
     $denied = 'ليست لديك صلاحية لتنفيذ هذا الإجراء.';
     $role = $user['role'];
@@ -197,6 +200,12 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
                 $owner = $after['requestedBy'] ?? null;
                 if (has_role($user, BUILDING_ROLES) && $owner !== (string)$user['id']) return 'بيانات الطلب غير صالحة';
                 if ($role === 'fleetSupervisor' && $owner !== null) return 'بيانات الطلب غير صالحة';
+                // مشرف السيارات يرى المواعيد الطبية ولا يطلب لها سيارة (يطلبها مشرف المبنى)، بل يضيف الرحلات غير الطبية.
+                // الموعد غير المحفوظ بعد هو رحلة غير طبية يضيفها معه في نفس اللحظة
+                if ($role === 'fleetSupervisor' && $appointmentOf) {
+                    $linked = $appointmentOf((string)($after['appointmentId'] ?? ''));
+                    if ($linked !== null && ($linked['category'] ?? '') !== 'غير طبية') return $denied;
+                }
                 $valid = only(array_keys($after), REQUEST_FIELDS)
                     && ($after['id'] ?? null) === $id
                     && is_text($after['appointmentId'] ?? null, 160)

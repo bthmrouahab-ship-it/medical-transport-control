@@ -91,6 +91,7 @@ import {
 } from "@/components/ui-kit";
 import NonMedicalTripForm from "./NonMedicalTripForm";
 import { RecentActivity } from "@/components/ActivityLog";
+import { AppointmentsOverview } from "@/components/AppointmentsOverview";
 import { useHospitals, useLiveVehicles, useNow } from "@/lib/useShared";
 import { NOTIFY_KEY, deviceNotificationsOn, useArrivalAlerts, useCancellationAlerts, useDenialAlerts, useRedirectAlerts } from "@/lib/arrivalAlerts";
 import { checkStateText, driverCheck } from "@shared/driverChecks";
@@ -183,6 +184,8 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
   const [driverMessages, setDriverMessages] = useState<DriverMessage[] | null>(null);
   /** نافذة تعديل رحلة مجمّعة: الطلبات المختارة فيها أولًا */
   const [editing, setEditing] = useState<string[] | null>(null);
+  /** توزيع السيارات، أو كل المواعيد للعرض فقط */
+  const [view, setView] = useState<"dispatch" | "appointments">("dispatch");
   const hospitals = useHospitals();
   const now = useNow(15000);
   const today = localDateString(now);
@@ -458,10 +461,22 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
         )}
       />
 
-      <div className="mb-6"><DateChooser value={date} onChange={onDateChange} /></div>
+      <div className="mb-6 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <DateChooser value={date} onChange={onDateChange} />
+        <Segmented
+          label="العرض"
+          value={view}
+          onChange={setView}
+          options={[
+            { value: "dispatch", label: "توزيع السيارات" },
+            { value: "appointments", label: `كل المواعيد ${appointments.filter((appointment) => appointment.appointmentDate === date).length}` },
+          ]}
+        />
+      </div>
 
       {addingTrip && <NonMedicalTripForm defaultDate={date} onCancel={() => setAddingTrip(false)} onSave={(appointment, request) => { onAddTrip(appointment, request); setAddingTrip(false); }} />}
 
+      {view === "appointments" ? <AppointmentsOverview appointments={appointments} requests={requests} date={date} now={now} /> : (<>
       <div className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4 lg:gap-4">
         <Stat icon={BellRing} tone="amber" label="بانتظار التوزيع" value={pending.length} hint={date === today ? "طلبات اليوم" : "طلبات التاريخ المحدد"} />
         <Stat icon={Truck} tone="blue" label="رحلات جارية" value={activeGroups.length} hint={trackingCount ? `${trackingCount} بمتابعة GPS` : "الآن"} />
@@ -732,6 +747,7 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
           </Panel>
         </aside>
       </div>
+      </>)}
 
       {plan && <AutoDispatchDialog plan={plan} free={dispatchable} load={load} rules={rules} transferIds={transferIds} personsOf={new Map(pending.map((trip) => [trip.request.id, trip.persons]))} driverOf={driverOf} placeText={placeText} nextFree={nextFree} onConfirm={confirmPlan} onClose={() => setPlan(null)} />}
       {editing && (
