@@ -60,6 +60,17 @@ export const DEFAULT_HOSPITALS: Hospital[] = [
   { id: "gardenia", name: "مجمع غاردينيا الطبي", nameEn: "Gardenia Medical Complex", zone: "الدوحة", lat: 25.334062, lng: 51.475187, aliases: ["غاردينيا", "جاردينيا", "gardenia"], verified: true }, // 8FMG+J3 الدوحة
   { id: "psychiatric", name: "مستشفى الطب النفسي", nameEn: "Hamad Psychiatric Hospital", zone: "الثمامة وروضة الخيل", lat: 25.276313, lng: 51.516312, aliases: ["الطب النفسي", "psychiatric"], verified: true }, // 7GG8+GG الدوحة
   { id: "sama", name: "مركز سما ميديكال كير الطبي", nameEn: "Sama Medical Care", zone: "الدوحة", lat: 25.250812, lng: 51.485312, aliases: ["سما ميديكال", "sama medical"], verified: true }, // 7F2P+84 الدوحة
+  // مراكز أضافها المستخدم من خرائط جوجل (أكتوبر 2026)
+  { id: "shafallah", name: "مركز الشفلح للأشخاص ذوي الإعاقة", nameEn: "Al-Shafallah Center for Persons with Disabilities", zone: "لوسيل", lat: 25.392188, lng: 51.515937, aliases: ["الشفلح", "shafallah", "shafalah"], verified: true }, // 9GR8+V9 لوسيل
+  { id: "iris-optic", name: "ايريس للنظارات", nameEn: "IRIS OPTIC", zone: "أم صلال", lat: 25.468063, lng: 51.402313, aliases: ["ايريس", "ايرس للنظارات", "iris optic", "iris optics"], verified: true }, // FC92+6W أم صلال علي
+  { id: "al-jiwan", name: "روضة الجيوان للتدخل المبكر", nameEn: "Al Jiwan Kindergarten for Early Intervention", zone: "الدوحة", lat: 25.333437, lng: 51.477516, aliases: ["الجيوان", "jiwan"], verified: true }, // 8FMH+92C الدوحة
+  { id: "the-view", name: "The View Hospital", nameEn: "The View Hospital", zone: "لوسيل", lat: 25.368062, lng: 51.525562, aliases: ["ذا فيو", "مستشفى ذا فيو", "the view", "view hospital"], verified: true }, // 9G9G+66 الدوحة
+  { id: "al-aman", name: "مستشفى الأمان", nameEn: "Al Aman Hospital", zone: "الثمامة وروضة الخيل", lat: 25.232188, lng: 51.574813, aliases: ["مستشفى الامان", "al aman hospital", "aman hospital"], verified: true }, // 6HJF+VW الدوحة
+  { id: "old-airport-hc", name: "مركز المطار القديم", nameEn: "Old Airport Health Center", zone: "الدوحة", lat: 25.256062, lng: 51.557937, aliases: ["مركز المطار القديم الصحي", "صحي المطار القديم", "old airport health"], verified: true }, // 7H45+C5 الدوحة
+  { id: "pediatric-sadd", name: "طوارئ أطفال السد", nameEn: "Hamad Pediatric Emergency - Al Sadd", zone: "الدوحة", lat: 25.280688, lng: 51.506422, aliases: ["طوارئ اطفال السد", "طوارئ الاطفال السد", "طوارئ الاطفال بالسد", "pediatric emergency al sadd", "pediatric emergency sadd", "al sadd pediatric"], verified: true }, // 7GJ4+7HF الطريق الدائري الثالث، الدوحة
+  { id: "al-ahli", name: "مستشفى الأهلي", nameEn: "Al Ahli Hospital", zone: "الدوحة", lat: 25.307562, lng: 51.499688, aliases: ["الاهلي", "al ahli", "ahli hospital"], verified: true }, // 8F5X+2V الدوحة
+  { id: "wakra-hc", name: "مركز الوكرة الصحي", nameEn: "Al Wakra Health Center", zone: "الوكرة", lat: 25.173437, lng: 51.595562, aliases: ["مركز الوكره", "الوكره الصحي", "wakra health"], verified: true }, // 5HFW+96 الوكرة
+  { id: "muaither-hc", name: "مركز معيذر الصحي", nameEn: "Muaither Health Center", zone: "الريان", lat: 25.234437, lng: 51.394812, aliases: ["معيذر", "muaither", "muaithar"], verified: true }, // 69MV+QW الريان
 ];
 
 export function normalizePlaceName(value: string) {
@@ -125,11 +136,19 @@ export function syncHospitals(stored: Hospital[], defaults: Hospital[] = DEFAULT
     return { ...fresh, aliases: Array.from(new Set([...fresh.aliases, ...hospital.aliases])) };
   });
   // المراكز التي أُضيفت إلى الدليل بعد حفظه في قاعدة البيانات، إلا إن كان المدير أضافها باسم آخر
+  // (تطابق اسمها مع مستشفى من الدليل الأصلي، مثل «مركز الوكرة الصحي» مع «الوكرة»، لا يعني أنه أضافها)
   const ids = new Set(stored.map((hospital) => hospital.id));
-  const added = defaults.filter((hospital) => ADDED_LATER.includes(hospital.id) && !ids.has(hospital.id)
-    && !matchHospital(hospital.name, stored) && !matchHospital(hospital.nameEn, stored));
+  const known = new Set(defaults.map((hospital) => hospital.id));
+  const addedByAdmin = (hospital: Hospital) => [hospital.name, hospital.nameEn].some((name) => {
+    const match = matchHospital(name, stored);
+    return Boolean(match && !known.has(match.id));
+  });
+  const added = defaults.filter((hospital) => ADDED_LATER.includes(hospital.id) && !ids.has(hospital.id) && !addedByAdmin(hospital));
   return [...updated, ...added];
 }
 
 /** مراكز أُضيفت إلى الدليل بعد إطلاق الموقع: تُضاف إلى الدليل المحفوظ عند دخول المدير. */
-const ADDED_LATER = ["expert-dental", "gardenia", "psychiatric", "sama"];
+const ADDED_LATER = [
+  "expert-dental", "gardenia", "psychiatric", "sama",
+  "shafallah", "iris-optic", "al-jiwan", "the-view", "al-aman", "old-airport-hc", "pediatric-sadd", "al-ahli", "wakra-hc", "muaither-hc",
+];
