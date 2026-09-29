@@ -65,6 +65,16 @@ describe("buses", () => {
     expect(assignVehicleForTrips([outings], [guest("A", "10:00")], new Map(), undefined, { now: at(10) })).toBeNull();
   });
 
+  it("never dispatch the clinic bus", () => {
+    const clinicBus = car("CL", "باص", { busRole: "clinic" });
+    expect(vehicleRestriction(clinicBus, { appointments: [guest("A", "10:00")] }, { now: at(10) })).toBe("في خدمة العيادة");
+    expect(vehicleRestriction(clinicBus, { appointments: [outing("U", "10:00")] }, { now: at(10) })).toBe("في خدمة العيادة");
+    expect(assignVehicleForTrips([clinicBus], [outing("U", "10:00")], new Map(), undefined, { now: at(10) })).toBeNull();
+    // ولا يُحسب في مقاعد الجمع
+    const items = ["U1", "U2", "U3", "U4"].map((id) => ({ appointment: outing(id, "10:00"), direction: "ذهاب" as const }));
+    expect(buildTripGroups(items, undefined, seatsFor([clinicBus, car("A")], { now: at(10) })).map((group) => group.appointmentIds.length)).toEqual([3]);
+  });
+
   it("group up to 14 passengers when a suitable bus is free", () => {
     const five = ["U1", "U2", "U3", "U4", "U5"].map((id, index) => outing(id, `10:${String(index * 5).padStart(2, "0")}`));
     const items = five.map((appointment) => ({ appointment, direction: "ذهاب" as const }));

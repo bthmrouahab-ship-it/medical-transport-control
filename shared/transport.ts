@@ -59,11 +59,12 @@ export type Vehicle = {
 
 /**
  * تخصيص الباص يختاره مشرف السيارات: shuttle «باص المجمع» يلف داخل المجمع (ويمكن إرساله إلى مستشفى الثمامة
- * وقت الذروة)، وnonMedical «باص الرحلات غير الطبية» يجمع الرحلات غير الطبية.
+ * وقت الذروة)، وnonMedical «باص الرحلات غير الطبية» يجمع الرحلات غير الطبية، وclinic «باص العيادة» في خدمة
+ * العيادة فلا يُرسل في رحلات التوزيع.
  */
-export type BusRole = "shuttle" | "nonMedical";
-export const BUS_ROLES: BusRole[] = ["shuttle", "nonMedical"];
-export const BUS_ROLE_LABELS: Record<BusRole, string> = { shuttle: "باص المجمع", nonMedical: "باص الرحلات غير الطبية" };
+export type BusRole = "shuttle" | "nonMedical" | "clinic";
+export const BUS_ROLES: BusRole[] = ["shuttle", "nonMedical", "clinic"];
+export const BUS_ROLE_LABELS: Record<BusRole, string> = { shuttle: "باص المجمع", nonMedical: "باص الرحلات غير الطبية", clinic: "باص العيادة" };
 
 /**
  * النص الظاهر للحالة: في الواجهة يُقال «الضيف» بدل «المريض». قيمة الحالة المخزنة «تم استلام المريض»
@@ -570,6 +571,7 @@ export type VehicleRules = { now?: Date; hospitals?: Hospital[] };
 
 /**
  * لماذا لا تناسب السيارة هذه الرحلة الآن، أو null إن كانت تناسبها (انشغالها برحلة يُفحص في مكان آخر):
+ * - باص العيادة في خدمة العيادة، فلا يُرسل في أي رحلة.
  * - الاحتياجات الخاصة تحتاج سيارة مجهزة، وعدد الضيوف لا يتجاوز مقاعد السيارة (الباص 14).
  * - الباصات غير متاحة من 6 إلى 9 صباحًا.
  * - باص المجمع يلف داخل المجمع، ويُرسل فقط إلى مستشفى الثمامة (ذهابًا أو عودة) وقت الذروة.
@@ -578,11 +580,12 @@ export type VehicleRules = { now?: Date; hospitals?: Hospital[] };
 export function vehicleRestriction(vehicle: Vehicle, trip: TripLoad, rules: VehicleRules = {}): string | null {
   const now = rules.now ?? new Date();
   if (!vehicle.available) return "خارج الخدمة";
+  const role = busRoleOf(vehicle);
+  if (role === "clinic") return "في خدمة العيادة";
   if (needsAccessibleVehicle(trip.appointments) && vehicle.kind !== "احتياجات خاصة") return "تحتاج سيارة احتياجات خاصة";
   const seats = vehicleSeats(vehicle, trip.appointments);
   if (trip.appointments.length > seats) return `تتسع لـ ${seats} فقط`;
   if (vehicle.kind === "باص" && busesOff(now)) return "الباصات غير متاحة من 6 إلى 9 صباحًا";
-  const role = busRoleOf(vehicle);
   if (role === "shuttle" && !(isRushHour(now) && !trip.transfer && trip.appointments.every((appointment) => isShuttleTrip(appointment, rules.hospitals)))) {
     return "باص المجمع: مستشفى الثمامة وقت الذروة فقط";
   }

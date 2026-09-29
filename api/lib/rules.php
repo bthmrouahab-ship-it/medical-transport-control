@@ -24,9 +24,9 @@ const REQUEST_FIELDS = ['id', 'appointmentId', 'vehiclePlate', 'driver', 'direct
 const TRIP_FIELDS = ['pickedUpAt', 'etaAt', 'destLat', 'destLng', 'arrivedAt', 'arrivalSource'];
 const VEHICLE_FIELDS = ['plate', 'driver', 'phone', 'kind', 'available', 'busRole', '_o'];
 const VEHICLE_KINDS = ['سيدان', 'احتياجات خاصة', 'باص'];
-/** تخصيص الباص: باص المجمع، أو باص الرحلات غير الطبية (نفس القيم في shared/transport.ts) */
-const BUS_ROLE_VALUES = ['shuttle', 'nonMedical'];
-const BUS_ROLE_LABELS = ['shuttle' => 'باص المجمع', 'nonMedical' => 'باص الرحلات غير الطبية'];
+/** تخصيص الباص: باص المجمع، أو باص الرحلات غير الطبية، أو باص العيادة (نفس القيم في shared/transport.ts) */
+const BUS_ROLE_VALUES = ['shuttle', 'nonMedical', 'clinic'];
+const BUS_ROLE_LABELS = ['shuttle' => 'باص المجمع', 'nonMedical' => 'باص الرحلات غير الطبية', 'clinic' => 'باص العيادة'];
 /** إنهاء مشرف السيارات لرحلة عالقة يقدّم حالة الموعد كما عند استلام الضيف: [قبل => بعد] */
 const TRIP_END_APPOINTMENT_STATUS = ['تم طلب السيارة' => 'تم استلام المريض', 'طلب عودة' => 'مكتملة', 'تم استلام المريض' => 'مكتملة'];
 const HOSPITAL_FIELDS = ['id', 'name', 'nameEn', 'zone', 'lat', 'lng', 'aliases', 'verified', '_o'];
@@ -250,7 +250,7 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
                 return only(array_keys($after), VEHICLE_FIELDS) && ($after['plate'] ?? null) === $id
                     && in_array($after['kind'] ?? null, VEHICLE_KINDS, true) && valid_bus_role($after) ? null : 'بيانات السيارة غير صالحة';
             }
-            // مشرف السيارات يغيّر إتاحة السيارة، وتخصيص الباص (باص المجمع أو الرحلات غير الطبية)
+            // مشرف السيارات يغيّر إتاحة السيارة، وتخصيص الباص (باص المجمع أو الرحلات غير الطبية أو العيادة)
             if ($role === 'fleetSupervisor' && $before !== null) {
                 return only($changed, ['available', 'busRole']) && is_bool($after['available'] ?? null) && valid_bus_role($after) ? null : $denied;
             }

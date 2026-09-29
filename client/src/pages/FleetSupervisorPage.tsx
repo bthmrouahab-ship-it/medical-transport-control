@@ -204,7 +204,9 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
   const availability = new Map(vehicles.map((vehicle) => [vehicle.plate, vehicleAvailability(vehicle.plate, requests, now, gpsLive(vehicle.plate))]));
   const isBusy = (plate: string) => Boolean(availability.get(plate)?.busy);
   const offHours = (vehicle: Vehicle) => vehicle.kind === "باص" && busOffNow;
-  const dispatchable = vehicles.filter((vehicle) => vehicle.available && !isBusy(vehicle.plate) && !offHours(vehicle));
+  // باص العيادة في خدمتها، فلا يُحسب بين السيارات المتاحة للتوزيع
+  const forClinic = (vehicle: Vehicle) => busRoleOf(vehicle) === "clinic";
+  const dispatchable = vehicles.filter((vehicle) => vehicle.available && !isBusy(vehicle.plate) && !offHours(vehicle) && !forClinic(vehicle));
   // رحلات كل سيارة في اليوم المختار: السيارة الأقل رحلات تُقترح أولًا حتى يتوزع العمل
   const load = vehicleLoad(requests, appointments, date);
 
@@ -234,13 +236,13 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
     { ...rules, transfer: trips.some((trip) => isTransfer(trip.request)) });
   /**
    * كل السيارات في الخدمة لرحلة: المتاحة لها الآن أولًا (السيارة المجهزة آخرًا للرحلة العادية)، ثم غير المتاحة مع السبب.
-   * السيارات العادية لا تظهر لرحلة احتياجات خاصة.
+   * السيارات العادية لا تظهر لرحلة احتياجات خاصة، ولا يظهر باص العيادة.
    */
   const choicesFor = (trips: Trip[]): VehicleChoice[] => {
     const riders = { appointments: trips.map((trip) => trip.appointment), transfer: trips.some((trip) => isTransfer(trip.request)) };
     const accessible = needsAccessibleVehicle(riders.appointments);
     return vehicles
-      .filter((vehicle) => vehicle.available && (!accessible || vehicle.kind === "احتياجات خاصة"))
+      .filter((vehicle) => vehicle.available && !forClinic(vehicle) && (!accessible || vehicle.kind === "احتياجات خاصة"))
       .map((vehicle) => {
         const until = availability.get(vehicle.plate)?.until;
         const why = isBusy(vehicle.plate) ? `مشغولة${until ? ` حتى ${timeLabel(until)}` : ""}` : vehicleRestriction(vehicle, riders, rules);
@@ -343,7 +345,7 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
     setEditing(null);
   }
 
-  /** تخصيص الباص: باص المجمع أو باص الرحلات غير الطبية (باص واحد لكل تخصيص)، أو باص عادي. */
+  /** تخصيص الباص: باص المجمع أو باص الرحلات غير الطبية أو باص العيادة (باص واحد لكل تخصيص)، أو باص عادي. */
   function setBusRole(bus: Vehicle, role: BusRole | "") {
     const clear = ({ busRole: _busRole, ...vehicle }: Vehicle): Vehicle => vehicle;
     onUpdate(vehicles.map((vehicle) => vehicle.plate === bus.plate ? (role ? { ...vehicle, busRole: role } : clear(vehicle))
@@ -396,6 +398,7 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
     if (!vehicle.available) return { tone: "neutral" as const, text: "خارج الخدمة" };
     const state = availability.get(vehicle.plate);
     if (!state?.busy) {
+      if (forClinic(vehicle)) return { tone: "neutral" as const, text: "في خدمة العيادة" };
       if (offHours(vehicle)) return { tone: "neutral" as const, text: "الباصات غير متاحة من 6 إلى 9 صباحًا" };
       if (busRoleOf(vehicle) === "shuttle") {
         return { tone: "violet" as const, text: isRushHour(now) ? "يلف داخل المجمع · وقت الذروة: يمكن إرساله إلى مستشفى الثمامة" : "يلف داخل المجمع" };
@@ -689,7 +692,7 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
                           className="mt-1 h-8 max-w-full rounded-lg border border-slate-300 bg-white px-2 text-xs text-ink outline-none focus:border-brand-600"
                         >
                           <option value="">باص عادي</option>
-                          {BUS_ROLES.map((role) => <option key={role} value={role}>{BUS_ROLE_LABELS[role]}{role === "shuttle" ? " (يلف داخل المجمع)" : ""}</option>)}
+                          {BUS_ROLES.map((role) => <option key={role} value={role}>{BUS_ROLE_LABELS[role]}{role === "shuttle" ? " (يلف داخل المجمع)" : role === "clinic" ? " (في خدمة العيادة)" : ""}</option>)}
                         </select>
                       )}
                     </div>
