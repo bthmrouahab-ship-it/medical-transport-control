@@ -84,14 +84,21 @@ export function tripsSection(appointments: ClinicAppointment[], requests: Vehicl
     if (id) events.set(id, [...(events.get(id) ?? []), item]);
   }
   const who = (item?: ActivityItem) => (item ? `${hm(item.at)} · ${item.userName}` : "");
+  // عودة الـ Nurse فقط ليست رحلة الضيف: لا تظهر في أعمدة عودته
+  const nurseIds = new Set(requests.filter((request) => request.nurseOnly).map((request) => request.id));
   const rows = appointments
     .filter((appointment) => inPeriod(appointment.appointmentDate))
     .sort((a, b) => `${a.appointmentDate} ${a.appointmentAt}`.localeCompare(`${b.appointmentDate} ${b.appointmentAt}`))
     .map((appointment) => {
       const list = events.get(appointment.id) ?? [];
-      const find = (action: string, direction?: string) => list.find((item) => item.action === action && (!direction || item.details.direction === direction));
+      const find = (action: string, direction?: string) => list.find((item) => item.action === action && (!direction || item.details.direction === direction)
+        && !nurseIds.has(item.details.request ?? ""));
       const out = requests.filter((request) => request.appointmentId === appointment.id && request.direction === "ذهاب").at(-1);
-      const back = requests.filter((request) => request.appointmentId === appointment.id && request.direction === "عودة").at(-1);
+      const back = requests.filter((request) => request.appointmentId === appointment.id && request.direction === "عودة" && !request.nurseOnly).at(-1);
+      // الضيف عاد بنفسه بلا سيارة عودة
+      const selfReturn = appointment.returnedSelf
+        ? `عاد بنفسه${appointment.returnedSelfAt ? ` ${hm(appointment.returnedSelfAt)}` : ""}${appointment.returnedSelfBy ? ` · ${appointment.returnedSelfBy}` : ""}`
+        : "";
       const step = (action: string, direction: string, fallback = "") => who(find(action, direction)) || fallback;
       const arrival = (direction: string, request?: VehicleRequest) => {
         const event = find("request.arrived", direction);
@@ -124,7 +131,7 @@ export function tripsSection(appointments: ClinicAppointment[], requests: Vehicl
         step("request.car_arrived", "ذهاب"),
         step("request.pickup", "ذهاب", hm(out?.pickedUpAt)),
         arrival("ذهاب", out),
-        step("request.create", "عودة", back?.createdAt ?? ""),
+        step("request.create", "عودة", back?.createdAt ?? "") || selfReturn,
         step("request.dispatch", "عودة", back?.notificationSentAt ?? ""),
         car(back, "عودة"),
         step("request.pickup", "عودة", hm(back?.pickedUpAt)),

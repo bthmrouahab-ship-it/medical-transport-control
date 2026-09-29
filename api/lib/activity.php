@@ -150,6 +150,10 @@ function describe_write(PDO $pdo, string $col, string $id, ?array $before, ?arra
                 $details['reason'] = $after['cancelReason'] ?? '';
                 return ['appointment', 'appointment.cancel', "إلغاء موعد $who ({$details['destination']}، $when): " . ($after['cancelReason'] ?? ''), $details];
             }
+            // الضيف عاد إلى المجمع بنفسه (يسجّله مشرف المبنى)
+            if (($after['returnedSelf'] ?? null) === true && ($before['returnedSelf'] ?? null) !== true) {
+                return ['appointment', 'appointment.self_return', "عودة $who إلى المجمع بنفسه من {$details['destination']} ($when) · بلا سيارة عودة", $details];
+            }
             // تغيّر الحالة وحده نتيجة طلب السيارة أو استلام المريض، ويُسجَّل مع الطلب نفسه
             if (!array_diff($changed, ['status'])) return null;
             $changes = field_changes($before, $after, APPOINTMENT_FIELD_LABELS);
@@ -167,6 +171,8 @@ function describe_write(PDO $pdo, string $col, string $id, ?array $before, ?arra
                 'driver' => $request['driver'] ?? '',
             ];
             $who = $details['patient'] ?? '';
+            // عودة الـ Nurse فقط: الراكب هو الـ Nurse مرافقة الضيف
+            if (!empty($request['nurseOnly'])) $who = "الـ Nurse مرافقة $who";
             $direction = $request['direction'] ?? 'ذهاب';
             $plate = $request['vehiclePlate'] ?? '';
             if ($before === null) {
@@ -176,7 +182,15 @@ function describe_write(PDO $pdo, string $col, string $id, ?array $before, ?arra
                     $details['from'] = $first['clinic'] ?? '';
                     return ['request', 'request.create', "طلب نقل $who من {$details['from']} إلى {$details['destination']} (موعد " . ($details['time'] ?? '') . ') بدل العودة إلى المجمع', $details];
                 }
+                if (!empty($request['nurseOnly'])) {
+                    return ['request', 'request.create', "طلب عودة الـ Nurse فقط من {$details['destination']} (مرافقة {$details['patient']}، مبنى {$details['building']}) · يبقى الضيف في موعده", $details];
+                }
                 return ['request', 'request.create', "طلب سيارة $direction لـ $who (مبنى {$details['building']} ← {$details['destination']}، " . ($details['time'] ?? '') . ')', $details];
+            }
+            // الضيف يعود مع الـ Nurse في طلب عودتها
+            if ($before !== null && $after !== null && $changed === ['nurseOnly']) {
+                $guest = $details['patient'] ?? '';
+                return ['request', 'request.join_nurse', "عودة $guest مع الـ Nurse في نفس الطلب" . ($plate ? " (السيارة $plate)" : ''), $details];
             }
             if ($after === null) {
                 return ['request', 'request.cancel', "إلغاء طلب السيارة ($direction) لـ $who" . ($plate ? " وكانت السيارة $plate قد أُرسلت" : ''), $details];

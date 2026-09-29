@@ -37,10 +37,10 @@ describe("buses", () => {
 
   it("carry 14 guests, a car 3, and special needs need an equipped vehicle", () => {
     const four = { appointments: ["A", "B", "C", "D"].map((id) => guest(id, "10:00")) };
-    expect(vehicleRestriction(car("A"), four, { now: at(10) })).toBe("تتسع لـ 3 فقط");
+    expect(vehicleRestriction(car("A"), four, { now: at(10) })).toBe("تتسع لـ 3 أشخاص فقط");
     expect(vehicleRestriction(bus, four, { now: at(10) })).toBeNull();
     const fifteen = { appointments: Array.from({ length: 15 }, (_, index) => guest(`G${index}`, "10:00")) };
-    expect(vehicleRestriction(bus, fifteen, { now: at(10) })).toBe("تتسع لـ 14 فقط");
+    expect(vehicleRestriction(bus, fifteen, { now: at(10) })).toBe("تتسع لـ 14 شخصًا فقط");
     expect(vehicleRestriction(bus, { appointments: [guest("W", "10:00", { kind: "احتياجات خاصة" })] }, { now: at(10) })).toBe("تحتاج سيارة احتياجات خاصة");
   });
 

@@ -39,6 +39,10 @@ export type ClinicAppointment = {
   gender?: Gender;
   /** حالة سرطان: أولوية في إرسال السيارة */
   cancer?: boolean;
+  /** الضيف عاد إلى المجمع بنفسه بلا سيارة عودة (يسجّله مشرف المبنى): من سجّله ومتى (ISO) */
+  returnedSelf?: boolean;
+  returnedSelfBy?: string;
+  returnedSelfAt?: string;
 };
 
 export type Gender = "ذكر" | "أنثى";
@@ -104,6 +108,11 @@ export type VehicleRequest = {
    * بدل العودة إلى المجمع. الطلب «ذهاب» لموعده الثاني.
    */
   fromAppointmentId?: string;
+  /**
+   * عودة الـ Nurse فقط (طلب «عودة» لموعد ضيف معه Nurse): الـ Nurse تعود وحدها إلى المجمع ويبقى الضيف في موعده.
+   * لا يغيّر حالة الموعد، وعودة الضيف بعدها بدون الـ Nurse.
+   */
+  nurseOnly?: boolean;
   /** السائق سجّل وصوله إلى نقطة الاستلام من تطبيقه (ISO)؛ وقت استلامه الضيف هو pickedUpAt */
   driverArrivedAt?: string;
   /** موقع هاتف السائق لحظة تسجيل الوصول، ولحظة تسجيل الاستلام */
@@ -312,6 +321,9 @@ export function migrateAppointment(value: unknown, index = 0): ClinicAppointment
       : {}),
     ...(normalizeGender(raw.gender) ? { gender: normalizeGender(raw.gender) } : {}),
     ...(raw.cancer === true ? { cancer: true } : {}),
+    ...(raw.returnedSelf === true
+      ? { returnedSelf: true, returnedSelfBy: toText(raw.returnedSelfBy) || undefined, returnedSelfAt: toText(raw.returnedSelfAt) || undefined }
+      : {}),
   };
 }
 
@@ -480,6 +492,7 @@ export function migrateRequest(value: unknown): VehicleRequest | null {
     arrivedAt: isoTime(raw.arrivedAt),
     arrivalSource,
     fromAppointmentId: toText(raw.fromAppointmentId) || undefined,
+    ...(raw.nurseOnly === true ? { nurseOnly: true } : {}),
     // الخانات الفارغة لا تُضاف، حتى لا تظهر تغييرات وهمية عند المقارنة قبل الحفظ
     ...Object.fromEntries(Object.entries(check).filter(([, value]) => value !== undefined)),
   };
@@ -487,6 +500,28 @@ export function migrateRequest(value: unknown): VehicleRequest | null {
 
 /** طلب نقل بين موعدين (من مستشفى الموعد الأول إلى الثاني). */
 export const isTransfer = (request: Pick<VehicleRequest, "fromAppointmentId">) => Boolean(request.fromAppointmentId);
+
+/** الضيف معه Nurse (فيمكن أن تعود وحدها قبله). */
+export const hasNurse = (appointment: Pick<ClinicAppointment, "assistance">) => appointment.assistance.includes("يحتاج Nurse");
+
+/**
+ * عدد الأشخاص في رحلة الضيف (للمقاعد): الضيف، ومرافقه إن احتاج مرافقًا، والـ Nurse إن احتاجها.
+ * عودة الـ Nurse فقط شخص واحد، وعودة الضيف بعد أن عادت الـ Nurse وحدها (nurseBack) بدونها.
+ */
+export function tripPersons(appointment: Pick<ClinicAppointment, "assistance">, request?: Pick<VehicleRequest, "nurseOnly">, nurseBack = false) {
+  if (request?.nurseOnly) return 1;
+  return 1 + Number(appointment.assistance.includes("يحتاج مرافق")) + Number(hasNurse(appointment) && !nurseBack);
+}
+
+/** عدد الأشخاص لطلب بين كل الطلبات: عودة الضيف بعد «عودة الـ Nurse فقط» لنفس الموعد لا تحسب الـ Nurse. */
+export function requestPersons(request: VehicleRequest, appointment: ClinicAppointment, requests: VehicleRequest[]) {
+  const nurseBack = request.direction === "عودة" && !request.nurseOnly
+    && requests.some((other) => other.nurseOnly && other.appointmentId === request.appointmentId && other.id !== request.id);
+  return tripPersons(appointment, request, nurseBack);
+}
+
+/** عدد الأشخاص بالعربية: شخص واحد، شخصان، 3 أشخاص، 11 شخصًا */
+export const personsText = (count: number) => (count === 1 ? "شخص واحد" : count === 2 ? "شخصان" : count <= 10 ? `${count} أشخاص` : `${count} شخصًا`);
 
 const guestKey = (appointment: Pick<ClinicAppointment, "patientName" | "buildingNumber" | "apartmentNumber">) =>
   [appointment.patientName, appointment.buildingNumber, appointment.apartmentNumber].map((part) => part.trim().replace(/\s+/g, " ").toLowerCase()).join("|");
@@ -554,7 +589,7 @@ export function busesOff(at: Date) {
   return hour >= BUS_OFF_HOURS.from && hour < BUS_OFF_HOURS.to;
 }
 
-/** عدد الضيوف الذين تتسع لهم السيارة في رحلة واحدة: الباص 14، والسيارة 3، ومع ضيف احتياجات خاصة 2. */
+/** عدد الأشخاص الذين تتسع لهم السيارة في رحلة واحدة (مع المرافقين والـ Nurse): الباص 14، والسيارة 3، ومع ضيف احتياجات خاصة 2. */
 export function vehicleSeats(vehicle: Pick<Vehicle, "kind">, appointments: Pick<ClinicAppointment, "kind">[] = []) {
   if (appointments.some((appointment) => appointment.kind === "احتياجات خاصة")) return groupCapacity("احتياجات خاصة");
   return vehicle.kind === "باص" ? BUS_SEATS : groupCapacity("عادي");
@@ -564,15 +599,22 @@ export function vehicleSeats(vehicle: Pick<Vehicle, "kind">, appointments: Pick<
 export const isShuttleTrip = (appointment: ClinicAppointment, hospitals: Hospital[] = DEFAULT_HOSPITALS) =>
   appointmentHospital(appointment, hospitals)?.id === SHUTTLE_HOSPITAL_ID;
 
-/** رحلة (ضيف أو أكثر في سيارة واحدة). transfer: نقل بين موعدين (يبدأ من مستشفى). */
-export type TripLoad = { appointments: ClinicAppointment[]; transfer?: boolean };
+/**
+ * رحلة (ضيف أو أكثر في سيارة واحدة). transfer: نقل بين موعدين (يبدأ من مستشفى).
+ * persons: عدد الأشخاص (الضيوف ومرافقوهم والـ Nurse: requestPersons)، وإلا يُحسب من احتياجات الضيوف.
+ */
+export type TripLoad = { appointments: ClinicAppointment[]; transfer?: boolean; persons?: number };
+
+/** عدد الأشخاص في الرحلة. */
+export const loadPersons = (trip: TripLoad) => trip.persons ?? trip.appointments.reduce((sum, appointment) => sum + tripPersons(appointment), 0);
 /** وقت اختيار السيارة (لساعات الباصات ووقت الذروة) ودليل المستشفيات */
 export type VehicleRules = { now?: Date; hospitals?: Hospital[] };
 
 /**
  * لماذا لا تناسب السيارة هذه الرحلة الآن، أو null إن كانت تناسبها (انشغالها برحلة يُفحص في مكان آخر):
  * - باص العيادة في خدمة العيادة، فلا يُرسل في أي رحلة.
- * - الاحتياجات الخاصة تحتاج سيارة مجهزة، وعدد الضيوف لا يتجاوز مقاعد السيارة (الباص 14).
+ * - الاحتياجات الخاصة تحتاج سيارة مجهزة، وعدد الأشخاص (مع المرافق والـ Nurse) لا يتجاوز مقاعد السيارة (الباص 14)؛
+ *   والضيف الواحد مع مرافقيه يُقبل دائمًا في السيارة المناسبة له.
  * - الباصات غير متاحة من 6 إلى 9 صباحًا.
  * - باص المجمع يلف داخل المجمع، ويُرسل فقط إلى مستشفى الثمامة (ذهابًا أو عودة) وقت الذروة.
  * - باص الرحلات غير الطبية لها فقط.
@@ -584,7 +626,7 @@ export function vehicleRestriction(vehicle: Vehicle, trip: TripLoad, rules: Vehi
   if (role === "clinic") return "في خدمة العيادة";
   if (needsAccessibleVehicle(trip.appointments) && vehicle.kind !== "احتياجات خاصة") return "تحتاج سيارة احتياجات خاصة";
   const seats = vehicleSeats(vehicle, trip.appointments);
-  if (trip.appointments.length > seats) return `تتسع لـ ${seats} فقط`;
+  if (trip.appointments.length > 1 && loadPersons(trip) > seats) return `تتسع ${seats === 2 ? "لشخصين" : `لـ ${personsText(seats)}`} فقط`;
   if (vehicle.kind === "باص" && busesOff(now)) return "الباصات غير متاحة من 6 إلى 9 صباحًا";
   if (role === "shuttle" && !(isRushHour(now) && !trip.transfer && trip.appointments.every((appointment) => isShuttleTrip(appointment, rules.hospitals)))) {
     return "باص المجمع: مستشفى الثمامة وقت الذروة فقط";
@@ -629,9 +671,9 @@ export function assignVehicleForTrips(
   appointments: ClinicAppointment[],
   load: Map<string, number> = new Map(),
   rank?: (vehicle: Vehicle) => number,
-  rules: VehicleRules & { transfer?: boolean } = {},
+  rules: VehicleRules & { transfer?: boolean; persons?: number } = {},
 ) {
-  const trip = { appointments, transfer: rules.transfer };
+  const trip = { appointments, transfer: rules.transfer, persons: rules.persons };
   const nonMedical = appointments.length > 0 && appointments.every(isNonMedical);
   const candidates = vehicles
     .map((vehicle, index) => ({ vehicle, index }))
@@ -643,7 +685,7 @@ export function assignVehicleForTrips(
 }
 
 /**
- * أقصى عدد ضيوف في رحلة مجمّعة لكل موعد: أكبر سيارة تناسبه من السيارات المعطاة (الباص 14 إن كان يناسبه الآن)،
+ * أقصى عدد أشخاص في رحلة مجمّعة فيها هذا الموعد: أكبر سيارة تناسبه من السيارات المعطاة (الباص 14 إن كان يناسبه الآن)،
  * وإلا 3 (و2 للاحتياجات الخاصة). لجمع الرحلات (buildTripGroups).
  */
 export function seatsFor(vehicles: Vehicle[], rules: VehicleRules = {}) {
@@ -655,7 +697,8 @@ export function seatsFor(vehicles: Vehicle[], rules: VehicleRules = {}) {
   );
 }
 
-export type PlannedTrip = { requestIds: string[]; appointments: ClinicAppointment[]; direction: VehicleRequest["direction"] };
+/** رحلة في خطة التوزيع: الطلبات ومواعيدها بنفس الترتيب، وعدد الأشخاص فيها (مع المرافقين والـ Nurse) */
+export type PlannedTrip = { requestIds: string[]; appointments: ClinicAppointment[]; direction: VehicleRequest["direction"]; persons: number };
 export type DispatchPlan = {
   /** رحلة (ضيف أو أكثر مجمّعين) وسيارتها */
   assignments: (PlannedTrip & { vehicle: Vehicle })[];
@@ -665,15 +708,18 @@ export type DispatchPlan = {
 
 /**
  * خطة توزيع كل الطلبات المنتظرة على السيارات المتاحة الآن (كل سيارة رحلة واحدة):
- * - الرحلات القابلة للجمع (buildTripGroups) تذهب في سيارة واحدة (حتى 14 في الباص إن كان يناسبها).
+ * - الرحلات القابلة للجمع (buildTripGroups) تذهب في سيارة واحدة (حتى 14 شخصًا في الباص إن كان يناسبها).
  * - حالات السرطان أولًا (أولوية)، ثم رحلات الاحتياجات الخاصة لأن سياراتها أقل، ثم الأقرب موعدًا.
  * - كل رحلة تأخذ السيارة المناسبة الأقل رحلات اليوم، فيتوزع العمل على كل السيارات.
- * - الرحلة المجمّعة الأكبر من السيارة المتبقية تُقسم (3 ضيوف في كل سيارة).
+ * - الرحلة المجمّعة الأكبر من السيارة المتبقية تُقسم (3 أشخاص في كل سيارة).
  * - rank (اختياري): تفضيل حسب مكان السيارة لكل رحلة (مثل سيارة خارج المجمع قريبة من ضيف العودة).
  */
 export function planDispatch(
-  /** at (اختياري): وقت الحاجة إلى السيارة لكل رحلة (neededAt من وقت الطلب) لجمع الرحلات */
-  trips: { request: VehicleRequest; appointment: ClinicAppointment; at?: Date }[],
+  /**
+   * at (اختياري): وقت الحاجة إلى السيارة لكل رحلة (neededAt من وقت الطلب) لجمع الرحلات.
+   * persons (اختياري): عدد الأشخاص في الرحلة (requestPersons)، وإلا من احتياجات الضيف.
+   */
+  trips: { request: VehicleRequest; appointment: ClinicAppointment; at?: Date; persons?: number }[],
   vehicles: Vehicle[],
   load: Map<string, number> = new Map(),
   hospitals: Hospital[] = DEFAULT_HOSPITALS,
@@ -681,6 +727,8 @@ export function planDispatch(
   rules: VehicleRules = {},
 ): DispatchPlan {
   const byAppointment = new Map(trips.map((trip) => [trip.appointment.id, trip]));
+  const personsOf = new Map(trips.map((trip) => [trip.request.id, trip.persons ?? tripPersons(trip.appointment, trip.request)]));
+  const sum = (requestIds: string[]) => requestIds.reduce((total, id) => total + (personsOf.get(id) ?? 1), 0);
   const free = vehicles.filter((vehicle) => vehicle.available);
   const vehicleRules = { ...rules, hospitals };
   const units: PlannedTrip[] = [];
@@ -688,19 +736,27 @@ export function planDispatch(
   // النقل بين موعدين يبدأ من مستشفى، فلا يُجمع مع رحلات تبدأ من المجمع
   const groupable = trips.filter((trip) => !isTransfer(trip.request));
   const transferIds = new Set(trips.filter((trip) => isTransfer(trip.request)).map((trip) => trip.request.id));
-  const groups = buildTripGroups(groupable.map((trip) => ({ appointment: trip.appointment, direction: trip.request.direction, at: trip.at })), hospitals, seatsFor(free, vehicleRules));
+  const unit = (members: typeof trips, direction: VehicleRequest["direction"]): PlannedTrip => {
+    const requestIds = members.map((trip) => trip.request.id);
+    return { requestIds, appointments: members.map((trip) => trip.appointment), direction, persons: sum(requestIds) };
+  };
+  const groups = buildTripGroups(
+    groupable.map((trip) => ({ appointment: trip.appointment, direction: trip.request.direction, at: trip.at, persons: personsOf.get(trip.request.id) })),
+    hospitals,
+    seatsFor(free, vehicleRules),
+  );
   for (const group of groups) {
     const members = group.appointmentIds.map((id) => byAppointment.get(id)).filter((trip): trip is NonNullable<typeof trip> => Boolean(trip));
     if (members.length < 2) continue;
     members.forEach((trip) => grouped.add(trip.appointment.id));
-    units.push({ requestIds: members.map((trip) => trip.request.id), appointments: members.map((trip) => trip.appointment), direction: group.direction });
+    units.push(unit(members, group.direction));
   }
   for (const trip of trips) {
-    if (!grouped.has(trip.appointment.id)) units.push({ requestIds: [trip.request.id], appointments: [trip.appointment], direction: trip.request.direction });
+    if (!grouped.has(trip.appointment.id)) units.push(unit([trip], trip.request.direction));
   }
-  const startOf = (unit: PlannedTrip) => unit.appointments.map((appointment) => `${appointment.appointmentDate} ${appointment.appointmentAt}`).sort()[0];
+  const startOf = (item: PlannedTrip) => item.appointments.map((appointment) => `${appointment.appointmentDate} ${appointment.appointmentAt}`).sort()[0];
   // حالات السرطان أولًا، ثم الاحتياجات الخاصة (سياراتها أقل)، ثم الأقرب موعدًا
-  const priority = (unit: PlannedTrip) => unit.appointments.some(isPriority);
+  const priority = (item: PlannedTrip) => item.appointments.some(isPriority);
   units.sort((a, b) => Number(priority(b)) - Number(priority(a))
     || Number(needsAccessibleVehicle(b.appointments)) - Number(needsAccessibleVehicle(a.appointments))
     || startOf(a).localeCompare(startOf(b)));
@@ -708,28 +764,36 @@ export function planDispatch(
   const plan: DispatchPlan = { assignments: [], waiting: [] };
   const queue = [...units];
   while (queue.length) {
-    const unit = queue.shift()!;
-    const transfer = unit.requestIds.some((id) => transferIds.has(id));
-    const vehicle = assignVehicleForTrips(free, unit.appointments, load, rank && ((candidate) => rank(unit, candidate)), { ...vehicleRules, transfer });
+    const next = queue.shift()!;
+    const transfer = next.requestIds.some((id) => transferIds.has(id));
+    const vehicle = assignVehicleForTrips(free, next.appointments, load, rank && ((candidate) => rank(next, candidate)), { ...vehicleRules, transfer, persons: next.persons });
     if (vehicle) {
       free.splice(free.indexOf(vehicle), 1);
-      plan.assignments.push({ ...unit, vehicle });
+      plan.assignments.push({ ...next, vehicle });
       continue;
     }
-    // رحلة مجمّعة للباص وأُخذ الباص: تُقسم على السيارات بالترتيب الزمني
-    const size = Math.min(...unit.appointments.map((appointment) => groupCapacity(appointment.kind)));
-    if (unit.appointments.length > size) {
-      const order = unit.appointments.map((appointment, index) => ({ appointment, id: unit.requestIds[index] }))
+    // رحلة مجمّعة للباص وأُخذ الباص: تُقسم على السيارات بالترتيب الزمني، كل سيارة حتى 3 أشخاص
+    const size = Math.min(...next.appointments.map((appointment) => groupCapacity(appointment.kind)));
+    if (next.appointments.length > 1 && next.persons > size) {
+      const order = next.appointments.map((appointment, index) => ({ appointment, id: next.requestIds[index] }))
         .sort((a, b) => a.appointment.appointmentAt.localeCompare(b.appointment.appointmentAt));
       const parts: PlannedTrip[] = [];
-      for (let index = 0; index < order.length; index += size) {
-        const part = order.slice(index, index + size);
-        parts.push({ requestIds: part.map((item) => item.id), appointments: part.map((item) => item.appointment), direction: unit.direction });
+      let part: typeof order = [];
+      const close = () => {
+        if (!part.length) return;
+        const requestIds = part.map((item) => item.id);
+        parts.push({ requestIds, appointments: part.map((item) => item.appointment), direction: next.direction, persons: sum(requestIds) });
+        part = [];
+      };
+      for (const item of order) {
+        if (part.length && sum([...part.map((member) => member.id), item.id]) > size) close();
+        part.push(item);
       }
+      close();
       queue.unshift(...parts);
       continue;
     }
-    plan.waiting.push(unit);
+    plan.waiting.push(next);
   }
   plan.assignments.sort((a, b) => startOf(a).localeCompare(startOf(b)));
   plan.waiting.sort((a, b) => startOf(a).localeCompare(startOf(b)));
@@ -859,13 +923,15 @@ export const DEFAULT_VEHICLES: Vehicle[] = FLEET_SEED;
 
 // ————— جمع الرحلات —————
 
-/** أقصى عدد ضيوف في رحلة مجمّعة بسيارة عادية: 3، ومع احتياجات خاصة 2 (الباص 14: vehicleSeats). */
+/** أقصى عدد أشخاص في رحلة مجمّعة بسيارة عادية (مع المرافقين والـ Nurse): 3، ومع احتياجات خاصة 2 (الباص 14: vehicleSeats). */
 export function groupCapacity(kind: AppointmentKind) {
   return kind === "احتياجات خاصة" ? 2 : 3;
 }
 
 export type TripGroup = {
   appointmentIds: string[];
+  /** عدد الأشخاص (الضيوف ومرافقوهم والـ Nurse) */
+  persons: number;
   direction: VehicleRequest["direction"];
   /** أقل نقاط بين أي موعدين في المجموعة */
   score: number;
@@ -903,15 +969,19 @@ function pairReason(details: ReturnType<typeof calculateTripGroupingScore>) {
  * at (اختياري): وقت الحاجة إلى السيارة لكل رحلة (neededAt: من وقت الطلب)، وإلا وقت الموعد.
  */
 export function buildTripGroups(
-  items: { appointment: ClinicAppointment; direction: VehicleRequest["direction"]; at?: Date }[],
+  /** persons (اختياري): عدد الأشخاص مع الضيف (requestPersons)، وإلا من احتياجاته */
+  items: { appointment: ClinicAppointment; direction: VehicleRequest["direction"]; at?: Date; persons?: number }[],
   hospitals: Hospital[] = DEFAULT_HOSPITALS,
-  /** أقصى عدد ضيوف في رحلة فيها هذا الموعد (seatsFor: الباص 14)، وإلا groupCapacity */
+  /** أقصى عدد أشخاص في رحلة فيها هذا الموعد (seatsFor: الباص 14)، وإلا groupCapacity */
   seats?: (appointment: ClinicAppointment) => number,
 ): TripGroup[] {
   const groups: TripGroup[] = [];
   const timeOf = new Map(items.map((item) => [item.appointment.id, item.at ?? appointmentDateTime(item.appointment)]));
   const seatsOf = new Map(items.map((item) => [item.appointment.id, seats ? seats(item.appointment) : groupCapacity(item.appointment.kind)]));
+  const personsOf = new Map(items.map((item) => [item.appointment.id, item.persons ?? tripPersons(item.appointment)]));
   const cap = (appointment: ClinicAppointment) => seatsOf.get(appointment.id) ?? groupCapacity(appointment.kind);
+  const people = (appointment: ClinicAppointment) => personsOf.get(appointment.id) ?? 1;
+  const total = (members: ClinicAppointment[]) => members.reduce((sum, member) => sum + people(member), 0);
   const byRequest = items.some((item) => item.at);
   for (const direction of ["ذهاب", "عودة"] as const) {
     const list = items.filter((item) => item.direction === direction).map((item) => item.appointment);
@@ -922,7 +992,8 @@ export function buildTripGroups(
       for (let j = i + 1; j < list.length; j += 1) {
         const details = calculateTripGroupingScore(list[i], list[j], hospitals, [timeOf.get(list[i].id)!, timeOf.get(list[j].id)!]);
         score.set(key(list[i].id, list[j].id), details);
-        if (canShareVehicle(details, 45)) pairs.push({ a: list[i], b: list[j], details });
+        const fits = people(list[i]) + people(list[j]) <= Math.min(cap(list[i]), cap(list[j]));
+        if (fits && canShareVehicle(details, 45)) pairs.push({ a: list[i], b: list[j], details });
       }
     }
     pairs.sort((x, y) => y.details.score - x.details.score || x.details.timeGapMinutes - y.details.timeGapMinutes);
@@ -935,11 +1006,12 @@ export function buildTripGroups(
       if (used.has(pair.a.id) || used.has(pair.b.id)) continue;
       const members = [pair.a, pair.b];
       const capacity = () => Math.min(...members.map(cap));
-      // توسيع المجموعة بكل موعد متوافق مع كل الأعضاء: أولًا من لا يقلل المقاعد (ركاب الباص)، ثم الباقي
+      // توسيع المجموعة بكل موعد متوافق مع كل الأعضاء ما دامت المقاعد تكفي أشخاصه (مع المرافق والـ Nurse):
+      // أولًا من لا يقلل المقاعد (ركاب الباص)، ثم الباقي
       for (const keepSeats of [true, false]) {
         for (const candidate of list) {
-          if (members.length >= capacity() || used.has(candidate.id) || members.includes(candidate)) continue;
-          if (cap(candidate) < members.length + 1 || (keepSeats && cap(candidate) < capacity())) continue;
+          if (used.has(candidate.id) || members.includes(candidate)) continue;
+          if (total(members) + people(candidate) > Math.min(capacity(), cap(candidate)) || (keepSeats && cap(candidate) < capacity())) continue;
           if (members.every((member) => compatible(member, candidate))) members.push(candidate);
         }
       }
@@ -952,6 +1024,7 @@ export function buildTripGroups(
       const span = !byRequest ? "المواعيد" : direction === "عودة" ? "طلبات العودة" : "الانطلاق";
       groups.push({
         appointmentIds: members.map((member) => member.id),
+        persons: total(members),
         direction,
         score: Math.min(...pairDetails.map((details) => details.score)),
         spanMinutes,
@@ -970,8 +1043,9 @@ export type JoinSuggestion = { requestId: string; appointmentId: string; plate: 
  * (الباص 14) وأن تناسبه السيارة.
  */
 export function suggestJoinDispatched(
-  pending: { request: VehicleRequest; appointment: ClinicAppointment; at?: Date }[],
-  dispatched: { request: VehicleRequest; appointment: ClinicAppointment; at?: Date }[],
+  /** persons (اختياري): عدد الأشخاص مع كل ضيف (requestPersons)، وإلا من احتياجاته */
+  pending: { request: VehicleRequest; appointment: ClinicAppointment; at?: Date; persons?: number }[],
+  dispatched: { request: VehicleRequest; appointment: ClinicAppointment; at?: Date; persons?: number }[],
   hospitals: Hospital[] = DEFAULT_HOSPITALS,
   /** السيارات: مقاعد السيارة في الطريق وقواعدها (الباص 14، وباص الرحلات غير الطبية لها فقط) */
   vehicles: Vehicle[] = [],
@@ -979,7 +1053,7 @@ export function suggestJoinDispatched(
 ): JoinSuggestion[] {
   const out: JoinSuggestion[] = [];
   const timeOf = (item: { appointment: ClinicAppointment; at?: Date }) => item.at ?? appointmentDateTime(item.appointment);
-  const byTrip = new Map<string, { request: VehicleRequest; appointment: ClinicAppointment; at?: Date }[]>();
+  const byTrip = new Map<string, (typeof dispatched)[number][]>();
   for (const item of dispatched) {
     if (item.request.status !== "تم إرسال السيارة" || !item.request.vehiclePlate) continue;
     const tripKey = item.request.groupId ?? item.request.id;
@@ -991,9 +1065,12 @@ export function suggestJoinDispatched(
       if (members[0].request.direction !== item.request.direction) continue;
       const vehicle = vehicles.find((candidate) => candidate.plate === members[0].request.vehiclePlate);
       const riders = [...members.map((member) => member.appointment), item.appointment];
+      const personsOf = (trip: (typeof dispatched)[number]) => trip.persons ?? tripPersons(trip.appointment, trip.request);
+      const onBoard = members.reduce((sum, member) => sum + personsOf(member), 0);
+      const persons = onBoard + personsOf(item);
       if (vehicle) {
-        if (vehicleRestriction({ ...vehicle, available: true }, { appointments: riders }, { ...rules, hospitals })) continue;
-      } else if (riders.length > Math.min(...riders.map((rider) => groupCapacity(rider.kind)))) continue;
+        if (vehicleRestriction({ ...vehicle, available: true }, { appointments: riders, persons }, { ...rules, hospitals })) continue;
+      } else if (persons > Math.min(...riders.map((rider) => groupCapacity(rider.kind)))) continue;
       const scores = members.map((member) => calculateTripGroupingScore(member.appointment, item.appointment, hospitals, [timeOf(member), timeOf(item)]));
       if (!scores.every((details) => canShareVehicle(details, 30))) continue;
       const worst = Math.min(...scores.map((details) => details.score));
@@ -1005,7 +1082,7 @@ export function suggestJoinDispatched(
             appointmentId: item.appointment.id,
             plate: members[0].request.vehiclePlate!,
             groupId: members[0].request.groupId,
-            reason: `${pairReason(scores[0])} · السيارة في الطريق (${members.length} ${members.length === 1 ? "ضيف" : "ضيوف"})`,
+            reason: `${pairReason(scores[0])} · السيارة في الطريق (${members.length} ${members.length === 1 ? "ضيف" : "ضيوف"}${onBoard > members.length ? ` · ${personsText(onBoard)}` : ""})`,
           },
         };
       }
@@ -1085,15 +1162,21 @@ export function destinationLabels(appointment: ClinicAppointment, hospitals: Hos
 
 /** رسالة واتساب للسائق بالعربية ثم الإنجليزية؛ تدعم رحلة واحدة أو رحلة مجمّعة. */
 export function buildDriverMessage(
-  /** from: الموعد الأول في رحلة النقل بين موعدين (الاستلام من مستشفاه) */
-  trips: { appointment: ClinicAppointment; request: VehicleRequest; from?: ClinicAppointment | null }[],
+  /**
+   * from: الموعد الأول في رحلة النقل بين موعدين (الاستلام من مستشفاه).
+   * persons: عدد الأشخاص مع الضيف (requestPersons)، وإلا من احتياجاته.
+   */
+  trips: { appointment: ClinicAppointment; request: VehicleRequest; from?: ClinicAppointment | null; persons?: number }[],
   vehicle: Pick<Vehicle, "plate" | "driver">,
   hospitals: Hospital[] = DEFAULT_HOSPITALS,
 ) {
   const sorted = [...trips].sort((a, b) => byTime(a.appointment, b.appointment));
   const returning = sorted[0]?.request.direction === "عودة";
   const transfer = Boolean(sorted[0]?.from);
-  const leg = { ar: transfer ? "نقل بين موعدين" : returning ? "عودة" : "ذهاب", en: transfer ? "Transfer between appointments" : returning ? "Return" : "Outbound" };
+  const nurseLeg = sorted.length > 0 && sorted.every((trip) => trip.request.nurseOnly);
+  const leg = nurseLeg
+    ? { ar: "عودة الـ Nurse فقط", en: "Nurse return only" }
+    : { ar: transfer ? "نقل بين موعدين" : returning ? "عودة" : "ذهاب", en: transfer ? "Transfer between appointments" : returning ? "Return" : "Outbound" };
   const ar: string[] = [
     sorted.length > 1 ? `رحلة مجمّعة (${sorted.length} ضيوف) — ${leg.ar}` : `رحلة جديدة — ${leg.ar}`,
     `السيارة: ${vehicle.plate}`,
@@ -1102,33 +1185,42 @@ export function buildDriverMessage(
     sorted.length > 1 ? `Grouped trip (${sorted.length} guests) — ${leg.en}` : `New trip — ${leg.en}`,
     `Vehicle: ${vehicle.plate}`,
   ];
-  sorted.forEach(({ appointment, from }, index) => {
+  sorted.forEach(({ appointment, request, from, persons }, index) => {
     const destination = destinationLabels(appointment, hospitals);
     const prefix = sorted.length > 1 ? `${index + 1}) ` : "";
     const rider = isNonMedical(appointment) ? { ar: "الراكب", en: "Passenger" } : { ar: "الضيف", en: "Guest" };
-    const needsAr = appointment.assistance.join("، ");
-    const needsEn = appointment.assistance.map((need) => NEED_EN[need]).join(", ");
+    // عودة الـ Nurse فقط: الراكب هو الـ Nurse ويبقى الضيف في موعده
+    const nurse = Boolean(request.nurseOnly);
+    const people = persons ?? tripPersons(appointment, request);
+    const needsAr = nurse ? "" : appointment.assistance.join("، ");
+    const needsEn = nurse ? "" : appointment.assistance.map((need) => NEED_EN[need]).join(", ");
     // في النقل بين موعدين يُستلم الضيف من مستشفى موعده الأول
     const firstPlace = from ? destinationLabels(from, hospitals) : null;
     const pickupAr = firstPlace ? `${firstPlace.ar} (بعد موعده ${from!.appointmentAt})` : `مبنى ${appointment.buildingNumber}، شقة ${appointment.apartmentNumber}`;
     const pickupEn = firstPlace ? `${firstPlace.en} (after appointment ${from!.appointmentAt})` : `Building ${appointment.buildingNumber}, Apt ${appointment.apartmentNumber}`;
     ar.push(
       "",
-      `${prefix}${rider.ar}: ${appointment.patientName}${appointment.gender ? ` (${appointment.gender})` : ""}${isNonMedical(appointment) ? " (رحلة غير طبية)" : ""}`,
+      nurse
+        ? `${prefix}الراكب: الـ Nurse مرافقة الضيف ${appointment.patientName} (عودة الـ Nurse فقط)`
+        : `${prefix}${rider.ar}: ${appointment.patientName}${appointment.gender ? ` (${appointment.gender})` : ""}${isNonMedical(appointment) ? " (رحلة غير طبية)" : ""}`,
       returning ? `من: ${destination.ar}` : `من: ${pickupAr}`,
       returning ? `إلى: ${pickupAr}` : `إلى: ${destination.ar}`,
       `${isNonMedical(appointment) ? "الوقت" : "الموعد"}: ${appointment.appointmentDate} ${appointment.appointmentAt}`,
       `جوال ${rider.ar}: ${appointment.mobile}`,
       `نوع الرحلة: ${appointment.kind}${needsAr ? ` · ${needsAr}` : ""}`,
+      ...(people > 1 ? [`عدد الأشخاص: ${people}`] : []),
     );
     en.push(
       "",
-      `${prefix}${rider.en}: ${appointment.patientName}${appointment.gender ? ` (${appointment.gender === "أنثى" ? "female" : "male"})` : ""}${isNonMedical(appointment) ? " (non-medical trip)" : ""}`,
+      nurse
+        ? `${prefix}Passenger: Nurse escorting guest ${appointment.patientName} (nurse return only)`
+        : `${prefix}${rider.en}: ${appointment.patientName}${appointment.gender ? ` (${appointment.gender === "أنثى" ? "female" : "male"})` : ""}${isNonMedical(appointment) ? " (non-medical trip)" : ""}`,
       returning ? `From: ${destination.en}` : `From: ${pickupEn}`,
       returning ? `To: ${pickupEn}` : `To: ${destination.en}`,
       `${isNonMedical(appointment) ? "Time" : "Appointment"}: ${appointment.appointmentDate} ${appointment.appointmentAt}`,
       `${rider.en} mobile: ${appointment.mobile}`,
       `Trip type: ${KIND_EN[appointment.kind]}${needsEn ? ` · ${needsEn}` : ""}`,
+      ...(people > 1 ? [`Persons: ${people}`] : []),
     );
   });
   return [...ar, "", "—————", "", ...en].join("\n");

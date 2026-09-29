@@ -342,6 +342,12 @@ function route_write(PDO $pdo, array $body): array
     require_role($user, OFFICE_ROLES);
     $ops = $body['ops'] ?? null;
     if (!is_array($ops) || !array_is_list($ops) || count($ops) > 3000) throw new ApiException(400, 'بيانات غير صالحة', 'bad_request');
+    // الموعد المحفوظ (بما حُفظ قبله في نفس الدفعة) لفحص طلبات السيارات الجديدة
+    $appointmentOf = function (string $appointmentId) use ($pdo): ?array {
+        $stmt = $pdo->prepare("SELECT data FROM docs WHERE col = 'appointments' AND id = ?");
+        $stmt->execute([$appointmentId]);
+        return decode_doc($stmt->fetchColumn() ?: null);
+    };
     $pdo->beginTransaction();
     try {
         $rev = next_revision($pdo);
@@ -367,7 +373,7 @@ function route_write(PDO $pdo, array $body): array
             } else {
                 throw new ApiException(400, 'بيانات غير صالحة', 'bad_request');
             }
-            if ($error = authorize_write($user, $col, $id, $before, $after)) throw new ApiException(403, $error, 'permission_denied');
+            if ($error = authorize_write($user, $col, $id, $before, $after, $appointmentOf)) throw new ApiException(403, $error, 'permission_denied');
             // الوصف قبل الحفظ (يقرأ الموعد المرتبط بالطلب كما كان)، والتسجيل بعده في نفس المعاملة
             $entry = describe_write($pdo, $col, $id, $before, $after);
             save_doc($pdo, $col, $id, $after, $rev);

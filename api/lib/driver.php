@@ -37,6 +37,15 @@ function plate_requests(PDO $pdo, string $plate): array
     return $requests;
 }
 
+/** للموعد طلب «عودة الـ Nurse فقط» (الـ Nurse عادت أو تعود وحدها قبل الضيف). */
+function nurse_went_back(PDO $pdo, string $appointmentId): bool
+{
+    $key = '%"appointmentId":' . json_encode($appointmentId, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . '%';
+    $stmt = $pdo->prepare("SELECT 1 FROM docs WHERE col = 'requests' AND data IS NOT NULL AND data LIKE ? AND data LIKE '%\"nurseOnly\":true%' LIMIT 1");
+    $stmt->execute([$key]);
+    return (bool)$stmt->fetchColumn();
+}
+
 function route_driver_trips(PDO $pdo): array
 {
     $user = current_user($pdo);
@@ -52,6 +61,10 @@ function route_driver_trips(PDO $pdo): array
         $active = in_array($request['status'] ?? null, DRIVER_ACTIVE_STATUSES, true) && empty($request['arrivedAt']);
         if (($appointment['appointmentDate'] ?? '') !== $today && !$active) continue;
         unset($request['requestedBy']);
+        // عودة الضيف بعد أن عادت الـ Nurse وحدها: لا تُحسب الـ Nurse في عدد الأشخاص
+        if (($request['direction'] ?? '') === 'عودة' && empty($request['nurseOnly']) && nurse_went_back($pdo, (string)($request['appointmentId'] ?? ''))) {
+            $request['nurseBack'] = true;
+        }
         $requests[] = $request;
         $appointments[$appointment['id']] = $pick($appointment);
         if (!empty($request['fromAppointmentId']) && ($first = appointment_doc($pdo, (string)$request['fromAppointmentId']))) {
@@ -126,9 +139,10 @@ function route_driver_action(PDO $pdo, array $body): array
                 $request['destLng'] = round((float)$body['destLng'], 6);
             }
             if (!valid_trip_fields($request)) throw new ApiException(400, 'بيانات غير صالحة', 'bad_request');
-            // حالة الموعد كما عند تأكيد مشرف المبنى: العودة تنتهي، والموعد الأول في النقل بين موعدين ينتهي
+            // حالة الموعد كما عند تأكيد مشرف المبنى: العودة تنتهي، والموعد الأول في النقل بين موعدين ينتهي.
+            // عودة الـ Nurse فقط لا تغيّر موعد الضيف (يبقى في موعده)
             $appointmentId = (string)($request['appointmentId'] ?? '');
-            if ($appointment = $lock('appointments', $appointmentId)) {
+            if (empty($request['nurseOnly']) && ($appointment = $lock('appointments', $appointmentId))) {
                 $changedAppointments[$appointmentId] = ['status' => ($request['direction'] ?? '') === 'عودة' ? 'مكتملة' : 'تم استلام المريض'] + $appointment;
             }
             $firstId = (string)($request['fromAppointmentId'] ?? '');

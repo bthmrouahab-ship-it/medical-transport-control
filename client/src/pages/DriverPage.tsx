@@ -11,6 +11,7 @@ import {
   isNonMedical,
   migrateAppointment,
   migrateRequest,
+  tripPersons,
   type ClinicAppointment,
   type VehicleRequest,
 } from "@shared/transport";
@@ -31,7 +32,8 @@ const TRIPS_EVERY_MS = 8000;
 type Status = "idle" | "starting" | "sharing" | "error";
 type Position = { lat: number; lng: number; accuracy: number; at: number };
 type TripsResponse = { plate: string; requests: unknown[]; appointments: unknown[]; hospitals: Hospital[]; sharing: boolean; serverTime: string };
-type Trips = { requests: VehicleRequest[]; appointments: ClinicAppointment[]; hospitals: Hospital[] };
+/** nurseBack: طلبات عودة ضيوف عادت الـ Nurse قبلهم (لا تُحسب في عدد الأشخاص) */
+type Trips = { requests: VehicleRequest[]; appointments: ClinicAppointment[]; hospitals: Hospital[]; nurseBack: Set<string> };
 /** سبب توقف الموقع، ويُعرض بلغة السائق الحالية */
 type LocationError = { key: "noGeolocation" | "timeout" | "unavailable" | "policyBlocked" | "permissionBlocked" | "notAllowed"; state?: string };
 
@@ -173,6 +175,10 @@ export default function DriverPage({ profile, onLogout, onChangePassword }: {
     try {
       const data = await api<TripsResponse>("driver-trips");
       const requests = data.requests.map(migrateRequest).filter((request): request is VehicleRequest => request !== null);
+      const nurseBack = new Set(data.requests.flatMap((raw) => {
+        const item = raw as { id?: unknown; nurseBack?: unknown };
+        return item?.nurseBack === true && typeof item.id === "string" ? [item.id] : [];
+      }));
       const appointments = data.appointments.map((item, index) => migrateAppointment(item, index)).filter((item): item is ClinicAppointment => item !== null);
       const hospitals = data.hospitals.filter((item) => typeof item?.lat === "number" && typeof item?.lng === "number");
       const active = new Set(requests.filter((request) => request.status in ORDER).map((request) => request.id));
@@ -192,7 +198,7 @@ export default function DriverPage({ profile, onLogout, onChangePassword }: {
         if (fresh.length || cancelled.length || denied.length) alertDevice();
       }
       known.current = { active, denials };
-      setTrips({ requests, appointments, hospitals: hospitals.length ? hospitals : DEFAULT_HOSPITALS });
+      setTrips({ requests, appointments, hospitals: hospitals.length ? hospitals : DEFAULT_HOSPITALS, nurseBack });
       setLoadError(null);
     } catch (loadFailure) {
       setLoadError(loadFailure);
@@ -378,6 +384,7 @@ export default function DriverPage({ profile, onLogout, onChangePassword }: {
                   from={request.fromAppointmentId ? trips.appointments.find((item) => item.id === request.fromAppointmentId) ?? null : null}
                   hospitals={trips.hospitals}
                   group={request.groupId ? trips.requests.filter((item) => item.groupId === request.groupId).length : 1}
+                  persons={tripPersons(appointment, request, trips.nurseBack.has(request.id))}
                   now={now}
                   live={live}
                   busy={busy === request.id}
@@ -399,7 +406,7 @@ export default function DriverPage({ profile, onLogout, onChangePassword }: {
                   {finished.map(({ request, phase, appointment }) => (
                     <li key={request.id} className="flex items-center justify-between gap-3 px-4 py-2.5 text-sm">
                       <span className="min-w-0 truncate">
-                        <span dir="ltr" className="tabular text-slate-500">{appointment!.appointmentAt}</span> · {appointment!.patientName} · {request.direction === "عودة" ? t.complex : placeName(appointment!, trips!.hospitals, lang)}
+                        <span dir="ltr" className="tabular text-slate-500">{appointment!.appointmentAt}</span> · {request.nurseOnly ? t.nurseOf(appointment!.patientName) : appointment!.patientName} · {request.direction === "عودة" ? t.complex : placeName(appointment!, trips!.hospitals, lang)}
                       </span>
                       {phase.kind === "arrived" && phase.at && <span className="shrink-0 text-xs text-emerald-700">{t.arrived} <span dir="ltr" className="tabular">{timeLabel(phase.at)}</span></span>}
                     </li>
@@ -434,7 +441,7 @@ const mapsLink = (point: { lat: number; lng: number } | null, label: string) => 
 const wazeLink = (point: { lat: number; lng: number }) => `https://waze.com/ul?ll=${point.lat},${point.lng}&navigate=yes`;
 
 /** رحلة جارية للسائق: الضيف، ومن أين إلى أين، والملاحة، والاتصال بالضيف، وزر المرحلة التالية. */
-function TripCard({ t, lang, request, appointment, from, hospitals, group, now, live, busy, onAction }: {
+function TripCard({ t, lang, request, appointment, from, hospitals, group, persons, now, live, busy, onAction }: {
   t: DriverText;
   lang: DriverLang;
   request: VehicleRequest;
@@ -442,6 +449,8 @@ function TripCard({ t, lang, request, appointment, from, hospitals, group, now, 
   from: ClinicAppointment | null;
   hospitals: Hospital[];
   group: number;
+  /** عدد الأشخاص مع الضيف (مرافقه والـ Nurse) */
+  persons: number;
   now: Date;
   live: boolean;
   busy: boolean;
@@ -457,7 +466,8 @@ function TripCard({ t, lang, request, appointment, from, hospitals, group, now, 
   const target = beforePickup ? { point: endpoints.from, label: pickupLabel } : { point: endpoints.to, label: dropLabel };
   const phase = tripPhase(request, now, live);
   const step = request.status === "تم إرسال السيارة" ? 0 : request.status === "وصلت السيارة" ? 1 : 2;
-  const assistance = appointment.assistance.map((need) => t.needs[need] ?? need).join(t.sep);
+  // عودة الـ Nurse فقط: الراكب الـ Nurse وحدها
+  const assistance = request.nurseOnly ? "" : appointment.assistance.map((need) => t.needs[need] ?? need).join(t.sep);
   const next = request.status === "تم إرسال السيارة"
     ? { action: "arrived" as const, label: t.actionArrived, icon: MapPin }
     : request.status === "وصلت السيارة"
@@ -477,11 +487,11 @@ function TripCard({ t, lang, request, appointment, from, hospitals, group, now, 
           <TimeBlock time={appointment.appointmentAt} />
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-1.5">
-              <p className="font-bold text-ink">{appointment.patientName}</p>
-              {appointment.gender && <span className="text-xs text-slate-500">{t.gender[appointment.gender]}</span>}
+              <p className="font-bold text-ink">{request.nurseOnly ? t.nurseOf(appointment.patientName) : appointment.patientName}</p>
+              {appointment.gender && !request.nurseOnly && <span className="text-xs text-slate-500">{t.gender[appointment.gender]}</span>}
             </div>
             <div className="mt-1 flex flex-wrap gap-1.5">
-              {from ? <Badge tone="cyan" icon={ArrowLeftRight}>{t.transfer}</Badge> : <Badge tone={returning ? "amber" : "neutral"}>{t.direction[request.direction]}</Badge>}
+              {from ? <Badge tone="cyan" icon={ArrowLeftRight}>{t.transfer}</Badge> : request.nurseOnly ? <Badge tone="amber">{t.nurseOnly}</Badge> : <Badge tone={returning ? "amber" : "neutral"}>{t.direction[request.direction]}</Badge>}
               {isNonMedical(appointment) && <Badge tone="violet">{t.nonMedical}</Badge>}
               {appointment.kind === "احتياجات خاصة" && <Badge icon={Accessibility}>{t.special}</Badge>}
               {group > 1 && <Badge tone="violet">{t.group(group)}</Badge>}
@@ -493,7 +503,7 @@ function TripCard({ t, lang, request, appointment, from, hospitals, group, now, 
           <li className="flex items-start gap-2"><MapPin className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" /><span><span className="text-xs text-slate-500">{t.pickup}: </span><span className="font-medium text-ink">{pickupLabel}</span></span></li>
           <li className="flex items-start gap-2"><Flag className="mt-0.5 h-4 w-4 shrink-0 text-blue-600" /><span><span className="text-xs text-slate-500">{t.destination}: </span><span className="font-medium text-ink">{dropLabel}</span></span></li>
         </ol>
-        {assistance && <p className="mt-2 flex items-center gap-1.5 text-sm text-slate-700"><Accessibility className="h-4 w-4 text-slate-500" /> {assistance}</p>}
+        {assistance && <p className="mt-2 flex items-center gap-1.5 text-sm text-slate-700"><Accessibility className="h-4 w-4 text-slate-500" /> {assistance}{persons > 1 ? ` · ${t.persons(persons)}` : ""}</p>}
         {appointment.mobile && appointment.mobile !== "-" && <div className="mt-3 text-sm text-slate-600"><GuestContact mobile={appointment.mobile} size="md" labels={{ call: t.call, whatsapp: t.whatsapp }} /></div>}
 
         <div className="mt-3"><Steps steps={t.steps} current={step} /></div>

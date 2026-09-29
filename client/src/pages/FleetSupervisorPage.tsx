@@ -49,7 +49,9 @@ import {
   localDateString,
   matchHospitalZone,
   needsAccessibleVehicle,
+  personsText,
   planDispatch,
+  requestPersons,
   routeLabel,
   seatsFor,
   suggestJoinDispatched,
@@ -89,6 +91,7 @@ import {
 } from "@/components/ui-kit";
 import NonMedicalTripForm from "./NonMedicalTripForm";
 import { RecentActivity } from "@/components/ActivityLog";
+import { AppointmentsOverview } from "@/components/AppointmentsOverview";
 import { useHospitals, useLiveVehicles, useNow } from "@/lib/useShared";
 import { NOTIFY_KEY, deviceNotificationsOn, useArrivalAlerts, useCancellationAlerts, useDenialAlerts, useRedirectAlerts } from "@/lib/arrivalAlerts";
 import { checkStateText, driverCheck } from "@shared/driverChecks";
@@ -98,7 +101,20 @@ import { checkStateText, driverCheck } from "@shared/driverChecks";
  * outboundAt: وقت طلب الذهاب لنفس الموعد (مع رحلة العودة).
  */
 /** at: متى يحتاج الضيف السيارة (من وقت الطلب ووقت الموعد)، لجمع الرحلات */
-type Trip = { request: VehicleRequest; appointment: ClinicAppointment; from?: ClinicAppointment | null; outboundAt?: string; at?: Date };
+/** persons: عدد الأشخاص في الرحلة (الضيف ومرافقه والـ Nurse، أو الـ Nurse وحدها في عودتها) */
+type Trip = { request: VehicleRequest; appointment: ClinicAppointment; from?: ClinicAppointment | null; outboundAt?: string; at?: Date; persons: number };
+
+const sumPersons = (trips: Pick<Trip, "persons">[]) => trips.reduce((total, trip) => total + trip.persons, 0);
+
+/** من يركب: الضيف، أو الـ Nurse وحدها في «عودة الـ Nurse فقط» */
+const riderName = (trip: Pick<Trip, "request" | "appointment">) => (trip.request.nurseOnly ? `الـ Nurse · ${trip.appointment.patientName}` : trip.appointment.patientName);
+
+/** نوع الرحلة والجنس والاحتياجات وعدد الأشخاص (مع المرافق والـ Nurse) */
+function riderDetails(trip: Trip) {
+  if (trip.request.nurseOnly) return "الـ Nurse وحدها · شخص واحد · يبقى الضيف في موعده";
+  const { kind, gender, assistance } = trip.appointment;
+  return [kind, gender, assistance.join("، "), trip.persons > 1 ? personsText(trip.persons) : ""].filter(Boolean).join(" · ");
+}
 
 /** وقت طلب السيارة من مشرف المبنى: للذهاب، وللعودة (ومعه وقت طلب الذهاب)، وللنقل بين موعدين. */
 function requestTimes(trip: Trip) {
@@ -168,6 +184,8 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
   const [driverMessages, setDriverMessages] = useState<DriverMessage[] | null>(null);
   /** نافذة تعديل رحلة مجمّعة: الطلبات المختارة فيها أولًا */
   const [editing, setEditing] = useState<string[] | null>(null);
+  /** توزيع السيارات، أو كل المواعيد للعرض فقط */
+  const [view, setView] = useState<"dispatch" | "appointments">("dispatch");
   const hospitals = useHospitals();
   const now = useNow(15000);
   const today = localDateString(now);
@@ -186,7 +204,7 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
     const outboundAt = request.direction === "عودة"
       ? requests.filter((item) => item.appointmentId === request.appointmentId && item.direction === "ذهاب").at(-1)?.createdAt
       : undefined;
-    return appointment ? { request, appointment, from, outboundAt, at: neededAt(request, appointment, hospitals) } : null;
+    return appointment ? { request, appointment, from, outboundAt, at: neededAt(request, appointment, hospitals), persons: requestPersons(request, appointment, requests) } : null;
   };
   const isTrip = (trip: Trip | null): trip is Trip => Boolean(trip);
   const onDate = (trip: Trip) => trip.appointment.appointmentDate === date;
@@ -233,13 +251,13 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
   /** السيارة المقترحة لرحلة (ضيف أو أكثر) من السيارات المتاحة الآن */
   const suggestFor = (trips: Trip[]) => assignVehicleForTrips(dispatchable, trips.map((trip) => trip.appointment), load,
     locationRank(trips[0]?.request.direction ?? "ذهاب", trips.map((trip) => trip.request.id)),
-    { ...rules, transfer: trips.some((trip) => isTransfer(trip.request)) });
+    { ...rules, transfer: trips.some((trip) => isTransfer(trip.request)), persons: sumPersons(trips) });
   /**
    * كل السيارات في الخدمة لرحلة: المتاحة لها الآن أولًا (السيارة المجهزة آخرًا للرحلة العادية)، ثم غير المتاحة مع السبب.
    * السيارات العادية لا تظهر لرحلة احتياجات خاصة، ولا يظهر باص العيادة.
    */
   const choicesFor = (trips: Trip[]): VehicleChoice[] => {
-    const riders = { appointments: trips.map((trip) => trip.appointment), transfer: trips.some((trip) => isTransfer(trip.request)) };
+    const riders = { appointments: trips.map((trip) => trip.appointment), transfer: trips.some((trip) => isTransfer(trip.request)), persons: sumPersons(trips) };
     const accessible = needsAccessibleVehicle(riders.appointments);
     return vehicles
       .filter((vehicle) => vehicle.available && !forClinic(vehicle) && (!accessible || vehicle.kind === "احتياجات خاصة"))
@@ -261,7 +279,7 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
   const groupable = pending.filter((trip) => !isTransfer(trip.request));
   // الجمع حسب وقت الحاجة إلى السيارة (وقت الطلب)، لا وقت الموعد وحده
   // حتى 14 ضيفًا إن كان باص متاح يناسبهم (رحلات غير طبية مع باصها، ومستشفى الثمامة وقت الذروة مع باص المجمع)
-  const groups = buildTripGroups(groupable.map((trip) => ({ appointment: trip.appointment, direction: trip.request.direction, at: trip.at })), hospitals, seatsFor(dispatchable, rules));
+  const groups = buildTripGroups(groupable.map((trip) => ({ appointment: trip.appointment, direction: trip.request.direction, at: trip.at, persons: trip.persons })), hospitals, seatsFor(dispatchable, rules));
   const groupedIds = new Set(groups.flatMap((group) => group.appointmentIds));
   const joins = suggestJoinDispatched(groupable.filter((trip) => !groupedIds.has(trip.appointment.id)), toPickupTrips.filter((trip) => onDate(trip) && !isTransfer(trip.request)), hospitals, vehicles, rules);
   const unrequested = findUnrequestedMatches(appointments, requests, hospitals, now).filter((match) => match.appointment.appointmentDate === date);
@@ -443,10 +461,22 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
         )}
       />
 
-      <div className="mb-6"><DateChooser value={date} onChange={onDateChange} /></div>
+      <div className="mb-6 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <DateChooser value={date} onChange={onDateChange} />
+        <Segmented
+          label="العرض"
+          value={view}
+          onChange={setView}
+          options={[
+            { value: "dispatch", label: "توزيع السيارات" },
+            { value: "appointments", label: `كل المواعيد ${appointments.filter((appointment) => appointment.appointmentDate === date).length}` },
+          ]}
+        />
+      </div>
 
       {addingTrip && <NonMedicalTripForm defaultDate={date} onCancel={() => setAddingTrip(false)} onSave={(appointment, request) => { onAddTrip(appointment, request); setAddingTrip(false); }} />}
 
+      {view === "appointments" ? <AppointmentsOverview appointments={appointments} requests={requests} date={date} now={now} /> : (<>
       <div className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4 lg:gap-4">
         <Stat icon={BellRing} tone="amber" label="بانتظار التوزيع" value={pending.length} hint={date === today ? "طلبات اليوم" : "طلبات التاريخ المحدد"} />
         <Stat icon={Truck} tone="blue" label="رحلات جارية" value={activeGroups.length} hint={trackingCount ? `${trackingCount} بمتابعة GPS` : "الآن"} />
@@ -509,14 +539,14 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
                         <div className="min-w-0">
                           <div className="flex flex-wrap items-center gap-2">
                             <p className="font-semibold text-ink">{trip.appointment.patientName}</p>
-                            {trip.from ? <Badge tone="cyan">نقل بين موعدين</Badge> : <Badge tone={trip.request.direction === "عودة" ? "amber" : "neutral"}>{trip.request.direction}</Badge>}
+                            {trip.from ? <Badge tone="cyan">نقل بين موعدين</Badge> : trip.request.nurseOnly ? <Badge tone="amber">عودة الـ Nurse فقط</Badge> : <Badge tone={trip.request.direction === "عودة" ? "amber" : "neutral"}>{trip.request.direction}</Badge>}
                             {isNonMedical(trip.appointment) && <Badge tone="violet">غير طبية</Badge>}
                             {isPriority(trip.appointment) && <PriorityBadge />}
                             {groupedIds.has(trip.appointment.id) && <Badge tone="violet" icon={Sparkles}>قابلة للجمع</Badge>}
                             {redirect && <Badge tone="cyan" icon={Navigation}>سيارة قريبة {redirect.vehicle.plate} · {redirect.distanceKm} كم</Badge>}
                           </div>
                           <p className="mt-1 text-sm text-slate-600">{routeLabel(trip.appointment, trip.from)}{zone && <span className="text-slate-400"> · {zone}</span>}</p>
-                          <p className="mt-0.5 text-xs text-slate-500">{trip.appointment.kind}{trip.appointment.gender ? ` · ${trip.appointment.gender}` : ""}{trip.appointment.assistance.length ? ` · ${trip.appointment.assistance.join("، ")}` : ""}</p>
+                          <p className="mt-0.5 text-xs text-slate-500">{riderDetails(trip)}</p>
                           {trip.request.createdAt && (
                             <p className="mt-1 flex flex-wrap items-center gap-1 text-xs font-medium text-amber-800">
                               <Clock3 className="h-3.5 w-3.5" /> {requestTimes(trip)}
@@ -555,7 +585,7 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
                     <div key={group.appointmentIds.join("-")} className="flex flex-col rounded-xl bg-violet-50/50 p-4 ring-1 ring-violet-100">
                       <div className="flex items-start justify-between gap-3">
                         <p className="text-xs font-medium text-violet-800">{group.direction} · {group.reason}</p>
-                        <Badge tone="violet">{guestsText(members.length)}</Badge>
+                        <Badge tone="violet">{guestsText(members.length)}{group.persons > members.length ? ` · ${personsText(group.persons)}` : ""}</Badge>
                       </div>
                       <TripList trips={members} hospitals={hospitals} />
                       <p className="mt-3 text-xs text-slate-500">السيارة المقترحة: <span className="font-semibold text-slate-700">{vehicle ? `${vehicle.plate} · ${driverOf(vehicle.plate)} · ${kindText(vehicle)}` : "لا توجد سيارة متاحة"}</span></p>
@@ -717,8 +747,9 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
           </Panel>
         </aside>
       </div>
+      </>)}
 
-      {plan && <AutoDispatchDialog plan={plan} free={dispatchable} load={load} rules={rules} transferIds={transferIds} driverOf={driverOf} placeText={placeText} nextFree={nextFree} onConfirm={confirmPlan} onClose={() => setPlan(null)} />}
+      {plan && <AutoDispatchDialog plan={plan} free={dispatchable} load={load} rules={rules} transferIds={transferIds} personsOf={new Map(pending.map((trip) => [trip.request.id, trip.persons]))} driverOf={driverOf} placeText={placeText} nextFree={nextFree} onConfirm={confirmPlan} onClose={() => setPlan(null)} />}
       {editing && (
         <GroupEditor
           initial={editing}
@@ -743,7 +774,7 @@ function TripList({ trips, hospitals }: { trips: Trip[]; hospitals: Hospital[] }
     <ul className="mt-3 space-y-2">
       {trips.map((trip) => (
         <li key={trip.request.id} className="rounded-lg bg-white px-3 py-2 text-xs ring-1 ring-slate-200/70">
-          <p className="font-semibold text-ink">{trip.appointment.patientName} <span dir="ltr" className="font-medium text-slate-500 tabular">{trip.appointment.appointmentAt}</span>{isPriority(trip.appointment) && <span className="ms-1.5 text-red-700">· أولوية</span>}</p>
+          <p className="font-semibold text-ink">{riderName(trip)} <span dir="ltr" className="font-medium text-slate-500 tabular">{trip.appointment.appointmentAt}</span>{trip.persons > 1 && <span className="ms-1.5 font-normal text-slate-500">· {personsText(trip.persons)}</span>}{isPriority(trip.appointment) && <span className="ms-1.5 text-red-700">· أولوية</span>}</p>
           <p className="mt-0.5 text-slate-500">{routeLabel(trip.appointment, trip.from)}{matchHospitalZone(trip.appointment, hospitals) ? ` · ${matchHospitalZone(trip.appointment, hospitals)}` : ""}</p>
           {trip.request.createdAt && <p className="mt-0.5 text-slate-400">{requestTimes(trip)}</p>}
         </li>
@@ -768,7 +799,7 @@ function ActiveTrip({ trips, phase, vehicle, driver, hospitals, onArrived, onEnd
   const message = buildDriverMessage(trips, { plate, driver }, hospitals);
   const phone = vehicle?.phone;
   // المقاعد الباقية: الباص 14، والسيارة 3، ومع احتياجات خاصة 2
-  const seatsLeft = vehicleSeats(vehicle ?? { kind: "سيدان" }, trips.map((trip) => trip.appointment)) - trips.length;
+  const seatsLeft = vehicleSeats(vehicle ?? { kind: "سيدان" }, trips.map((trip) => trip.appointment)) - sumPersons(trips);
   const step = phase.kind === "toPickup" ? (phase.atPickup ? 1 : 0) : phase.kind === "toDestination" ? 2 : 3;
   const destinations = Array.from(new Set(trips.map((trip) => tripEndpoints(trip.appointment, trip.request.direction, hospitals, trip.from).destination)));
   return (
@@ -783,7 +814,7 @@ function ActiveTrip({ trips, phase, vehicle, driver, hospitals, onArrived, onEnd
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {phase.kind === "toDestination" && (phase.tracking ? <Badge tone="green" icon={Radio}>GPS مباشر</Badge> : <Badge icon={Timer}>وقت تقديري</Badge>)}
-          {seatsLeft > 0 && phase.kind === "toPickup" && <Badge tone="green">{seatsLeft} مقعد متاح</Badge>}
+          {seatsLeft > 0 && phase.kind === "toPickup" && <Badge tone="green">{seatsLeft === 1 ? "مقعد متاح" : seatsLeft === 2 ? "مقعدان متاحان" : `${seatsLeft} مقاعد متاحة`}</Badge>}
           <StatusBadge status={trips[0].request.status} />
         </div>
       </div>
@@ -793,8 +824,9 @@ function ActiveTrip({ trips, phase, vehicle, driver, hospitals, onArrived, onEnd
       <ul className="mt-3 space-y-1 text-sm text-slate-600">
         {trips.map((trip) => (
           <li key={trip.request.id} className="flex flex-wrap gap-x-2">
-            <span className="font-medium text-ink">{trip.appointment.patientName}</span>
+            <span className="font-medium text-ink">{riderName(trip)}</span>
             <span dir="ltr" className="text-slate-500 tabular">{trip.appointment.appointmentAt}</span>
+            {trip.persons > 1 && <span className="text-slate-500">· {personsText(trip.persons)}</span>}
             <span className="text-slate-500">{routeLabel(trip.appointment, trip.from)}</span>
             {isPriority(trip.appointment) && <span className="font-medium text-red-700">· أولوية</span>}
             {trip.request.createdAt && <span className="text-slate-400">· {requestTimes(trip)}</span>}
@@ -842,12 +874,14 @@ function ActiveTrip({ trips, phase, vehicle, driver, hospitals, onArrived, onEnd
  * خطة التوزيع التلقائي قبل الإرسال: كل رحلة وسيارتها المقترحة (الأقل رحلات اليوم)، ويمكن تغيير السيارة
  * أو استبعاد رحلة أو فصل ضيف عن رحلة مجمّعة (يأخذ سيارة وحده)، ثم تُرسل كل السيارات معًا.
  */
-function AutoDispatchDialog({ plan, free, load, rules, transferIds, driverOf, placeText, nextFree, onConfirm, onClose }: {
+function AutoDispatchDialog({ plan, free, load, rules, transferIds, personsOf, driverOf, placeText, nextFree, onConfirm, onClose }: {
   plan: DispatchPlan;
   free: Vehicle[];
   load: Map<string, number>;
   rules: VehicleRules;
   transferIds: Set<string>;
+  /** عدد الأشخاص في كل طلب (مع المرافق والـ Nurse) */
+  personsOf: Map<string, number>;
   driverOf: (plate?: string, fallback?: string) => string;
   placeText: (plate: string) => string;
   nextFree: (appointments: ClinicAppointment[]) => string;
@@ -860,7 +894,7 @@ function AutoDispatchDialog({ plan, free, load, rules, transferIds, driverOf, pl
   chosen.forEach((row) => used.set(row.plate, (used.get(row.plate) ?? 0) + 1));
   const conflict = Array.from(used.values()).some((count) => count > 1);
   // السيارات التي تناسب الرحلة (المقاعد، والاحتياجات الخاصة، وقواعد الباصات)
-  const optionsFor = (row: (typeof rows)[number]) => free.filter((vehicle) => !vehicleRestriction(vehicle, { appointments: row.appointments, transfer: row.requestIds.some((id) => transferIds.has(id)) }, rules));
+  const optionsFor = (row: (typeof rows)[number]) => free.filter((vehicle) => !vehicleRestriction(vehicle, { appointments: row.appointments, transfer: row.requestIds.some((id) => transferIds.has(id)), persons: row.persons }, rules));
   const missing = chosen.some((row) => !optionsFor(row).some((vehicle) => vehicle.plate === row.plate));
   const update = (index: number, change: Partial<(typeof rows)[number]>) => setRows((current) => current.map((row, i) => (i === index ? { ...row, ...change } : row)));
   const names = (appointments: ClinicAppointment[]) => appointments.map((appointment) => appointment.patientName).join("، ");
@@ -873,10 +907,11 @@ function AutoDispatchDialog({ plan, free, load, rules, transferIds, driverOf, pl
       const at = row.requestIds.indexOf(requestId);
       if (at < 0 || row.requestIds.length < 2) return current;
       const appointment = row.appointments[at];
-      const rest = { ...row, requestIds: row.requestIds.filter((_, i) => i !== at), appointments: row.appointments.filter((_, i) => i !== at) };
+      const persons = personsOf.get(requestId) ?? 1;
+      const rest = { ...row, requestIds: row.requestIds.filter((_, i) => i !== at), appointments: row.appointments.filter((_, i) => i !== at), persons: row.persons - persons };
       const taken = new Set(current.filter((item) => item.include).map((item) => item.plate));
-      const vehicle = assignVehicleForTrips(free.filter((item) => !taken.has(item.plate)), [appointment], load, undefined, { ...rules, transfer: transferIds.has(requestId) });
-      const alone = { requestIds: [requestId], appointments: [appointment], direction: row.direction, plate: vehicle?.plate ?? "", include: Boolean(vehicle) };
+      const vehicle = assignVehicleForTrips(free.filter((item) => !taken.has(item.plate)), [appointment], load, undefined, { ...rules, transfer: transferIds.has(requestId), persons });
+      const alone = { requestIds: [requestId], appointments: [appointment], direction: row.direction, persons, plate: vehicle?.plate ?? "", include: Boolean(vehicle) };
       return [...current.slice(0, index), rest, alone, ...current.slice(index + 1)];
     });
   }
@@ -921,6 +956,7 @@ function AutoDispatchDialog({ plan, free, load, rules, transferIds, driverOf, pl
                         <span dir="ltr" className="font-semibold text-ink tabular">{first.appointmentAt}</span>
                         {!grouped && <span className="font-medium text-ink">{names(row.appointments)}</span>}
                         {grouped && <Badge tone="violet" icon={Sparkles}>مجمّعة · {guestsText(row.appointments.length)}</Badge>}
+                        {row.persons > row.appointments.length && <Badge>{personsText(row.persons)}</Badge>}
                         {accessible && <Badge tone="amber">احتياجات خاصة</Badge>}
                       </span>
                       <span className="block truncate text-xs text-slate-500">{destinations(row.appointments)}</span>
@@ -1011,13 +1047,16 @@ function GroupEditor({ initial, pending, hospitals, load, choicesFor, suggestFor
   const ready = choices.filter((choice) => !choice.why).map((choice) => choice.vehicle);
   const suggested = members.length ? suggestFor(members) : null;
   const vehicle = ready.find((item) => item.plate === plate) ?? suggested;
+  // المقاعد بالأشخاص: الضيف ومرافقه والـ Nurse
+  const persons = sumPersons(members);
   const seats = vehicle ? vehicleSeats(vehicle, members.map((trip) => trip.appointment)) : null;
-  const tooMany = members.length > 3 && !ready.some((item) => item.kind === "باص");
+  const tooMany = members.length > 1 && persons > 3 && !ready.some((item) => item.kind === "باص");
   const row = (trip: Trip) => (
     <span className="min-w-0 flex-1">
       <span className="flex flex-wrap items-center gap-1.5">
         <span dir="ltr" className="font-semibold text-ink tabular">{trip.appointment.appointmentAt}</span>
-        <span className="font-medium text-ink">{trip.appointment.patientName}</span>
+        <span className="font-medium text-ink">{riderName(trip)}</span>
+        {trip.persons > 1 && <Badge>{personsText(trip.persons)}</Badge>}
         {trip.appointment.kind === "احتياجات خاصة" && <Badge tone="amber">احتياجات خاصة</Badge>}
         {isNonMedical(trip.appointment) && <Badge tone="violet">غير طبية</Badge>}
         {isPriority(trip.appointment) && <span className="text-xs font-medium text-red-700">أولوية</span>}
@@ -1046,7 +1085,7 @@ function GroupEditor({ initial, pending, hospitals, load, choicesFor, suggestFor
         <section>
           <p className="mb-2 flex items-center justify-between text-sm font-semibold text-ink">
             <span>في هذه الرحلة{direction ? ` (${direction})` : ""}</span>
-            {seats !== null && <span className={cx("text-xs font-medium", members.length > seats ? "text-red-700" : "text-slate-500")}>{members.length} من {seats} {seats > 10 ? "مقعدًا" : "مقاعد"}</span>}
+            {seats !== null && <span className={cx("text-xs font-medium", members.length > 1 && persons > seats ? "text-red-700" : "text-slate-500")}>{personsText(persons)} من {seats} {seats > 10 ? "مقعدًا" : "مقاعد"}</span>}
           </p>
           {members.length ? (
             <ul className="divide-y divide-slate-100 rounded-xl ring-1 ring-violet-200">
@@ -1070,7 +1109,7 @@ function GroupEditor({ initial, pending, hospitals, load, choicesFor, suggestFor
               ? <option key={item.plate} value={item.plate} disabled>{item.plate} · {kindText(item)} · {why}</option>
               : <option key={item.plate} value={item.plate}>{item.plate} · {driverOf(item.plate, item.driver)} · {kindText(item)} · {placeText(item.plate)} · {tripsText(load.get(item.plate) ?? 0)}</option>)}
           </select>
-          {tooMany && <p className="mt-1.5 text-xs text-red-700">أكثر من 3 ضيوف يحتاجون باصًا متاحًا، أو أزل بعض الضيوف</p>}
+          {tooMany && <p className="mt-1.5 text-xs text-red-700">أكثر من 3 أشخاص (مع المرافقين والـ Nurse) يحتاجون باصًا متاحًا، أو أزل بعض الضيوف</p>}
         </section>
 
         <section>

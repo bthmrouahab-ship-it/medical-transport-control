@@ -234,7 +234,8 @@ describe("medical transport rules", () => {
   });
 
   it("builds groups of three for the same destination but never mixes directions or exceeds seats", () => {
-    const make = (id: string, time: string, extra: Partial<ClinicAppointment> = {}): ClinicAppointment => ({ ...appointment, id, appointmentAt: time, ...extra });
+    // ضيوف بلا مرافق: كل ضيف شخص واحد
+    const make = (id: string, time: string, extra: Partial<ClinicAppointment> = {}): ClinicAppointment => ({ ...appointment, id, appointmentAt: time, assistance: [], ...extra });
     const trips = [make("A", "09:00"), make("B", "09:10"), make("C", "09:15"), make("D", "09:20")];
     const groups = buildTripGroups(trips.map((item) => ({ appointment: item, direction: "ذهاب" as const })));
     expect(groups[0].appointmentIds).toHaveLength(3);
@@ -248,7 +249,7 @@ describe("medical transport rules", () => {
 
   it("groups two guests to the same hospital 30 minutes apart even from different buildings", () => {
     // حالة حقيقية: مبنى 26 الساعة 08:30 ومبنى 27 الساعة 09:00، كلاهما إلى المستشفى الكوبي (دخان)
-    const make = (id: string, building: string, time: string): ClinicAppointment => ({ ...appointment, id, buildingNumber: building, appointmentAt: time, clinic: "The Cuban Hospital", hospitalId: "cuban" });
+    const make = (id: string, building: string, time: string): ClinicAppointment => ({ ...appointment, id, buildingNumber: building, appointmentAt: time, clinic: "The Cuban Hospital", hospitalId: "cuban", assistance: [] });
     const first = make("C1", "26", "08:30");
     const second = make("C2", "27", "09:00");
     expect(calculateTripGroupingScore(first, second).score).toBeLessThan(55);
@@ -264,10 +265,13 @@ describe("medical transport rules", () => {
 
   it("suggests joining a car already on its way to the same destination", () => {
     const sent: VehicleRequest = { ...request, id: "R-SENT", status: "تم إرسال السيارة", vehiclePlate: "943438" };
-    const second: ClinicAppointment = { ...appointment, id: "APT-9", appointmentAt: "09:15" };
+    // ضيف مع مرافقه (شخصان) في السيارة، ويُضم إليه ضيف وحده (3 أشخاص)
+    const second: ClinicAppointment = { ...appointment, id: "APT-9", appointmentAt: "09:15", assistance: [] };
     const newRequest: VehicleRequest = { ...request, id: "R-NEW", appointmentId: "APT-9", vehiclePlate: undefined };
     const joins = suggestJoinDispatched([{ request: newRequest, appointment: second }], [{ request: sent, appointment }]);
     expect(joins).toEqual([expect.objectContaining({ requestId: "R-NEW", plate: "943438" })]);
+    // ضيف آخر مع مرافقه لا يجد مقعدين
+    expect(suggestJoinDispatched([{ request: newRequest, appointment: { ...second, assistance: ["يحتاج مرافق"] } }], [{ request: sent, appointment }])).toEqual([]);
   });
 
   it("alerts about an unrequested appointment to the same destination at the same time", () => {

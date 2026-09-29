@@ -9,7 +9,9 @@ declare(strict_types=1);
 const APPOINTMENT_STATUSES = ['بانتظار طلب السيارة', 'تم طلب السيارة', 'تم استلام المريض', 'طلب عودة', 'مكتملة', 'ملغي'];
 const APPOINTMENT_FIELDS = ['id', 'patientName', 'clinic', 'buildingNumber', 'apartmentNumber', 'mobile', 'appointmentDate',
     'appointmentAt', 'hospitalId', 'category', 'kind', 'assistance', 'status', 'cancelReason', 'cancelledBy', 'cancelledAt',
-    'gender', 'cancer', '_o'];
+    'gender', 'cancer', 'returnedSelf', 'returnedSelfBy', 'returnedSelfAt', '_o'];
+/** الضيف عاد إلى المجمع بنفسه بلا سيارة عودة (يسجّله مشرف المبنى باسمه ووقته) */
+const SELF_RETURN_FIELDS = ['returnedSelf', 'returnedSelfBy', 'returnedSelfAt'];
 /** خانات إلغاء الموعد (السبب إلزامي، ومن ألغاه، ومتى) */
 const CANCEL_FIELDS = ['cancelReason', 'cancelledBy', 'cancelledAt'];
 const REQUEST_STATUSES = ['بانتظار التوزيع', 'تم إرسال السيارة', 'وصلت السيارة', 'تم استلام المريض', 'وصلت الوجهة'];
@@ -19,7 +21,7 @@ const CHECK_FIELDS = ['arrivalCheck', 'arrivalCheckBy', 'arrivalCheckAt', 'picku
 const CHECK_SECONDS = 300;
 const REQUEST_FIELDS = ['id', 'appointmentId', 'vehiclePlate', 'driver', 'direction', 'status', 'notificationMethod',
     'createdAt', 'groupId', 'notificationSentAt', 'requestedBy', 'pickedUpAt', 'etaAt', 'destLat', 'destLng', 'arrivedAt', 'arrivalSource',
-    'fromAppointmentId', 'driverArrivedAt', 'arrivalGps', 'pickupGps', ...CHECK_FIELDS, '_o'];
+    'fromAppointmentId', 'nurseOnly', 'driverArrivedAt', 'arrivalGps', 'pickupGps', ...CHECK_FIELDS, '_o'];
 /** خانات مرحلة الطريق إلى الوجهة (تُكتب عند استلام المريض وعند الوصول) */
 const TRIP_FIELDS = ['pickedUpAt', 'etaAt', 'destLat', 'destLng', 'arrivedAt', 'arrivalSource'];
 const VEHICLE_FIELDS = ['plate', 'driver', 'phone', 'kind', 'available', 'busRole', '_o'];
@@ -130,11 +132,15 @@ function valid_appointment(array $data, string $id): bool
         && ($data['category'] ?? 'غير طبية') === 'غير طبية'
         && is_array($data['assistance'] ?? []) && count($data['assistance'] ?? []) <= 4
         && in_array($data['gender'] ?? 'ذكر', ['ذكر', 'أنثى'], true)
-        && is_bool($data['cancer'] ?? false);
+        && is_bool($data['cancer'] ?? false)
+        && is_bool($data['returnedSelf'] ?? false);
 }
 
-/** يعيد سبب الرفض، أو null إن كانت العملية مسموحة. */
-function authorize_write(array $user, string $col, string $id, ?array $before, ?array $after): ?string
+/**
+ * يعيد سبب الرفض، أو null إن كانت العملية مسموحة.
+ * $appointmentOf (اختياري): يقرأ الموعد المحفوظ برقمه (لطلب السيارة الجديد).
+ */
+function authorize_write(array $user, string $col, string $id, ?array $before, ?array $after, ?callable $appointmentOf = null): ?string
 {
     $denied = 'ليست لديك صلاحية لتنفيذ هذا الإجراء.';
     $role = $user['role'];
@@ -171,6 +177,13 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
                         && ($after['cancelledBy'] ?? null) === $user['display_name']
                         && is_text($after['cancelledAt'] ?? null, 40) && strtotime($after['cancelledAt']) !== false ? null : $denied;
                 }
+                // الضيف عاد بنفسه: ينتهي الموعد بعد ذهابه، باسم المشرف ووقته
+                if (array_intersect($changed, SELF_RETURN_FIELDS)) {
+                    return only($changed, ['status', ...SELF_RETURN_FIELDS])
+                        && in_array($before['status'] ?? null, ['تم استلام المريض', 'تم طلب السيارة'], true)
+                        && ($after['status'] ?? null) === 'مكتملة' && ($after['returnedSelf'] ?? null) === true
+                        && ($after['returnedSelfBy'] ?? null) === $user['display_name'] && is_iso($after['returnedSelfAt'] ?? null) ? null : $denied;
+                }
                 return only($changed, ['status']) && in_array($after['status'] ?? null, APPOINTMENT_STATUSES, true) ? null : $denied;
             }
             return $denied;
@@ -187,6 +200,12 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
                 $owner = $after['requestedBy'] ?? null;
                 if (has_role($user, BUILDING_ROLES) && $owner !== (string)$user['id']) return 'بيانات الطلب غير صالحة';
                 if ($role === 'fleetSupervisor' && $owner !== null) return 'بيانات الطلب غير صالحة';
+                // مشرف السيارات يرى المواعيد الطبية ولا يطلب لها سيارة (يطلبها مشرف المبنى)، بل يضيف الرحلات غير الطبية.
+                // الموعد غير المحفوظ بعد هو رحلة غير طبية يضيفها معه في نفس اللحظة
+                if ($role === 'fleetSupervisor' && $appointmentOf) {
+                    $linked = $appointmentOf((string)($after['appointmentId'] ?? ''));
+                    if ($linked !== null && ($linked['category'] ?? '') !== 'غير طبية') return $denied;
+                }
                 $valid = only(array_keys($after), REQUEST_FIELDS)
                     && ($after['id'] ?? null) === $id
                     && is_text($after['appointmentId'] ?? null, 160)
@@ -197,12 +216,15 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
                     && (!array_key_exists('fromAppointmentId', $after)
                         || (is_text($after['fromAppointmentId'], 160) && $after['fromAppointmentId'] !== '' && $after['fromAppointmentId'] !== $after['appointmentId']
                             && $after['direction'] === 'ذهاب'))
+                    // عودة الـ Nurse فقط: طلب عودة (لا نقل بين موعدين)
+                    && (!array_key_exists('nurseOnly', $after)
+                        || ($after['nurseOnly'] === true && $after['direction'] === 'عودة' && !array_key_exists('fromAppointmentId', $after)))
                     && !array_intersect(array_keys($after), ['vehiclePlate', 'driver', 'groupId', 'notificationSentAt', ...TRIP_FIELDS]);
                 return $valid ? null : 'بيانات الطلب غير صالحة';
             }
             if (!valid_trip_fields($after)) return 'بيانات الطلب غير صالحة';
             if ($role === 'admin') {
-                return only($changed, REQUEST_FIELDS) && !array_intersect($changed, ['id', 'appointmentId', 'fromAppointmentId'])
+                return only($changed, REQUEST_FIELDS) && !array_intersect($changed, ['id', 'appointmentId', 'fromAppointmentId', 'nurseOnly'])
                     && in_array($after['status'] ?? null, REQUEST_STATUSES, true) ? null : $denied;
             }
             // مشرف السيارات: إرسال السيارة وجمع الرحلات، وتأكيد وصولها إلى الوجهة (يدويًا أو بانتهاء المدة التقديرية)،
@@ -221,6 +243,10 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
             // مشرف المبنى (لطلباته) ومسؤول مشرفي المباني (لكل الطلبات): تأكيد وصول السيارة واستلام المريض، ومعه
             // وقت الاستلام والوقت المتوقع للوصول، والرد على ما سجّله السائق (التأكيد، أو النفي الذي يعيد الطلب إلى المرحلة السابقة)
             if (has_role($user, BUILDING_ROLES)) {
+                // أي مشرف مبنى يطلب عودة الضيف مع الـ Nurse التي تنتظر سيارتها: يصبح طلب عودتها طلب عودة لهما
+                if ($changed === ['nurseOnly'] && ($before['nurseOnly'] ?? null) === true && !array_key_exists('nurseOnly', $after)) {
+                    return in_array($before['status'] ?? null, ['بانتظار التوزيع', 'تم إرسال السيارة', 'وصلت السيارة'], true) ? null : $denied;
+                }
                 if (!follows_request($user, $before)) return $denied;
                 if (!only($changed, ['status', 'pickedUpAt', 'etaAt', 'destLat', 'destLng', 'pickupGps', ...CHECK_FIELDS])) return $denied;
                 if (!valid_check_replies($user, $before, $after, $changed)) return $denied;
