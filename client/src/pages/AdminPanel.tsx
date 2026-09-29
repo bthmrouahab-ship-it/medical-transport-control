@@ -21,9 +21,12 @@ import {
   X,
 } from "lucide-react";
 import {
+  BUS_ROLE_LABELS,
   DEFAULT_VEHICLES,
   VEHICLE_KINDS,
+  busRoleOf,
   localDateString,
+  mergeVehicle,
   migrateRequest,
   validateVehicle,
   vehicleHasActiveTrip,
@@ -369,7 +372,7 @@ function VehiclesTab({ vehicles, requests, onChange }: {
       return;
     }
     if (original) {
-      onChange(vehicles.map((vehicle) => vehicle.plate === original.plate ? { ...vehicle, ...result.vehicle } : vehicle));
+      onChange(vehicles.map((vehicle) => vehicle.plate === original.plate ? mergeVehicle(vehicle, result.vehicle) : vehicle));
       toast.success("تم تحديث بيانات السيارة");
     } else {
       onChange([...vehicles, { ...result.vehicle, available: true }]);
@@ -416,7 +419,7 @@ function VehiclesTab({ vehicles, requests, onChange }: {
                   <div className="min-w-0">
                     <p className="font-semibold text-ink"><span dir="ltr" className="tabular">{vehicle.plate}</span> · {vehicle.driver}</p>
                     <p className="mt-0.5 flex flex-wrap items-center gap-x-2 text-xs text-slate-500">
-                      <span>{vehicle.kind}</span>
+                      <span>{vehicle.kind}{busRoleOf(vehicle) ? ` · ${BUS_ROLE_LABELS[busRoleOf(vehicle)!]}` : ""}</span>
                       {vehicle.phone && <><span className="text-slate-300">·</span><span dir="ltr">{vehicle.phone}</span></>}
                     </p>
                   </div>

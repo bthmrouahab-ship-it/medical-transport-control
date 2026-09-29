@@ -29,7 +29,7 @@ const APPOINTMENT_FIELD_LABELS = [
     'cancer' => 'حالة سرطان',
 ];
 
-const VEHICLE_FIELD_LABELS = ['plate' => 'رقم السيارة', 'driver' => 'السائق', 'phone' => 'الهاتف', 'kind' => 'النوع'];
+const VEHICLE_FIELD_LABELS = ['plate' => 'رقم السيارة', 'driver' => 'السائق', 'phone' => 'الهاتف', 'kind' => 'النوع', 'busRole' => 'تخصيص الباص'];
 
 const REQUEST_FIELD_LABELS = [
     'vehiclePlate' => 'السيارة',
@@ -203,6 +203,12 @@ function describe_write(PDO $pdo, string $col, string $id, ?array $before, ?arra
                     $details['eta'] = qatar_time($after['etaAt'] ?? null);
                     return ['request', 'request.pickup', "استلام $who في السيارة $plate ($direction)" . ($details['eta'] ? " · الوصول المتوقع {$details['eta']}" : '') . $byDriver('pickupGps'), $details];
                 }
+                // مشرف السيارات أنهى رحلة عالقة لم يُسجَّل فيها استلام الضيف (حتى تتفرغ السيارة)
+                if ($status === 'وصلت الوجهة' && in_array($before['status'] ?? null, ['تم إرسال السيارة', 'وصلت السيارة'], true)) {
+                    $details['arrivedAt'] = qatar_time($after['arrivedAt'] ?? null);
+                    $details['source'] = 'إنهاء يدوي';
+                    return ['request', 'request.ended', "إنهاء رحلة السيارة $plate لـ $who ($direction) قبل تسجيل الاستلام · أصبحت السيارة متاحة", $details];
+                }
                 if ($status === 'وصلت الوجهة') {
                     $source = ['gps' => 'GPS', 'estimate' => 'انتهاء المدة التقديرية', 'manual' => 'تأكيد يدوي'][$after['arrivalSource'] ?? ''] ?? '';
                     $details['source'] = $source;
@@ -233,7 +239,12 @@ function describe_write(PDO $pdo, string $col, string $id, ?array $before, ?arra
             if ($changed === ['available']) {
                 return ['vehicle', 'vehicle.availability', !empty($after['available']) ? "إتاحة السيارة $plate للخدمة" : "إيقاف السيارة $plate عن الخدمة", $details];
             }
-            $changes = field_changes($before, $after, VEHICLE_FIELD_LABELS);
+            $withRole = fn(?array $doc) => $doc ? ['busRole' => BUS_ROLE_LABELS[$doc['busRole'] ?? ''] ?? ''] + $doc : null;
+            if ($changed === ['busRole']) {
+                $label = BUS_ROLE_LABELS[$after['busRole'] ?? ''] ?? '';
+                return ['vehicle', 'vehicle.bus_role', $label ? "تخصيص الباص $plate: $label" : "إلغاء تخصيص الباص $plate (باص عادي)", $details];
+            }
+            $changes = field_changes($withRole($before), $withRole($after), VEHICLE_FIELD_LABELS);
             $details['changes'] = changes_text($changes);
             return ['vehicle', 'vehicle.update', "تعديل بيانات السيارة $plate: " . changes_text($changes), $details];
 

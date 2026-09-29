@@ -8,6 +8,10 @@ import {
   CheckCircle2,
   Copy,
   Download,
+  Flag,
+  Layers,
+  Minus,
+  Pencil,
   History,
   Link2,
   MapPin,
@@ -26,27 +30,39 @@ import {
   Wand2,
 } from "lucide-react";
 import {
+  BUS_ROLES,
+  BUS_ROLE_LABELS,
+  appointmentDateTime,
   appointmentPickupLabel,
   assignVehicleForTrips,
   buildDriverMessage,
   buildTripGroups,
+  busRoleOf,
+  busesOff,
+  calculateTripGroupingScore,
+  canShareVehicle,
   findUnrequestedMatches,
-  groupCapacity,
   isNonMedical,
   isPriority,
+  isRushHour,
   isTransfer,
   localDateString,
   matchHospitalZone,
   needsAccessibleVehicle,
   planDispatch,
   routeLabel,
+  seatsFor,
   suggestJoinDispatched,
   vehicleLoad,
+  vehicleRestriction,
+  vehicleSeats,
   whatsappLink,
+  type BusRole,
   type ClinicAppointment,
   type DispatchPlan,
   type Vehicle,
   type VehicleRequest,
+  type VehicleRules,
 } from "@shared/transport";
 import type { Hospital } from "@shared/hospitals";
 import { arrivalsOn, neededAt, suggestReturnRedirects, tripEndpoints, tripPhase, vehicleAvailability, vehicleLocationState, type TripPhase } from "@shared/trips";
@@ -116,12 +132,20 @@ function groupPhase(phases: TripPhase[]): TripPhase {
   return { ...last, tracking: onRoad.some((phase) => phase.tracking) };
 }
 
+/** عدد الضيوف: ضيف واحد، ضيفان، 3 ضيوف، 11 ضيفًا */
+const guestsText = (count: number) => (count === 1 ? "ضيف واحد" : count === 2 ? "ضيفان" : count <= 10 ? `${count} ضيوف` : `${count} ضيفًا`);
 const tripsText = (count: number) => (count === 0 ? "بلا رحلات اليوم" : count === 1 ? "رحلة اليوم" : count === 2 ? "رحلتان اليوم" : `${count} رحلات اليوم`);
 const minutesText = (minutes: number) => (minutes <= 1 ? "دقيقة" : minutes <= 10 ? `${minutes} دقائق` : `${minutes} دقيقة`);
 
 type DriverMessage = { vehicle: Vehicle; count: number; message: string };
 
-export function FleetSupervisorPage({ vehicles, appointments, requests, date, onDateChange, onManager, onUpdate, onDispatch, onDispatchMany, onArrived, onExport, onAddTrip }: {
+/** نوع السيارة مع تخصيص الباص: «باص · باص المجمع» */
+const kindText = (vehicle: Vehicle) => `${vehicle.kind}${busRoleOf(vehicle) ? ` · ${BUS_ROLE_LABELS[busRoleOf(vehicle)!]}` : ""}`;
+
+/** خيار سيارة لرحلة: متاحة لها الآن، أو غير متاحة مع السبب (مشغولة، أو قاعدة الباصات والمقاعد) */
+type VehicleChoice = { vehicle: Vehicle; why: string | null };
+
+export function FleetSupervisorPage({ vehicles, appointments, requests, date, onDateChange, onManager, onUpdate, onDispatch, onDispatchMany, onArrived, onEndTrip, onExport, onAddTrip }: {
   vehicles: Vehicle[];
   appointments: ClinicAppointment[];
   requests: VehicleRequest[];
@@ -132,6 +156,8 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
   onDispatch: (requestIds: string[], vehicle: Vehicle, joinRequestIds?: string[]) => void;
   onDispatchMany: (items: { requestIds: string[]; vehicle: Vehicle }[]) => DriverMessage[];
   onArrived: (requestIds: string[], source: "manual" | "estimate") => void;
+  /** إنهاء رحلة عالقة قبل تسجيل الاستلام (تصبح السيارة متاحة) */
+  onEndTrip: (requestIds: string[]) => void;
   onExport: () => void;
   onAddTrip: (appointment: ClinicAppointment, request: VehicleRequest) => void;
 }) {
@@ -140,9 +166,14 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
   const [vehicleFilter, setVehicleFilter] = useState<VehicleFilter>("all");
   const [plan, setPlan] = useState<DispatchPlan | null>(null);
   const [driverMessages, setDriverMessages] = useState<DriverMessage[] | null>(null);
+  /** نافذة تعديل رحلة مجمّعة: الطلبات المختارة فيها أولًا */
+  const [editing, setEditing] = useState<string[] | null>(null);
   const hospitals = useHospitals();
   const now = useNow(15000);
   const today = localDateString(now);
+  // قواعد السيارات الآن: ساعات الباصات (غير متاحة 6–9 صباحًا)، وباص المجمع وقت الذروة
+  const rules: VehicleRules = { now, hospitals };
+  const busOffNow = busesOff(now);
 
   // السيارات التي يصل موقعها مباشرة الآن، واسم السائق الذي يقودها فعليًا
   const liveGps = useLiveVehicles(now);
@@ -172,7 +203,10 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
     .filter(isTrip);
   const availability = new Map(vehicles.map((vehicle) => [vehicle.plate, vehicleAvailability(vehicle.plate, requests, now, gpsLive(vehicle.plate))]));
   const isBusy = (plate: string) => Boolean(availability.get(plate)?.busy);
-  const dispatchable = vehicles.filter((vehicle) => vehicle.available && !isBusy(vehicle.plate));
+  const offHours = (vehicle: Vehicle) => vehicle.kind === "باص" && busOffNow;
+  // باص العيادة في خدمتها، فلا يُحسب بين السيارات المتاحة للتوزيع
+  const forClinic = (vehicle: Vehicle) => busRoleOf(vehicle) === "clinic";
+  const dispatchable = vehicles.filter((vehicle) => vehicle.available && !isBusy(vehicle.plate) && !offHours(vehicle) && !forClinic(vehicle));
   // رحلات كل سيارة في اليوم المختار: السيارة الأقل رحلات تُقترح أولًا حتى يتوزع العمل
   const load = vehicleLoad(requests, appointments, date);
 
@@ -191,10 +225,31 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
     .filter((request) => request.status === "بانتظار التوزيع" && (request.direction === "عودة" || isTransfer(request)))
     .map(withAppointment)
     .filter(isTrip);
-  const redirects = suggestReturnRedirects(pendingReturns, dispatchable, locationStates, hospitals);
+  const redirects = suggestReturnRedirects(pendingReturns, dispatchable, locationStates, hospitals,
+    (vehicle, trip) => !vehicleRestriction(vehicle, { appointments: [trip.appointment], transfer: isTransfer(trip.request) }, rules));
   const redirectFor = new Map(redirects.map((item) => [item.request.id, item]));
   // تفضيل السيارة حسب مكانها: رحلة الذهاب تبدأ من المجمع (السيارات داخله أولًا)، والعودة تأخذ السيارة الموجَّهة إليها
   const transferIds = new Set(requests.filter(isTransfer).map((request) => request.id));
+  /** السيارة المقترحة لرحلة (ضيف أو أكثر) من السيارات المتاحة الآن */
+  const suggestFor = (trips: Trip[]) => assignVehicleForTrips(dispatchable, trips.map((trip) => trip.appointment), load,
+    locationRank(trips[0]?.request.direction ?? "ذهاب", trips.map((trip) => trip.request.id)),
+    { ...rules, transfer: trips.some((trip) => isTransfer(trip.request)) });
+  /**
+   * كل السيارات في الخدمة لرحلة: المتاحة لها الآن أولًا (السيارة المجهزة آخرًا للرحلة العادية)، ثم غير المتاحة مع السبب.
+   * السيارات العادية لا تظهر لرحلة احتياجات خاصة، ولا يظهر باص العيادة.
+   */
+  const choicesFor = (trips: Trip[]): VehicleChoice[] => {
+    const riders = { appointments: trips.map((trip) => trip.appointment), transfer: trips.some((trip) => isTransfer(trip.request)) };
+    const accessible = needsAccessibleVehicle(riders.appointments);
+    return vehicles
+      .filter((vehicle) => vehicle.available && !forClinic(vehicle) && (!accessible || vehicle.kind === "احتياجات خاصة"))
+      .map((vehicle) => {
+        const until = availability.get(vehicle.plate)?.until;
+        const why = isBusy(vehicle.plate) ? `مشغولة${until ? ` حتى ${timeLabel(until)}` : ""}` : vehicleRestriction(vehicle, riders, rules);
+        return { vehicle, why };
+      })
+      .sort((a, b) => Number(Boolean(a.why)) - Number(Boolean(b.why)) || Number(a.vehicle.kind === "احتياجات خاصة") - Number(b.vehicle.kind === "احتياجات خاصة"));
+  };
   const locationRank = (direction: VehicleRequest["direction"], requestIds: string[]) => (vehicle: Vehicle) => {
     // العودة والنقل بين موعدين يبدآن من مستشفى: السيارة الموجَّهة إليهما أولًا
     if (direction === "عودة" || requestIds.some((id) => transferIds.has(id))) return requestIds.some((id) => redirectFor.get(id)?.vehicle.plate === vehicle.plate) ? 0 : 1;
@@ -205,9 +260,10 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
   // النقل بين موعدين يبدأ من مستشفى، فلا يُجمع مع رحلات تبدأ من المجمع
   const groupable = pending.filter((trip) => !isTransfer(trip.request));
   // الجمع حسب وقت الحاجة إلى السيارة (وقت الطلب)، لا وقت الموعد وحده
-  const groups = buildTripGroups(groupable.map((trip) => ({ appointment: trip.appointment, direction: trip.request.direction, at: trip.at })), hospitals);
+  // حتى 14 ضيفًا إن كان باص متاح يناسبهم (رحلات غير طبية مع باصها، ومستشفى الثمامة وقت الذروة مع باص المجمع)
+  const groups = buildTripGroups(groupable.map((trip) => ({ appointment: trip.appointment, direction: trip.request.direction, at: trip.at })), hospitals, seatsFor(dispatchable, rules));
   const groupedIds = new Set(groups.flatMap((group) => group.appointmentIds));
-  const joins = suggestJoinDispatched(groupable.filter((trip) => !groupedIds.has(trip.appointment.id)), toPickupTrips.filter((trip) => onDate(trip) && !isTransfer(trip.request)), hospitals);
+  const joins = suggestJoinDispatched(groupable.filter((trip) => !groupedIds.has(trip.appointment.id)), toPickupTrips.filter((trip) => onDate(trip) && !isTransfer(trip.request)), hospitals, vehicles, rules);
   const unrequested = findUnrequestedMatches(appointments, requests, hospitals, now).filter((match) => match.appointment.appointmentDate === date);
 
   // الرحلات الجارية مجمّعة حسب السيارة (groupId أو الطلب نفسه)
@@ -258,24 +314,43 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
   }
 
   function dispatchSingle(trip: Trip) {
-    const suggested = assignVehicleForTrips(dispatchable, [trip.appointment], load, locationRank(trip.request.direction, [trip.request.id]));
-    const plate = selectedVehicles[trip.request.id] || suggested?.plate;
-    const vehicle = dispatchable.find((item) => item.plate === plate);
-    if (!vehicle) {
+    const plate = selectedVehicles[trip.request.id] || suggestFor([trip])?.plate;
+    const choice = choicesFor([trip]).find((item) => item.vehicle.plate === plate && !item.why);
+    if (!choice) {
       toast.error("اختر سيارة متاحة ومناسبة للرحلة");
       return;
     }
-    onDispatch([trip.request.id], vehicle);
+    onDispatch([trip.request.id], choice.vehicle);
   }
 
   function dispatchGroup(appointmentIds: string[]) {
     const members = pending.filter((trip) => appointmentIds.includes(trip.appointment.id));
-    const vehicle = assignVehicleForTrips(dispatchable, members.map((trip) => trip.appointment), load, locationRank(members[0]?.request.direction ?? "ذهاب", members.map((trip) => trip.request.id)));
+    const vehicle = suggestFor(members);
     if (!vehicle || members.length < 2) {
       toast.error("لا توجد سيارة مناسبة ومتاحة لجمع هذه الرحلات");
       return;
     }
     onDispatch(members.map((trip) => trip.request.id), vehicle);
+  }
+
+  /** إرسال رحلة عدّلها المشرف (ضيوف اختارهم وسيارة) من نافذة التعديل. */
+  function dispatchEdited(requestIds: string[], plate: string) {
+    const members = pending.filter((trip) => requestIds.includes(trip.request.id));
+    const choice = choicesFor(members).find((item) => item.vehicle.plate === plate);
+    if (members.length !== requestIds.length || !choice || choice.why) {
+      toast.error("تغيّرت الطلبات أو السيارة، راجع الرحلة");
+      return;
+    }
+    onDispatch(requestIds, choice.vehicle);
+    setEditing(null);
+  }
+
+  /** تخصيص الباص: باص المجمع أو باص الرحلات غير الطبية أو باص العيادة (باص واحد لكل تخصيص)، أو باص عادي. */
+  function setBusRole(bus: Vehicle, role: BusRole | "") {
+    const clear = ({ busRole: _busRole, ...vehicle }: Vehicle): Vehicle => vehicle;
+    onUpdate(vehicles.map((vehicle) => vehicle.plate === bus.plate ? (role ? { ...vehicle, busRole: role } : clear(vehicle))
+      : role && vehicle.busRole === role ? clear(vehicle) : vehicle));
+    toast.success(role ? `الباص ${bus.plate} أصبح ${BUS_ROLE_LABELS[role]}` : `الباص ${bus.plate} أصبح باصًا عاديًا`);
   }
 
   /** توجيه سيارة خارج المجمع إلى ضيف ينتظر العودة (من القائمة أو من زر التنبيه). */
@@ -297,9 +372,8 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
 
   // أقرب سيارة مناسبة تتفرغ (لرحلة لا توجد لها سيارة متاحة الآن)
   function nextFree(appointments: ClinicAppointment[]) {
-    const accessible = needsAccessibleVehicle(appointments);
     const soonest = vehicles
-      .filter((vehicle) => vehicle.available && isBusy(vehicle.plate) && (!accessible || vehicle.kind === "احتياجات خاصة"))
+      .filter((vehicle) => isBusy(vehicle.plate) && !vehicleRestriction(vehicle, { appointments }, rules))
       .flatMap((vehicle) => {
         const until = availability.get(vehicle.plate)?.until;
         return until ? [{ vehicle, until }] : [];
@@ -324,6 +398,11 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
     if (!vehicle.available) return { tone: "neutral" as const, text: "خارج الخدمة" };
     const state = availability.get(vehicle.plate);
     if (!state?.busy) {
+      if (forClinic(vehicle)) return { tone: "neutral" as const, text: "في خدمة العيادة" };
+      if (offHours(vehicle)) return { tone: "neutral" as const, text: "الباصات غير متاحة من 6 إلى 9 صباحًا" };
+      if (busRoleOf(vehicle) === "shuttle") {
+        return { tone: "violet" as const, text: isRushHour(now) ? "يلف داخل المجمع · وقت الذروة: يمكن إرساله إلى مستشفى الثمامة" : "يلف داخل المجمع" };
+      }
       const place = locationStates.get(vehicle.plate);
       if (place?.kind === "outside") {
         return { tone: "cyan" as const, text: `متاحة خارج المجمع · عائدة من ${place.from || "الوجهة"} · تصل ${timeLabel(place.backAt)}${place.canRedirect ? "" : " · قطعت نصف الطريق"}` };
@@ -372,7 +451,7 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
         <Stat icon={BellRing} tone="amber" label="بانتظار التوزيع" value={pending.length} hint={date === today ? "طلبات اليوم" : "طلبات التاريخ المحدد"} />
         <Stat icon={Truck} tone="blue" label="رحلات جارية" value={activeGroups.length} hint={trackingCount ? `${trackingCount} بمتابعة GPS` : "الآن"} />
         <Stat icon={CheckCircle2} tone="green" label="سيارات متاحة" value={dispatchable.length} hint={`${vehicleCounts.inside} داخل المجمع · ${vehicleCounts.outside} خارجه`} />
-        <Stat icon={PauseCircle} tone="neutral" label="خارج الخدمة" value={vehicleCounts.off} />
+        <Stat icon={PauseCircle} tone="neutral" label="خارج الخدمة" value={vehicleCounts.off} hint={busOffNow ? "والباصات غير متاحة حتى 9:00" : undefined} />
       </div>
 
       <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_380px]">
@@ -405,7 +484,7 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
             actions={pending.length > 0 && (
               <button
                 disabled={!dispatchable.length}
-                onClick={() => setPlan(planDispatch(pending, dispatchable, load, hospitals, (unit, vehicle) => locationRank(unit.direction, unit.requestIds)(vehicle)))}
+                onClick={() => setPlan(planDispatch(pending, dispatchable, load, hospitals, (unit, vehicle) => locationRank(unit.direction, unit.requestIds)(vehicle), rules))}
                 title={dispatchable.length ? "توزيع الطلبات على السيارات المتاحة بالتساوي" : "لا توجد سيارة متاحة الآن"}
                 className={btn("primary", "sm")}
               >
@@ -416,14 +495,12 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
             {pending.length ? (
               <div className="divide-y divide-slate-100">
                 {pendingShown.map((trip) => {
-                  const suggested = assignVehicleForTrips(dispatchable, [trip.appointment], load, locationRank(trip.request.direction, [trip.request.id]));
+                  const suggested = suggestFor([trip]);
                   const redirect = redirectFor.get(trip.request.id);
                   const selectedPlate = selectedVehicles[trip.request.id] || suggested?.plate || "";
-                  // الرحلة العادية تقبل أي سيارة (سيدان وباص أولًا)، واحتياجات خاصة تحتاج سيارة مجهزة
-                  const compatible = (trip.appointment.kind === "احتياجات خاصة" ? vehicles.filter((vehicle) => vehicle.kind === "احتياجات خاصة") : [...vehicles]
-                    .sort((a, b) => Number(a.kind === "احتياجات خاصة") - Number(b.kind === "احتياجات خاصة")))
-                    .filter((vehicle) => vehicle.available);
-                  const ready = compatible.filter((vehicle) => !isBusy(vehicle.plate));
+                  // المتاحة لها أولًا، ثم المشغولة وما لا يناسبها (الباصات: الساعات والتخصيص) مع السبب
+                  const choices = choicesFor([trip]);
+                  const ready = choices.filter((choice) => !choice.why).map((choice) => choice.vehicle);
                   const zone = matchHospitalZone(trip.appointment, hospitals);
                   return (
                     <div key={trip.request.id} className="flex flex-col gap-4 p-4 sm:p-5 lg:flex-row lg:items-center">
@@ -448,16 +525,18 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
                           )}
                         </div>
                       </div>
-                      <div className="flex flex-col gap-2 sm:flex-row lg:w-[360px]">
+                      <div className="flex flex-col gap-2 sm:flex-row lg:w-[440px]">
                         <select aria-label="السيارة" value={ready.some((vehicle) => vehicle.plate === selectedPlate) ? selectedPlate : ""} onChange={(event) => setSelectedVehicles((current) => ({ ...current, [trip.request.id]: event.target.value }))} className={cx(inputClass, "h-10 min-w-0 flex-1")}>
                           {!ready.length && <option value="">لا توجد سيارة متاحة</option>}
-                          {ready.map((vehicle) => <option key={vehicle.plate} value={vehicle.plate}>{vehicle.plate} · {driverOf(vehicle.plate)} · {vehicle.kind} · {placeText(vehicle.plate)} · {tripsText(load.get(vehicle.plate) ?? 0)}</option>)}
-                          {compatible.filter((vehicle) => isBusy(vehicle.plate)).map((vehicle) => {
-                            const until = availability.get(vehicle.plate)?.until;
-                            return <option key={vehicle.plate} value={vehicle.plate} disabled>{vehicle.plate} · مشغولة{until ? ` حتى ${timeLabel(until)}` : ""}</option>;
-                          })}
+                          {choices.map(({ vehicle, why }) => why
+                            ? <option key={vehicle.plate} value={vehicle.plate} disabled>{vehicle.plate} · {kindText(vehicle)} · {why}</option>
+                            : <option key={vehicle.plate} value={vehicle.plate}>{vehicle.plate} · {driverOf(vehicle.plate)} · {kindText(vehicle)} · {placeText(vehicle.plate)} · {tripsText(load.get(vehicle.plate) ?? 0)}</option>)}
                         </select>
-                        <button disabled={!ready.length} onClick={() => dispatchSingle(trip)} className={btn("primary")}><Send className="h-4 w-4" /> إرسال</button>
+                        <div className="flex gap-2">
+                          <button disabled={!ready.length} onClick={() => dispatchSingle(trip)} className={cx(btn("primary"), "flex-1")}><Send className="h-4 w-4" /> إرسال</button>
+                          {/* النقل بين موعدين يبدأ من مستشفى فلا يُجمع مع غيره */}
+                          {!trip.from && <button onClick={() => setEditing([trip.request.id])} title="جمع هذه الرحلة مع رحلات أخرى في سيارة واحدة" className={cx(btn("secondary"), "flex-1")}><Layers className="h-4 w-4" /> جمع</button>}
+                        </div>
                       </div>
                     </div>
                   );
@@ -471,16 +550,19 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
               <div className="grid gap-4 p-4 sm:p-5 lg:grid-cols-2">
                 {groups.map((group) => {
                   const members = pending.filter((trip) => group.appointmentIds.includes(trip.appointment.id));
-                  const vehicle = assignVehicleForTrips(dispatchable, members.map((trip) => trip.appointment), load, locationRank(members[0]?.request.direction ?? "ذهاب", members.map((trip) => trip.request.id)));
+                  const vehicle = suggestFor(members);
                   return (
                     <div key={group.appointmentIds.join("-")} className="flex flex-col rounded-xl bg-violet-50/50 p-4 ring-1 ring-violet-100">
                       <div className="flex items-start justify-between gap-3">
                         <p className="text-xs font-medium text-violet-800">{group.direction} · {group.reason}</p>
-                        <Badge tone="violet">{members.length} رحلات</Badge>
+                        <Badge tone="violet">{guestsText(members.length)}</Badge>
                       </div>
                       <TripList trips={members} hospitals={hospitals} />
-                      <p className="mt-3 text-xs text-slate-500">السيارة المقترحة: <span className="font-semibold text-slate-700">{vehicle ? `${vehicle.plate} · ${driverOf(vehicle.plate)}` : "لا توجد سيارة متاحة"}</span></p>
-                      <button disabled={!vehicle} onClick={() => dispatchGroup(group.appointmentIds)} className={cx(btn("dark", "sm"), "mt-3 w-full")}><Send className="h-4 w-4" /> جمع {members.length} رحلات وإرسال السيارة</button>
+                      <p className="mt-3 text-xs text-slate-500">السيارة المقترحة: <span className="font-semibold text-slate-700">{vehicle ? `${vehicle.plate} · ${driverOf(vehicle.plate)} · ${kindText(vehicle)}` : "لا توجد سيارة متاحة"}</span></p>
+                      <div className="mt-3 flex gap-2">
+                        <button disabled={!vehicle} onClick={() => dispatchGroup(group.appointmentIds)} className={cx(btn("dark", "sm"), "flex-1")}><Send className="h-4 w-4" /> إرسال السيارة · {guestsText(members.length)}</button>
+                        <button onClick={() => setEditing(members.map((trip) => trip.request.id))} title="إضافة ضيوف أو إزالتهم أو تغيير السيارة" className={btn("secondary", "sm")}><Pencil className="h-4 w-4" /> تعديل</button>
+                      </div>
                     </div>
                   );
                 })}
@@ -526,6 +608,7 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
                     driver={driverOf(trips[0].request.vehiclePlate, trips[0].request.driver)}
                     hospitals={hospitals}
                     onArrived={() => onArrived(trips.map((trip) => trip.request.id), "manual")}
+                    onEnd={() => onEndTrip(trips.map((trip) => trip.request.id))}
                   />
                 ))}
               </div>
@@ -600,7 +683,18 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
                     <Dot tone={state.tone} />
                     <div className="min-w-0 flex-1">
                       <p className="truncate text-sm font-medium text-ink"><span dir="ltr">{vehicle.plate}</span> · {live?.driver ?? vehicle.driver}</p>
-                      <p className="text-xs leading-5 text-slate-500">{vehicle.kind} · {state.text}{live ? " · GPS مباشر" : ""}</p>
+                      <p className="text-xs leading-5 text-slate-500">{kindText(vehicle)} · {state.text}{live ? " · GPS مباشر" : ""}</p>
+                      {vehicle.kind === "باص" && (
+                        <select
+                          aria-label={`تخصيص الباص ${vehicle.plate}`}
+                          value={busRoleOf(vehicle) ?? ""}
+                          onChange={(event) => setBusRole(vehicle, event.target.value as BusRole | "")}
+                          className="mt-1 h-8 max-w-full rounded-lg border border-slate-300 bg-white px-2 text-xs text-ink outline-none focus:border-brand-600"
+                        >
+                          <option value="">باص عادي</option>
+                          {BUS_ROLES.map((role) => <option key={role} value={role}>{BUS_ROLE_LABELS[role]}{role === "shuttle" ? " (يلف داخل المجمع)" : role === "clinic" ? " (في خدمة العيادة)" : ""}</option>)}
+                        </select>
+                      )}
                     </div>
                     <div className="shrink-0 text-center" title="رحلات اليوم المختار">
                       <p className="text-sm font-semibold text-ink tabular">{load.get(vehicle.plate) ?? 0}</p>
@@ -624,7 +718,21 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
         </aside>
       </div>
 
-      {plan && <AutoDispatchDialog plan={plan} free={dispatchable} load={load} driverOf={driverOf} placeText={placeText} nextFree={nextFree} onConfirm={confirmPlan} onClose={() => setPlan(null)} />}
+      {plan && <AutoDispatchDialog plan={plan} free={dispatchable} load={load} rules={rules} transferIds={transferIds} driverOf={driverOf} placeText={placeText} nextFree={nextFree} onConfirm={confirmPlan} onClose={() => setPlan(null)} />}
+      {editing && (
+        <GroupEditor
+          initial={editing}
+          pending={pending}
+          hospitals={hospitals}
+          load={load}
+          choicesFor={choicesFor}
+          suggestFor={suggestFor}
+          driverOf={driverOf}
+          placeText={placeText}
+          onDispatch={dispatchEdited}
+          onClose={() => setEditing(null)}
+        />
+      )}
       {driverMessages && <DriverMessagesDialog messages={driverMessages} driverOf={driverOf} onClose={() => setDriverMessages(null)} />}
     </>
   );
@@ -647,18 +755,20 @@ function TripList({ trips, hospitals }: { trips: Trip[]; hospitals: Hospital[] }
 const STEPS = ["أُرسلت", "عند الاستلام", "في الطريق", "الوجهة"];
 
 /** رحلة سيارة جارية: مرحلتها، والوقت المتوقع للوصول، ومتابعة GPS، ورسالة السائق. */
-function ActiveTrip({ trips, phase, vehicle, driver, hospitals, onArrived }: {
+function ActiveTrip({ trips, phase, vehicle, driver, hospitals, onArrived, onEnd }: {
   trips: Trip[];
   phase: TripPhase;
   vehicle?: Vehicle;
   driver: string;
   hospitals: Hospital[];
   onArrived: () => void;
+  onEnd: () => void;
 }) {
   const plate = trips[0].request.vehiclePlate ?? "";
   const message = buildDriverMessage(trips, { plate, driver }, hospitals);
   const phone = vehicle?.phone;
-  const seatsLeft = Math.min(...trips.map((trip) => groupCapacity(trip.appointment.kind))) - trips.length;
+  // المقاعد الباقية: الباص 14، والسيارة 3، ومع احتياجات خاصة 2
+  const seatsLeft = vehicleSeats(vehicle ?? { kind: "سيدان" }, trips.map((trip) => trip.appointment)) - trips.length;
   const step = phase.kind === "toPickup" ? (phase.atPickup ? 1 : 0) : phase.kind === "toDestination" ? 2 : 3;
   const destinations = Array.from(new Set(trips.map((trip) => tripEndpoints(trip.appointment, trip.request.direction, hospitals, trip.from).destination)));
   return (
@@ -714,6 +824,15 @@ function ActiveTrip({ trips, phase, vehicle, driver, hospitals, onArrived }: {
         {phase.kind === "toDestination" && (
           <button onClick={() => window.confirm(`تأكيد وصول السيارة ${plate} إلى الوجهة؟ ستصبح متاحة لرحلة جديدة.`) && onArrived()} className={btn("success", "sm")}><CheckCircle2 className="h-4 w-4" /> تأكيد الوصول</button>
         )}
+        {/* رحلة عالقة: أُرسلت السيارة ولم يُسجَّل استلام الضيف */}
+        {phase.kind === "toPickup" && (
+          <button
+            onClick={() => window.confirm(`إنهاء رحلة السيارة ${plate}؟\nاستخدمه إذا انتهت الرحلة ولم يُسجَّل استلام الضيف. تُعتبر الرحلة منتهية وتصبح السيارة متاحة، ويُسجَّل ذلك باسمك.`) && onEnd()}
+            className={cx(btn("secondary", "sm"), "text-slate-700")}
+          >
+            <Flag className="h-4 w-4" /> إنهاء الرحلة
+          </button>
+        )}
       </div>
     </article>
   );
@@ -721,40 +840,60 @@ function ActiveTrip({ trips, phase, vehicle, driver, hospitals, onArrived }: {
 
 /**
  * خطة التوزيع التلقائي قبل الإرسال: كل رحلة وسيارتها المقترحة (الأقل رحلات اليوم)، ويمكن تغيير السيارة
- * أو استبعاد رحلة، ثم تُرسل كل السيارات معًا.
+ * أو استبعاد رحلة أو فصل ضيف عن رحلة مجمّعة (يأخذ سيارة وحده)، ثم تُرسل كل السيارات معًا.
  */
-function AutoDispatchDialog({ plan, free, load, driverOf, placeText, nextFree, onConfirm, onClose }: {
+function AutoDispatchDialog({ plan, free, load, rules, transferIds, driverOf, placeText, nextFree, onConfirm, onClose }: {
   plan: DispatchPlan;
   free: Vehicle[];
   load: Map<string, number>;
+  rules: VehicleRules;
+  transferIds: Set<string>;
   driverOf: (plate?: string, fallback?: string) => string;
   placeText: (plate: string) => string;
   nextFree: (appointments: ClinicAppointment[]) => string;
   onConfirm: (items: { requestIds: string[]; vehicle: Vehicle }[]) => void;
   onClose: () => void;
 }) {
-  const [rows, setRows] = useState(() => plan.assignments.map((item) => ({ ...item, plate: item.vehicle.plate, include: true })));
+  const [rows, setRows] = useState(() => plan.assignments.map(({ vehicle: _vehicle, ...item }) => ({ ...item, plate: _vehicle.plate, include: true })));
   const chosen = rows.filter((row) => row.include);
   const used = new Map<string, number>();
   chosen.forEach((row) => used.set(row.plate, (used.get(row.plate) ?? 0) + 1));
   const conflict = Array.from(used.values()).some((count) => count > 1);
+  // السيارات التي تناسب الرحلة (المقاعد، والاحتياجات الخاصة، وقواعد الباصات)
+  const optionsFor = (row: (typeof rows)[number]) => free.filter((vehicle) => !vehicleRestriction(vehicle, { appointments: row.appointments, transfer: row.requestIds.some((id) => transferIds.has(id)) }, rules));
+  const missing = chosen.some((row) => !optionsFor(row).some((vehicle) => vehicle.plate === row.plate));
   const update = (index: number, change: Partial<(typeof rows)[number]>) => setRows((current) => current.map((row, i) => (i === index ? { ...row, ...change } : row)));
   const names = (appointments: ClinicAppointment[]) => appointments.map((appointment) => appointment.patientName).join("، ");
   const destinations = (appointments: ClinicAppointment[]) => Array.from(new Set(appointments.map((appointment) => appointment.clinic))).join("، ");
+
+  /** فصل ضيف عن رحلة مجمّعة: يصبح رحلة وحده بأنسب سيارة لم تُختر لرحلة أخرى (أو بلا سيارة) */
+  function split(index: number, requestId: string) {
+    setRows((current) => {
+      const row = current[index];
+      const at = row.requestIds.indexOf(requestId);
+      if (at < 0 || row.requestIds.length < 2) return current;
+      const appointment = row.appointments[at];
+      const rest = { ...row, requestIds: row.requestIds.filter((_, i) => i !== at), appointments: row.appointments.filter((_, i) => i !== at) };
+      const taken = new Set(current.filter((item) => item.include).map((item) => item.plate));
+      const vehicle = assignVehicleForTrips(free.filter((item) => !taken.has(item.plate)), [appointment], load, undefined, { ...rules, transfer: transferIds.has(requestId) });
+      const alone = { requestIds: [requestId], appointments: [appointment], direction: row.direction, plate: vehicle?.plate ?? "", include: Boolean(vehicle) };
+      return [...current.slice(0, index), rest, alone, ...current.slice(index + 1)];
+    });
+  }
 
   return (
     <Modal
       tone="violet"
       icon={Wand2}
       title="التوزيع التلقائي"
-      description="كل رحلة على السيارة المناسبة الأقل رحلات اليوم، والرحلات القابلة للجمع في سيارة واحدة. راجع الخطة ثم أرسل."
+      description="كل رحلة على السيارة المناسبة الأقل رحلات اليوم، والرحلات القابلة للجمع في سيارة واحدة (حتى 14 في الباص). راجع الخطة ثم أرسل."
       onClose={onClose}
       footer={(
         <>
           <button type="button" onClick={onClose} className={btn("secondary")}>إلغاء</button>
           <button
             type="button"
-            disabled={!chosen.length || conflict}
+            disabled={!chosen.length || conflict || missing}
             onClick={() => onConfirm(chosen.map((row) => ({ requestIds: row.requestIds, vehicle: free.find((vehicle) => vehicle.plate === row.plate)! })))}
             className={btn("primary")}
           >
@@ -765,12 +904,14 @@ function AutoDispatchDialog({ plan, free, load, driverOf, placeText, nextFree, o
     >
       <div className="space-y-4">
         {conflict && <p className="flex items-center gap-2 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700"><AlertTriangle className="h-4 w-4 shrink-0" /> نفس السيارة مختارة لأكثر من رحلة</p>}
+        {missing && <p className="flex items-center gap-2 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700"><AlertTriangle className="h-4 w-4 shrink-0" /> اختر سيارة مناسبة لكل رحلة مختارة، أو استبعدها</p>}
         {rows.length ? (
           <ul className="divide-y divide-slate-100 rounded-xl ring-1 ring-slate-200">
             {rows.map((row, index) => {
               const accessible = needsAccessibleVehicle(row.appointments);
-              const options = free.filter((vehicle) => !accessible || vehicle.kind === "احتياجات خاصة");
+              const options = optionsFor(row);
               const first = [...row.appointments].sort((a, b) => a.appointmentAt.localeCompare(b.appointmentAt))[0];
+              const grouped = row.appointments.length > 1;
               return (
                 <li key={row.requestIds.join()} className={cx("space-y-2 p-3", !row.include && "opacity-50")}>
                   <label className="flex cursor-pointer items-start gap-2.5">
@@ -778,22 +919,35 @@ function AutoDispatchDialog({ plan, free, load, driverOf, placeText, nextFree, o
                     <span className="min-w-0 flex-1">
                       <span className="flex flex-wrap items-center gap-1.5">
                         <span dir="ltr" className="font-semibold text-ink tabular">{first.appointmentAt}</span>
-                        <span className="font-medium text-ink">{names(row.appointments)}</span>
-                        {row.appointments.length > 1 && <Badge tone="violet" icon={Sparkles}>مجمّعة {row.appointments.length}</Badge>}
+                        {!grouped && <span className="font-medium text-ink">{names(row.appointments)}</span>}
+                        {grouped && <Badge tone="violet" icon={Sparkles}>مجمّعة · {guestsText(row.appointments.length)}</Badge>}
                         {accessible && <Badge tone="amber">احتياجات خاصة</Badge>}
                       </span>
                       <span className="block truncate text-xs text-slate-500">{destinations(row.appointments)}</span>
                     </span>
                   </label>
+                  {grouped && (
+                    <ul className="flex flex-wrap gap-1.5 ps-6">
+                      {row.appointments.map((appointment, at) => (
+                        <li key={row.requestIds[at]} className="inline-flex items-center gap-1 rounded-full bg-slate-50 py-0.5 pe-1 ps-2.5 text-xs text-ink ring-1 ring-slate-200">
+                          {appointment.patientName} <span dir="ltr" className="text-slate-500 tabular">{appointment.appointmentAt}</span>
+                          <button type="button" onClick={() => split(index, row.requestIds[at])} aria-label={`فصل ${appointment.patientName} عن الرحلة المجمّعة`} title="فصل عن الرحلة المجمّعة (سيارة وحده)" className="rounded-full p-0.5 text-slate-500 hover:bg-slate-200 hover:text-ink">
+                            <Minus className="h-3.5 w-3.5" />
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
                   <select
                     aria-label={`سيارة رحلة ${names(row.appointments)}`}
-                    value={row.plate}
+                    value={options.some((vehicle) => vehicle.plate === row.plate) ? row.plate : ""}
                     disabled={!row.include}
                     onChange={(event) => update(index, { plate: event.target.value })}
                     className={cx(inputClass, "h-10 w-full", row.include && (used.get(row.plate) ?? 0) > 1 && "border-red-400 bg-red-50")}
                   >
+                    {!options.some((vehicle) => vehicle.plate === row.plate) && <option value="">اختر سيارة</option>}
                     {options.map((vehicle) => (
-                      <option key={vehicle.plate} value={vehicle.plate}>{vehicle.plate} · {driverOf(vehicle.plate, vehicle.driver)} · {vehicle.kind} · {placeText(vehicle.plate)} · {tripsText(load.get(vehicle.plate) ?? 0)}</option>
+                      <option key={vehicle.plate} value={vehicle.plate}>{vehicle.plate} · {driverOf(vehicle.plate, vehicle.driver)} · {kindText(vehicle)} · {placeText(vehicle.plate)} · {tripsText(load.get(vehicle.plate) ?? 0)}</option>
                     ))}
                   </select>
                 </li>
@@ -815,6 +969,126 @@ function AutoDispatchDialog({ plan, free, load, driverOf, placeText, nextFree, o
             </ul>
           </div>
         )}
+      </div>
+    </Modal>
+  );
+}
+
+/**
+ * تعديل رحلة مجمّعة قبل إرسالها (من اقتراحات الجمع، أو «جمع» بجانب أي طلب): إضافة ضيوف ينتظرون السيارة
+ * في نفس الاتجاه أو إزالتهم، واختيار السيارة. عدد الضيوف لا يتجاوز مقاعد السيارة (الباص 14).
+ */
+function GroupEditor({ initial, pending, hospitals, load, choicesFor, suggestFor, driverOf, placeText, onDispatch, onClose }: {
+  initial: string[];
+  pending: Trip[];
+  hospitals: Hospital[];
+  load: Map<string, number>;
+  choicesFor: (trips: Trip[]) => VehicleChoice[];
+  suggestFor: (trips: Trip[]) => Vehicle | null;
+  driverOf: (plate?: string, fallback?: string) => string;
+  placeText: (plate: string) => string;
+  onDispatch: (requestIds: string[], plate: string) => void;
+  onClose: () => void;
+}) {
+  const [ids, setIds] = useState(initial);
+  const [plate, setPlate] = useState("");
+  // الطلبات التي ما زالت تنتظر التوزيع (قد يوزّعها أو يلغيها مستخدم آخر أثناء التعديل)
+  const members = ids.flatMap((id) => pending.filter((trip) => trip.request.id === id));
+  const direction = members[0]?.request.direction;
+  const timeOf = (trip: Trip) => trip.at ?? appointmentDateTime(trip.appointment);
+  /** هل يناسب الضيف الرحلة: قرب الوجهة والتوقيت مع كل ضيوفها (كما في اقتراحات الجمع) */
+  const fit = (trip: Trip) => {
+    const details = members.map((member) => calculateTripGroupingScore(member.appointment, trip.appointment, hospitals, [timeOf(member), timeOf(trip)]));
+    const far = details.some((item) => !item.sameDestination && !item.nearbyDestination && !item.sameDirection);
+    const gap = Math.max(0, ...details.map((item) => item.timeGapMinutes));
+    return { ok: details.every((item) => canShareVehicle(item, 45)), text: far ? "وجهة بعيدة" : `فارق ${gap} د` };
+  };
+  const candidates = pending
+    .filter((trip) => !ids.includes(trip.request.id) && !isTransfer(trip.request) && (!direction || trip.request.direction === direction))
+    .map((trip) => ({ trip, fit: fit(trip) }))
+    .sort((a, b) => Number(b.fit.ok) - Number(a.fit.ok) || timeOf(a.trip).getTime() - timeOf(b.trip).getTime());
+  const choices = members.length ? choicesFor(members) : [];
+  const ready = choices.filter((choice) => !choice.why).map((choice) => choice.vehicle);
+  const suggested = members.length ? suggestFor(members) : null;
+  const vehicle = ready.find((item) => item.plate === plate) ?? suggested;
+  const seats = vehicle ? vehicleSeats(vehicle, members.map((trip) => trip.appointment)) : null;
+  const tooMany = members.length > 3 && !ready.some((item) => item.kind === "باص");
+  const row = (trip: Trip) => (
+    <span className="min-w-0 flex-1">
+      <span className="flex flex-wrap items-center gap-1.5">
+        <span dir="ltr" className="font-semibold text-ink tabular">{trip.appointment.appointmentAt}</span>
+        <span className="font-medium text-ink">{trip.appointment.patientName}</span>
+        {trip.appointment.kind === "احتياجات خاصة" && <Badge tone="amber">احتياجات خاصة</Badge>}
+        {isNonMedical(trip.appointment) && <Badge tone="violet">غير طبية</Badge>}
+        {isPriority(trip.appointment) && <span className="text-xs font-medium text-red-700">أولوية</span>}
+      </span>
+      <span className="block truncate text-xs text-slate-500">{routeLabel(trip.appointment, trip.from)}{trip.request.createdAt ? ` · ${requestTimes(trip)}` : ""}</span>
+    </span>
+  );
+
+  return (
+    <Modal
+      tone="violet"
+      icon={Layers}
+      title="تعديل الرحلة المجمّعة"
+      description="أضف ضيوفًا أو أزلهم واختر السيارة، ثم أرسلها. السيارة 3 ضيوف، والباص 14، وسيارة الاحتياجات الخاصة ضيفان."
+      onClose={onClose}
+      footer={(
+        <>
+          <button type="button" onClick={onClose} className={btn("secondary")}>إلغاء</button>
+          <button type="button" disabled={!members.length || !vehicle} onClick={() => vehicle && onDispatch(members.map((trip) => trip.request.id), vehicle.plate)} className={btn("primary")}>
+            <Send className="h-4 w-4" /> إرسال السيارة{members.length ? ` · ${guestsText(members.length)}` : ""}
+          </button>
+        </>
+      )}
+    >
+      <div className="space-y-4">
+        <section>
+          <p className="mb-2 flex items-center justify-between text-sm font-semibold text-ink">
+            <span>في هذه الرحلة{direction ? ` (${direction})` : ""}</span>
+            {seats !== null && <span className={cx("text-xs font-medium", members.length > seats ? "text-red-700" : "text-slate-500")}>{members.length} من {seats} {seats > 10 ? "مقعدًا" : "مقاعد"}</span>}
+          </p>
+          {members.length ? (
+            <ul className="divide-y divide-slate-100 rounded-xl ring-1 ring-violet-200">
+              {members.map((trip) => (
+                <li key={trip.request.id} className="flex items-center gap-2 p-3">
+                  {row(trip)}
+                  <button type="button" onClick={() => setIds((current) => current.filter((id) => id !== trip.request.id))} aria-label={`إزالة ${trip.appointment.patientName} من الرحلة`} className={cx(btn("ghost", "sm"), "text-red-700")}>
+                    <Minus className="h-4 w-4" /> إزالة
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : <p className="rounded-lg bg-slate-50 px-3 py-3 text-center text-sm text-slate-500">أضف ضيفًا واحدًا على الأقل من القائمة أدناه</p>}
+        </section>
+
+        <section>
+          <label className="mb-1.5 block text-sm font-semibold text-ink" htmlFor="group-vehicle">السيارة</label>
+          <select id="group-vehicle" value={vehicle?.plate ?? ""} disabled={!members.length} onChange={(event) => setPlate(event.target.value)} className={cx(inputClass, "h-10")}>
+            {!vehicle && <option value="">{members.length ? "لا توجد سيارة تناسب هذه الرحلة الآن" : "—"}</option>}
+            {choices.map(({ vehicle: item, why }) => why
+              ? <option key={item.plate} value={item.plate} disabled>{item.plate} · {kindText(item)} · {why}</option>
+              : <option key={item.plate} value={item.plate}>{item.plate} · {driverOf(item.plate, item.driver)} · {kindText(item)} · {placeText(item.plate)} · {tripsText(load.get(item.plate) ?? 0)}</option>)}
+          </select>
+          {tooMany && <p className="mt-1.5 text-xs text-red-700">أكثر من 3 ضيوف يحتاجون باصًا متاحًا، أو أزل بعض الضيوف</p>}
+        </section>
+
+        <section>
+          <p className="mb-2 text-sm font-semibold text-ink">إضافة ضيف <span className="font-normal text-slate-500">(ينتظرون السيارة{direction ? ` · ${direction}` : ""})</span></p>
+          {candidates.length ? (
+            <ul className="max-h-72 divide-y divide-slate-100 overflow-y-auto rounded-xl ring-1 ring-slate-200">
+              {candidates.map(({ trip, fit: match }) => (
+                <li key={trip.request.id} className="flex items-center gap-2 p-3">
+                  {row(trip)}
+                  <Badge tone={match.ok ? "violet" : "neutral"}>{match.ok ? "مناسب للجمع" : match.text}</Badge>
+                  <button type="button" onClick={() => setIds((current) => [...current, trip.request.id])} aria-label={`إضافة ${trip.appointment.patientName} إلى الرحلة`} className={btn("secondary", "sm")}>
+                    <Plus className="h-4 w-4" /> إضافة
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : <p className="rounded-lg bg-slate-50 px-3 py-3 text-center text-sm text-slate-500">لا توجد طلبات أخرى بانتظار التوزيع في هذا الاتجاه</p>}
+        </section>
       </div>
     </Modal>
   );
