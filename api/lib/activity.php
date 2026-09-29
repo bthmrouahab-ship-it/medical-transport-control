@@ -10,6 +10,7 @@ const ACTIVITY_ROLE_LABELS = [
     'admin' => 'مدير النظام',
     'clinic' => 'العيادة',
     'buildingSupervisor' => 'مشرف المبنى',
+    'buildingLead' => 'مسؤول مشرفي المباني',
     'fleetSupervisor' => 'مشرف السيارات',
     'driver' => 'سائق',
 ];
