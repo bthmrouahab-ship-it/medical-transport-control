@@ -728,6 +728,14 @@ export type TripGroup = {
   reason: string;
 };
 
+/**
+ * موعدان يُجمعان في سيارة واحدة خلال فرق زمني أقصاه maxGapMinutes: نفس المستشفى دائمًا (ولو من مبنيين
+ * مختلفين في المجمع، ومهما بعدت الوجهة)، وغيره إذا بلغت نقاط التوافق 55 (توقيت ومبنى ووجهة مجاورة ونوع الرحلة).
+ */
+export function canShareVehicle(details: ReturnType<typeof calculateTripGroupingScore>, maxGapMinutes: number) {
+  return details.timeGapMinutes <= maxGapMinutes && (details.sameDestination || details.score >= 55);
+}
+
 function pairReason(details: ReturnType<typeof calculateTripGroupingScore>) {
   if (details.sameDestination) return "نفس الوجهة";
   if (details.nearbyDestination) return `وجهات متجاورة${details.zone ? ` (${details.zone})` : ""}`;
@@ -737,7 +745,7 @@ function pairReason(details: ReturnType<typeof calculateTripGroupingScore>) {
 
 /**
  * يبني مجموعات رحلات (حتى 3 مرضى) من الطلبات بانتظار التوزيع.
- * كل موعدين داخل المجموعة يجب أن يكونا متوافقين (55 نقطة فأكثر وخلال 45 دقيقة)،
+ * كل موعدين داخل المجموعة يجب أن يكونا متوافقين خلال 45 دقيقة (نفس المستشفى، أو 55 نقطة فأكثر)،
  * ولا تُخلط رحلات الذهاب مع العودة، ولا يُتجاوز عدد المقاعد.
  */
 export function buildTripGroups(
@@ -754,14 +762,14 @@ export function buildTripGroups(
       for (let j = i + 1; j < list.length; j += 1) {
         const details = calculateTripGroupingScore(list[i], list[j], hospitals);
         score.set(key(list[i].id, list[j].id), details);
-        if (details.timeGapMinutes <= 45 && details.score >= 55) pairs.push({ a: list[i], b: list[j], details });
+        if (canShareVehicle(details, 45)) pairs.push({ a: list[i], b: list[j], details });
       }
     }
     pairs.sort((x, y) => y.details.score - x.details.score || x.details.timeGapMinutes - y.details.timeGapMinutes);
     const used = new Set<string>();
     const compatible = (a: ClinicAppointment, b: ClinicAppointment) => {
       const details = score.get(key(a.id, b.id));
-      return Boolean(details && details.timeGapMinutes <= 45 && details.score >= 55);
+      return Boolean(details && canShareVehicle(details, 45));
     };
     for (const pair of pairs) {
       if (used.has(pair.a.id) || used.has(pair.b.id)) continue;
@@ -818,7 +826,7 @@ export function suggestJoinDispatched(
       const capacity = Math.min(groupCapacity(item.appointment.kind), ...members.map((member) => groupCapacity(member.appointment.kind)));
       if (members.length + 1 > capacity) continue;
       const scores = members.map((member) => calculateTripGroupingScore(member.appointment, item.appointment, hospitals));
-      if (scores.some((details) => details.timeGapMinutes > 30 || details.score < 55)) continue;
+      if (!scores.every((details) => canShareVehicle(details, 30))) continue;
       const worst = Math.min(...scores.map((details) => details.score));
       if (!best || worst > best.score) {
         best = {
