@@ -49,7 +49,7 @@ import {
   type VehicleRequest,
 } from "@shared/transport";
 import type { Hospital } from "@shared/hospitals";
-import { arrivalsOn, suggestReturnRedirects, tripEndpoints, tripPhase, vehicleAvailability, vehicleLocationState, type TripPhase } from "@shared/trips";
+import { arrivalsOn, neededAt, suggestReturnRedirects, tripEndpoints, tripPhase, vehicleAvailability, vehicleLocationState, type TripPhase } from "@shared/trips";
 import {
   Badge,
   DateChooser,
@@ -81,7 +81,8 @@ import { checkStateText, driverCheck } from "@shared/driverChecks";
  * from: الموعد الأول في النقل بين موعدين (الاستلام من مستشفاه).
  * outboundAt: وقت طلب الذهاب لنفس الموعد (مع رحلة العودة).
  */
-type Trip = { request: VehicleRequest; appointment: ClinicAppointment; from?: ClinicAppointment | null; outboundAt?: string };
+/** at: متى يحتاج الضيف السيارة (من وقت الطلب ووقت الموعد)، لجمع الرحلات */
+type Trip = { request: VehicleRequest; appointment: ClinicAppointment; from?: ClinicAppointment | null; outboundAt?: string; at?: Date };
 
 /** وقت طلب السيارة من مشرف المبنى: للذهاب، وللعودة (ومعه وقت طلب الذهاب)، وللنقل بين موعدين. */
 function requestTimes(trip: Trip) {
@@ -154,7 +155,7 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
     const outboundAt = request.direction === "عودة"
       ? requests.filter((item) => item.appointmentId === request.appointmentId && item.direction === "ذهاب").at(-1)?.createdAt
       : undefined;
-    return appointment ? { request, appointment, from, outboundAt } : null;
+    return appointment ? { request, appointment, from, outboundAt, at: neededAt(request, appointment, hospitals) } : null;
   };
   const isTrip = (trip: Trip | null): trip is Trip => Boolean(trip);
   const onDate = (trip: Trip) => trip.appointment.appointmentDate === date;
@@ -203,7 +204,8 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
 
   // النقل بين موعدين يبدأ من مستشفى، فلا يُجمع مع رحلات تبدأ من المجمع
   const groupable = pending.filter((trip) => !isTransfer(trip.request));
-  const groups = buildTripGroups(groupable.map((trip) => ({ appointment: trip.appointment, direction: trip.request.direction })), hospitals);
+  // الجمع حسب وقت الحاجة إلى السيارة (وقت الطلب)، لا وقت الموعد وحده
+  const groups = buildTripGroups(groupable.map((trip) => ({ appointment: trip.appointment, direction: trip.request.direction, at: trip.at })), hospitals);
   const groupedIds = new Set(groups.flatMap((group) => group.appointmentIds));
   const joins = suggestJoinDispatched(groupable.filter((trip) => !groupedIds.has(trip.appointment.id)), toPickupTrips.filter((trip) => onDate(trip) && !isTransfer(trip.request)), hospitals);
   const unrequested = findUnrequestedMatches(appointments, requests, hospitals, now).filter((match) => match.appointment.appointmentDate === date);

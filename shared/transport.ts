@@ -555,7 +555,8 @@ export type DispatchPlan = {
  * - rank (اختياري): تفضيل حسب مكان السيارة لكل رحلة (مثل سيارة خارج المجمع قريبة من ضيف العودة).
  */
 export function planDispatch(
-  trips: { request: VehicleRequest; appointment: ClinicAppointment }[],
+  /** at (اختياري): وقت الحاجة إلى السيارة لكل رحلة (neededAt من وقت الطلب) لجمع الرحلات */
+  trips: { request: VehicleRequest; appointment: ClinicAppointment; at?: Date }[],
   vehicles: Vehicle[],
   load: Map<string, number> = new Map(),
   hospitals: Hospital[] = DEFAULT_HOSPITALS,
@@ -566,7 +567,7 @@ export function planDispatch(
   const grouped = new Set<string>();
   // النقل بين موعدين يبدأ من مستشفى، فلا يُجمع مع رحلات تبدأ من المجمع
   const groupable = trips.filter((trip) => !isTransfer(trip.request));
-  for (const group of buildTripGroups(groupable.map((trip) => ({ appointment: trip.appointment, direction: trip.request.direction })), hospitals)) {
+  for (const group of buildTripGroups(groupable.map((trip) => ({ appointment: trip.appointment, direction: trip.request.direction, at: trip.at })), hospitals)) {
     const members = group.appointmentIds.map((id) => byAppointment.get(id)).filter((trip): trip is NonNullable<typeof trip> => Boolean(trip));
     if (members.length < 2) continue;
     members.forEach((trip) => grouped.add(trip.appointment.id));
@@ -620,12 +621,14 @@ export function matchHospitalZone(appointment: ClinicAppointment, hospitals: Hos
 }
 
 /**
- * نقاط الجمع: 45 للقرب الزمني ناقص فرق الدقائق، +35 لنفس المبنى،
- * +25 لنفس الوجهة أو +20 لوجهات متجاورة (≤ 3 كم) أو +10 لنفس الاتجاه (≤ 8 كم)،
- * +10 لنفس نوع الرحلة. المواعيد في أيام مختلفة لا تُجمع.
+ * نقاط الجمع (لترتيب الاقتراحات): 45 للقرب الزمني ناقص فرق الدقائق،
+ * +25 لنفس الوجهة أو +20 لوجهات متجاورة (≤ 3 كم) أو +10 لنفس الاتجاه (≤ 8 كم)، +10 لنفس نوع الرحلة.
+ * المبنى لا يُحتسب: كل مباني المجمع متقاربة. times (اختياري): وقت الحاجة إلى السيارة لكل موعد
+ * (neededAt في shared/trips.ts، من وقت الطلب)، وإلا وقت الموعدين. المواعيد في أيام مختلفة لا تُجمع.
  */
-export function calculateTripGroupingScore(first: ClinicAppointment, second: ClinicAppointment, hospitals: Hospital[] = DEFAULT_HOSPITALS) {
-  const timeGapMinutes = Math.round(Math.abs(appointmentDateTime(first).getTime() - appointmentDateTime(second).getTime()) / 60000);
+export function calculateTripGroupingScore(first: ClinicAppointment, second: ClinicAppointment, hospitals: Hospital[] = DEFAULT_HOSPITALS, times?: [Date, Date]) {
+  const [firstAt, secondAt] = times ?? [appointmentDateTime(first), appointmentDateTime(second)];
+  const timeGapMinutes = Math.round(Math.abs(firstAt.getTime() - secondAt.getTime()) / 60000);
   const sameBuilding = first.buildingNumber.trim().toLowerCase() === second.buildingNumber.trim().toLowerCase();
   const firstHospital = hospitalFor(first, hospitals);
   const secondHospital = hospitalFor(second, hospitals);
@@ -638,7 +641,7 @@ export function calculateTripGroupingScore(first: ClinicAppointment, second: Cli
   const compatibleVehicle = first.kind === second.kind;
   const timeScore = Math.max(0, 45 - timeGapMinutes);
   const destinationScore = sameDestination ? 25 : nearbyDestination ? 20 : sameDirection ? 10 : 0;
-  const score = timeScore + (sameBuilding ? 35 : 0) + destinationScore + (compatibleVehicle ? 10 : 0);
+  const score = timeScore + destinationScore + (compatibleVehicle ? 10 : 0);
   return {
     score,
     timeGapMinutes,
@@ -659,9 +662,8 @@ export function suggestTripGroups(appointments: ClinicAppointment[], hospitals: 
       const first = appointments[firstIndex];
       const second = appointments[secondIndex];
       const details = calculateTripGroupingScore(first, second, hospitals);
-      if (details.timeGapMinutes > 45 || details.score < 55) continue;
+      if (!canShareVehicle(details, 45)) continue;
       const reasons = [
-        details.sameBuilding ? "نفس المبنى" : null,
         details.sameDestination ? "نفس الوجهة" : null,
         details.nearbyDestination ? `وجهات متجاورة${details.zone ? ` (${details.zone})` : ""} ${details.destinationKm!.toFixed(1)} كم` : null,
         details.sameDirection ? `نفس الاتجاه ${details.destinationKm!.toFixed(1)} كم` : null,
@@ -728,31 +730,41 @@ export type TripGroup = {
   reason: string;
 };
 
+/** أقصى فرق بين وقتي الحاجة إلى السيارة لجمع ضيفين، حسب قرب وجهتيهما (المبنى لا يهم: مباني المجمع متقاربة). */
+export const GROUP_GAP_MINUTES = { sameDestination: 45, nearby: 30, sameDirection: 15 };
+
 /**
- * موعدان يُجمعان في سيارة واحدة خلال فرق زمني أقصاه maxGapMinutes: نفس المستشفى دائمًا (ولو من مبنيين
- * مختلفين في المجمع، ومهما بعدت الوجهة)، وغيره إذا بلغت نقاط التوافق 55 (توقيت ومبنى ووجهة مجاورة ونوع الرحلة).
+ * موعدان يُجمعان في سيارة واحدة: نفس الوجهة خلال 45 دقيقة، ووجهتان متجاورتان (≤ 3 كم) خلال 30،
+ * وفي نفس الاتجاه (≤ 8 كم) خلال 15، ولا أكثر من maxGapMinutes (30 لضمّ ضيف إلى سيارة في الطريق).
+ * الفرق بين وقتي الحاجة إلى السيارة (من وقت الطلب) إن أُعطيت لـ calculateTripGroupingScore.
  */
 export function canShareVehicle(details: ReturnType<typeof calculateTripGroupingScore>, maxGapMinutes: number) {
-  return details.timeGapMinutes <= maxGapMinutes && (details.sameDestination || details.score >= 55);
+  const limit = details.sameDestination ? GROUP_GAP_MINUTES.sameDestination
+    : details.nearbyDestination ? GROUP_GAP_MINUTES.nearby
+      : details.sameDirection ? GROUP_GAP_MINUTES.sameDirection
+        : -1;
+  return details.timeGapMinutes <= Math.min(limit, maxGapMinutes);
 }
 
 function pairReason(details: ReturnType<typeof calculateTripGroupingScore>) {
   if (details.sameDestination) return "نفس الوجهة";
   if (details.nearbyDestination) return `وجهات متجاورة${details.zone ? ` (${details.zone})` : ""}`;
-  if (details.sameDirection) return "نفس الاتجاه";
-  return details.sameBuilding ? "نفس المبنى" : "توقيت متقارب";
+  return details.sameDirection ? "نفس الاتجاه" : "توقيت متقارب";
 }
 
 /**
  * يبني مجموعات رحلات (حتى 3 مرضى) من الطلبات بانتظار التوزيع.
- * كل موعدين داخل المجموعة يجب أن يكونا متوافقين خلال 45 دقيقة (نفس المستشفى، أو 55 نقطة فأكثر)،
+ * كل موعدين داخل المجموعة يجب أن يكونا متوافقين (canShareVehicle: قرب الوجهتين والفرق الزمني)،
  * ولا تُخلط رحلات الذهاب مع العودة، ولا يُتجاوز عدد المقاعد.
+ * at (اختياري): وقت الحاجة إلى السيارة لكل رحلة (neededAt: من وقت الطلب)، وإلا وقت الموعد.
  */
 export function buildTripGroups(
-  items: { appointment: ClinicAppointment; direction: VehicleRequest["direction"] }[],
+  items: { appointment: ClinicAppointment; direction: VehicleRequest["direction"]; at?: Date }[],
   hospitals: Hospital[] = DEFAULT_HOSPITALS,
 ): TripGroup[] {
   const groups: TripGroup[] = [];
+  const timeOf = new Map(items.map((item) => [item.appointment.id, item.at ?? appointmentDateTime(item.appointment)]));
+  const byRequest = items.some((item) => item.at);
   for (const direction of ["ذهاب", "عودة"] as const) {
     const list = items.filter((item) => item.direction === direction).map((item) => item.appointment);
     const score = new Map<string, ReturnType<typeof calculateTripGroupingScore>>();
@@ -760,7 +772,7 @@ export function buildTripGroups(
     const pairs: { a: ClinicAppointment; b: ClinicAppointment; details: ReturnType<typeof calculateTripGroupingScore> }[] = [];
     for (let i = 0; i < list.length; i += 1) {
       for (let j = i + 1; j < list.length; j += 1) {
-        const details = calculateTripGroupingScore(list[i], list[j], hospitals);
+        const details = calculateTripGroupingScore(list[i], list[j], hospitals, [timeOf.get(list[i].id)!, timeOf.get(list[j].id)!]);
         score.set(key(list[i].id, list[j].id), details);
         if (canShareVehicle(details, 45)) pairs.push({ a: list[i], b: list[j], details });
       }
@@ -783,18 +795,17 @@ export function buildTripGroups(
       }
       members.forEach((member) => used.add(member.id));
       const pairDetails = members.flatMap((first, index) => members.slice(index + 1).map((second) => score.get(key(first.id, second.id))!));
-      const times = members.map((member) => appointmentDateTime(member).getTime());
-      const reasons = Array.from(new Set([
-        ...pairDetails.map(pairReason),
-        ...(pairDetails.every((details) => details.sameBuilding) ? ["نفس المبنى"] : []),
-      ]));
+      const times = members.map((member) => timeOf.get(member.id)!.getTime());
+      const reasons = Array.from(new Set(pairDetails.map(pairReason)));
       const spanMinutes = Math.round((Math.max(...times) - Math.min(...times)) / 60000);
+      // الفرق بين أوقات الانطلاق اللازمة (الذهاب) أو طلبات العودة، أو بين المواعيد إن لم تُعرف أوقات الطلب
+      const span = !byRequest ? "المواعيد" : direction === "عودة" ? "طلبات العودة" : "الانطلاق";
       groups.push({
         appointmentIds: members.map((member) => member.id),
         direction,
         score: Math.min(...pairDetails.map((details) => details.score)),
         spanMinutes,
-        reason: [...reasons, `خلال ${spanMinutes} دقيقة`].join(" · "),
+        reason: [...reasons, spanMinutes ? `${span} خلال ${spanMinutes} دقيقة` : `${span} في نفس الوقت`].join(" · "),
       });
     }
   }
@@ -805,15 +816,16 @@ export type JoinSuggestion = { requestId: string; appointmentId: string; plate: 
 
 /**
  * طلب جديد يمكن ضمّه لسيارة أُرسلت ولم تستلم مرضاها بعد، متجهة لنفس الوجهة أو وجهة مجاورة
- * وفي نفس التوقيت، بشرط وجود مقعد فارغ.
+ * وفي نفس التوقيت (at: وقت الحاجة إلى السيارة من وقت الطلب، وإلا وقت الموعد)، بشرط وجود مقعد فارغ.
  */
 export function suggestJoinDispatched(
-  pending: { request: VehicleRequest; appointment: ClinicAppointment }[],
-  dispatched: { request: VehicleRequest; appointment: ClinicAppointment }[],
+  pending: { request: VehicleRequest; appointment: ClinicAppointment; at?: Date }[],
+  dispatched: { request: VehicleRequest; appointment: ClinicAppointment; at?: Date }[],
   hospitals: Hospital[] = DEFAULT_HOSPITALS,
 ): JoinSuggestion[] {
   const out: JoinSuggestion[] = [];
-  const byTrip = new Map<string, { request: VehicleRequest; appointment: ClinicAppointment }[]>();
+  const timeOf = (item: { appointment: ClinicAppointment; at?: Date }) => item.at ?? appointmentDateTime(item.appointment);
+  const byTrip = new Map<string, { request: VehicleRequest; appointment: ClinicAppointment; at?: Date }[]>();
   for (const item of dispatched) {
     if (item.request.status !== "تم إرسال السيارة" || !item.request.vehiclePlate) continue;
     const tripKey = item.request.groupId ?? item.request.id;
@@ -825,7 +837,7 @@ export function suggestJoinDispatched(
       if (members[0].request.direction !== item.request.direction) continue;
       const capacity = Math.min(groupCapacity(item.appointment.kind), ...members.map((member) => groupCapacity(member.appointment.kind)));
       if (members.length + 1 > capacity) continue;
-      const scores = members.map((member) => calculateTripGroupingScore(member.appointment, item.appointment, hospitals));
+      const scores = members.map((member) => calculateTripGroupingScore(member.appointment, item.appointment, hospitals, [timeOf(member), timeOf(item)]));
       if (!scores.every((details) => canShareVehicle(details, 30))) continue;
       const worst = Math.min(...scores.map((details) => details.score));
       if (!best || worst > best.score) {
