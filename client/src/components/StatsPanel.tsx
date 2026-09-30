@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { AlertTriangle, Building2, Download, FileCode2, FileSpreadsheet, Filter, FilterX, Info, Loader2, Upload, X } from "lucide-react";
 import type { Hospital } from "@shared/hospitals";
+import { guestIndex, guestOfAppointment, guestStats, type GuestRecord } from "@shared/guests";
 import { parseDriverList, parseTripRows, type HistorySummary, type ImportedDriver } from "@shared/history";
 import {
   EMPTY_FILTER,
@@ -19,13 +20,15 @@ import {
 } from "@shared/stats";
 import { localDateString, mergeVehicle, type ClinicAppointment, type Vehicle, type VehicleRequest } from "@shared/transport";
 import { saveState } from "@/lib/appStore";
+import { api } from "@/lib/api";
 import { authErrorMessage } from "@/lib/auth";
 import { dayRange, fetchAllActivity } from "@/lib/activity";
-import { activitySection, downloadExcel, downloadHtml, statsReport, tripsSection } from "@/lib/report";
+import { activitySection, downloadExcel, downloadHtml, guestSections, statsReport, tripsSection } from "@/lib/report";
 import { saveStatsDays, watchStatsDays } from "@/lib/statsStore";
 import { EmptyState, Panel, Segmented, addDays, btn, cx, inputClass, stamp } from "./ui-kit";
 import HistoryCharts from "./HistoryCharts";
 import ActivityLog from "./ActivityLog";
+import GuestStats from "./GuestStats";
 
 type Preset = "all" | "today" | "7d" | "30d" | "month" | "lastMonth" | "year" | "custom";
 
@@ -89,6 +92,21 @@ export default function StatsPanel({ canEdit, actor, hospitals, fleet, appointme
     setImported([]);
   }), []);
 
+  // قائمة الضيوف مع العمر والرقم الصحي: من الخادم للإحصائيات فقط (لا تصل مع المزامنة)
+  const [guestRecords, setGuestRecords] = useState<GuestRecord[] | null>(null);
+  useEffect(() => {
+    let alive = true;
+    api<{ guests: GuestRecord[] }>("guests-stats")
+      .then((response) => alive && setGuestRecords(response.guests))
+      .catch((error) => {
+        console.error("[stats] guests", error);
+        if (alive) setGuestRecords([]);
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
   const systemTrips = useMemo(() => tripsFromSystem(appointments, requests, fleet, hospitals), [appointments, requests, fleet, hospitals]);
   const selected = useMemo(
     () => selectTrips({ imported: imported ?? [], legacy: history, system: systemTrips }, filter.source),
@@ -127,6 +145,10 @@ export default function StatsPanel({ canEdit, actor, hospitals, fleet, appointme
     ? `الفترة ${filter.from || "البداية"} إلى ${filter.to || localDateString()}`
     : `كل الفترات${summary.totalTrips ? ` (${summary.from} إلى ${summary.to})` : ""}`;
   const [exporting, setExporting] = useState<"excel" | "html" | null>(null);
+  const guestSummary = useMemo(
+    () => guestStats(appointments, requests, guestRecords ?? [], { from: filter.from, to: filter.to, building: filter.building }),
+    [appointments, requests, guestRecords, filter.from, filter.to, filter.building],
+  );
 
   /** تصدير كل الإحصائيات: الملخص والجداول، والرحلات بتفاصيلها (من طلب ومن أرسل ومتى)، وسجل العمليات. */
   async function exportReport(format: "excel" | "html") {
@@ -134,8 +156,10 @@ export default function StatsPanel({ canEdit, actor, hospitals, fleet, appointme
     try {
       const { items, truncated } = await fetchAllActivity(range);
       const report = statsReport(summary, "إحصائيات سيارات مجمع الثمامة", `${periodLabel} · أنشأه ${actor} في ${stamp()}`);
+      const index = guestIndex(guestRecords ?? []);
       report.sections.push(
-        tripsSection(appointments, requests, items, filter.from || undefined, filter.to || undefined),
+        ...guestSections(guestSummary),
+        tripsSection(appointments, requests, items, filter.from || undefined, filter.to || undefined, (appointment) => guestOfAppointment(index, appointment)),
         activitySection(items, truncated),
       );
       const name = `althumama-stats-${localDateString()}`;
@@ -242,6 +266,8 @@ export default function StatsPanel({ canEdit, actor, hospitals, fleet, appointme
           />
         </div>
       )}
+
+      <GuestStats stats={guestSummary} loading={guestRecords === null} periodLabel={periodLabel} />
 
       <ActivityLog since={range.since} until={range.until} periodLabel={periodLabel} exportable={false} />
     </div>

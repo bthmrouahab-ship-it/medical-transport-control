@@ -1,4 +1,5 @@
 import type { StatsSummary } from "@shared/stats";
+import type { GuestRecord, guestStats } from "@shared/guests";
 import { statusText, type ClinicAppointment, type VehicleRequest } from "@shared/transport";
 import { ACTIVITY_ROLES, ACTIVITY_TYPES, DETAIL_LABELS, activityDate, activityTime, type ActivityItem } from "./activity";
 
@@ -75,7 +76,15 @@ export function statsReport(summary: StatsSummary, title: string, subtitle: stri
 
 // ————— الرحلات بتفاصيلها: من طلبها ومن أرسل السيارة ومتى في كل مرحلة —————
 
-export function tripsSection(appointments: ClinicAppointment[], requests: VehicleRequest[], activity: ActivityItem[], from?: string, to?: string): ReportSection {
+export function tripsSection(
+  appointments: ClinicAppointment[],
+  requests: VehicleRequest[],
+  activity: ActivityItem[],
+  from?: string,
+  to?: string,
+  /** ضيف الموعد من القائمة (للرقم الصحي والعمر: في الإحصائيات فقط) */
+  guestOf?: (appointment: ClinicAppointment) => GuestRecord | undefined,
+): ReportSection {
   const inPeriod = (date: string) => (!from || date >= from) && (!to || date <= to);
   // أقدم عملية أولًا حتى يُحفظ أول تسجيل لكل مرحلة
   const events = new Map<string, ActivityItem[]>();
@@ -113,10 +122,13 @@ export function tripsSection(appointments: ClinicAppointment[], requests: Vehicl
         return plate ? `${plate}${driver ? ` · ${driver}` : ""}` : "";
       };
       const cancel = find("appointment.cancel");
+      const guest = appointment.category === "غير طبية" ? undefined : guestOf?.(appointment);
       return [
         appointment.appointmentDate,
         appointment.appointmentAt,
         appointment.patientName,
+        guest?.healthNumber ?? "",
+        guest?.age ?? "",
         appointment.buildingNumber,
         appointment.apartmentNumber,
         appointment.mobile,
@@ -144,12 +156,43 @@ export function tripsSection(appointments: ClinicAppointment[], requests: Vehicl
     sheet: "الرحلات",
     note: "كل مرحلة: الوقت ثم من نفّذها",
     columns: [
-      "التاريخ", "وقت الموعد", "الضيف", "المبنى", "الشقة", "الموبايل", "الوجهة", "نوع الرحلة", "الاحتياجات", "حالة الموعد", "إضافة الموعد",
+      "التاريخ", "وقت الموعد", "الضيف", "الرقم الصحي", "العمر", "المبنى", "الشقة", "الموبايل", "الوجهة", "نوع الرحلة", "الاحتياجات", "حالة الموعد", "إضافة الموعد",
       "طلب الذهاب", "إرسال سيارة الذهاب", "سيارة الذهاب", "وصول السيارة للاستلام", "استلام الضيف", "الوصول إلى الوجهة",
       "طلب العودة", "إرسال سيارة العودة", "سيارة العودة", "استلام العودة", "الوصول إلى المجمع", "إلغاء الموعد",
     ],
     rows,
   };
+}
+
+// ————— الضيوف: العمر والرقم الصحي (في الإحصائيات فقط) —————
+
+export function guestSections(stats: ReturnType<typeof guestStats>): ReportSection[] {
+  return [
+    {
+      title: "الضيوف حسب الفئة العمرية",
+      sheet: "الفئات العمرية",
+      columns: ["الفئة العمرية", "الضيوف", "المواعيد", "السيارات المرسلة"],
+      rows: stats.ageGroups.map((group) => [group.label, group.guests, group.appointments, group.trips]),
+      bar: 1,
+    },
+    {
+      title: "الضيوف: العمر والرقم الصحي",
+      sheet: "الضيوف",
+      note: "المواعيد الطبية في الفترة (بلا المستبعد)، والسيارات المرسلة ذهابًا وعودة ونقلًا",
+      columns: ["الضيف", "الرقم الصحي", "العمر", "الجنس", "المبنى", "الشقة", "المواعيد", "الملغاة", "السيارات المرسلة"],
+      rows: stats.rows.map((row) => [
+        row.listed ? row.name : `${row.name} (غير موجود في القائمة)`,
+        row.healthNumber ?? "",
+        row.age ?? "",
+        row.gender ?? "",
+        row.buildingNumber,
+        row.apartmentNumber,
+        row.appointments,
+        row.cancelled,
+        row.trips,
+      ]),
+    },
+  ];
 }
 
 // ————— سجل العمليات —————

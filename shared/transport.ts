@@ -1,5 +1,7 @@
 import { DEFAULT_HOSPITALS, distanceKm, matchHospital, type Hospital } from "./hospitals";
 import { FLEET_SEED } from "./seedData";
+import { normalizeGender, normalizeMobile, readAliased, toText, toWesternDigits } from "./text";
+import { findGuestByName, guestIndex, type Guest } from "./guests";
 
 export type AppointmentKind = "عادي" | "احتياجات خاصة";
 export type VehicleKind = "سيدان" | "احتياجات خاصة" | "باص";
@@ -16,6 +18,8 @@ export type AppointmentStatus =
 
 export type ClinicAppointment = {
   id: string;
+  /** الضيف من قائمة ضيوف المجمع (المواعيد القديمة قبل القائمة بلا رقم) */
+  guestId?: string;
   patientName: string;
   clinic: string;
   buildingNumber: string;
@@ -170,47 +174,11 @@ const appointmentStatuses = new Set<AppointmentStatus>([
   "ملغي",
 ]);
 
-function toText(value: unknown) {
-  if (value === null || value === undefined) return "";
-  return String(value).trim();
-}
-
-function toWesternDigits(value: string) {
-  const arabic = "٠١٢٣٤٥٦٧٨٩";
-  const persian = "۰۱۲۳۴۵۶۷۸۹";
-  return value
-    .replace(/[٠-٩]/g, (digit) => String(arabic.indexOf(digit)))
-    .replace(/[۰-۹]/g, (digit) => String(persian.indexOf(digit)));
-}
-
-function normalizeHeader(value: string) {
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/[أإآ]/g, "ا")
-    .replace(/ة/g, "ه")
-    .replace(/[\s_\-\/]+/g, "");
-}
-
-function normalizeGender(value: unknown): Gender | undefined {
-  const text = toText(value).toLowerCase();
-  if (!text) return undefined;
-  if (/^(ذكر|رجل|male|m)$/.test(text)) return "ذكر";
-  if (/^(أنثى|انثى|انثي|أنثي|امرأة|امراة|female|f)$/.test(text)) return "أنثى";
-  return undefined;
-}
-
 /** نعم/لا من Excel: نعم، yes، 1، ✓، أو اسم الخيار نفسه. */
 function isYes(value: unknown, extra?: RegExp) {
   const text = toText(value).toLowerCase();
   if (!text) return false;
   return /^(نعم|yes|y|true|1|✓|✔|x)$/.test(text) || Boolean(extra?.test(text));
-}
-
-function readAliased(row: Record<string, unknown>, aliases: string[]) {
-  const aliasSet = new Set(aliases.map(normalizeHeader));
-  const entry = Object.entries(row).find(([key]) => aliasSet.has(normalizeHeader(key)));
-  return entry?.[1];
 }
 
 function normalizeTime(value: unknown) {
@@ -254,10 +222,6 @@ function normalizeAssistance(value: unknown): AssistanceNeed[] {
   if (/ممرض|nurse/i.test(text)) needs.push("يحتاج Nurse");
   if (text.includes("كرسي")) needs.push("كرسي متحرك");
   return needs;
-}
-
-function normalizeMobile(value: unknown) {
-  return toWesternDigits(toText(value)).replace(/\.0$/, "").replace(/[\s-]/g, "");
 }
 
 /** مهلة طلب السيارة بعد وقت الموعد؛ بعدها يجب أن تعدّل العيادة الموعد. */
@@ -318,6 +282,7 @@ export function migrateAppointment(value: unknown, index = 0): ClinicAppointment
 
   return {
     id: toText(raw.id) || `APT-MIG-${index + 1}`,
+    ...(toText(raw.guestId) ? { guestId: toText(raw.guestId) } : {}),
     patientName,
     clinic,
     buildingNumber: toText(raw.buildingNumber) || legacyPickup || "غير محدد",
@@ -352,9 +317,12 @@ export function parseImportedAppointments(
   idSeed = Date.now(),
   today = localDateString(),
   hospitals: Hospital[] = DEFAULT_HOSPITALS,
+  /** قائمة ضيوف المجمع: يُقبل الموعد لضيف منها فقط ولمستشفى من الدليل، والمبنى والشقة من القائمة */
+  guests?: Guest[],
 ): ImportedAppointmentResult {
   const appointments: ClinicAppointment[] = [];
   const errors: string[] = [];
+  const index = guests ? guestIndex(guests) : null;
   const duplicateKeys = new Set(
     existingAppointments.map((appointment) => [
       appointment.appointmentDate,
@@ -366,13 +334,13 @@ export function parseImportedAppointments(
     ].join("|").toLowerCase()),
   );
 
-  rows.forEach((row, index) => {
-    const excelRow = index + 2;
-    const patientName = toText(readAliased(row, ["اسم الضيف أو الرقم", "اسم الضيف", "الضيف", "رقم الضيف", "اسم المريض أو الرقم", "اسم المريض", "المريض", "رقم المريض"]));
+  rows.forEach((row, rowIndex) => {
+    const excelRow = rowIndex + 2;
+    let patientName = toText(readAliased(row, ["اسم الضيف أو الرقم", "اسم الضيف", "الضيف", "رقم الضيف", "اسم المريض أو الرقم", "اسم المريض", "المريض", "رقم المريض"]));
     const clinic = toText(readAliased(row, ["اسم العيادة أو المستشفى", "العيادة", "المستشفى", "الوجهة"]));
-    const buildingNumber = toText(readAliased(row, ["رقم المبنى", "المبنى", "building number", "building"]));
-    const apartmentNumber = toText(readAliased(row, ["رقم الشقة", "الشقة", "apartment number", "apartment"]));
-    const mobile = normalizeMobile(readAliased(row, ["رقم الموبايل", "رقم الجوال", "الموبايل", "الجوال", "الهاتف", "mobile"]));
+    let buildingNumber = toText(readAliased(row, ["رقم المبنى", "المبنى", "building number", "building"]));
+    let apartmentNumber = toText(readAliased(row, ["رقم الشقة", "الشقة", "apartment number", "apartment"]));
+    let mobile = normalizeMobile(readAliased(row, ["رقم الموبايل", "رقم الجوال", "الموبايل", "الجوال", "الهاتف", "mobile"]));
     const appointmentAt = normalizeTime(readAliased(row, ["وقت الموعد", "الوقت", "موعد", "appointment time"]));
     const rawDate = readAliased(row, ["تاريخ الموعد", "التاريخ", "appointment date", "date"]);
     const appointmentDate = rawDate === undefined || toText(rawDate) === "" ? today : normalizeDate(rawDate);
@@ -380,8 +348,33 @@ export function parseImportedAppointments(
     const assistance = normalizeAssistance(readAliased(row, ["احتياجات الضيف", "احتياجات المريض", "المساعدة", "الاحتياج", "ملاحظات", "assistance"]));
     // ملف المواعيد المصدَّر: كل احتياج في عمود «نعم/لا»
     for (const need of ASSISTANCE_NEEDS) if (!assistance.includes(need) && isYes(readAliased(row, [need]))) assistance.push(need);
-    const gender = normalizeGender(readAliased(row, ["الجنس", "gender", "sex"]));
+    let gender = normalizeGender(readAliased(row, ["الجنس", "gender", "sex"]));
     const cancer = isYes(readAliased(row, ["حالة سرطان", "سرطان", "cancer"]), /سرطان|cancer/);
+
+    // مع قائمة الضيوف: الضيف منها (والمبنى والشقة والجنس منها، والهاتف إن لم يُكتب)، والوجهة من دليل المستشفيات
+    let guestId: string | undefined;
+    let destination = clinic;
+    if (index && patientName) {
+      const guest = findGuestByName(index, patientName, buildingNumber, apartmentNumber);
+      if (!guest) {
+        errors.push(`الصف ${excelRow}: الضيف «${patientName}» غير موجود في قائمة ضيوف المجمع`);
+        return;
+      }
+      guestId = guest.id;
+      patientName = guest.name;
+      buildingNumber = guest.buildingNumber;
+      apartmentNumber = guest.apartmentNumber;
+      mobile = mobile || guest.mobile || "";
+      gender = guest.gender ?? gender;
+    }
+    const hospital = clinic ? matchHospital(clinic, hospitals) : null;
+    if (index && clinic) {
+      if (!hospital) {
+        errors.push(`الصف ${excelRow}: المستشفى «${clinic}» غير موجود في دليل المستشفيات`);
+        return;
+      }
+      destination = hospital.name;
+    }
 
     const missing = [
       [patientName, "اسم الضيف"],
@@ -399,7 +392,7 @@ export function parseImportedAppointments(
       return;
     }
 
-    const duplicateKey = [appointmentDate, patientName, clinic, buildingNumber, apartmentNumber, appointmentAt].join("|").toLowerCase();
+    const duplicateKey = [appointmentDate, patientName, destination, buildingNumber, apartmentNumber, appointmentAt].join("|").toLowerCase();
     if (duplicateKeys.has(duplicateKey)) {
       errors.push(`الصف ${excelRow}: الموعد مكرر`);
       return;
@@ -407,15 +400,16 @@ export function parseImportedAppointments(
     duplicateKeys.add(duplicateKey);
 
     appointments.push({
-      id: `APT-${String(idSeed).slice(-6)}-${String(index + 1).padStart(2, "0")}`,
+      id: `APT-${String(idSeed).slice(-6)}-${String(rowIndex + 1).padStart(2, "0")}`,
+      ...(guestId ? { guestId } : {}),
       patientName,
-      clinic,
+      clinic: destination,
       buildingNumber,
       apartmentNumber,
       mobile,
       appointmentDate,
       appointmentAt,
-      hospitalId: matchHospital(clinic, hospitals)?.id,
+      hospitalId: hospital?.id,
       kind: kind as AppointmentKind,
       assistance,
       status: "بانتظار طلب السيارة",

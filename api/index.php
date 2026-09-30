@@ -3,9 +3,9 @@ declare(strict_types=1);
 
 /**
  * واجهة الخادم لموقع سيارات مجمع الثمامة: /api/index.php?r=<route>
- * GET  session | users | sync&since=N | stats-days | activity | driver-trips | push-key
+ * GET  session | users | sync&since=N | stats-days | activity | driver-trips | push-key | guests-stats
  * POST login | logout | change-password | users.create | users.update | users.reset-password | write | location | stats-days.save
- *      driver-action | push-subscribe | push-unsubscribe
+ *      driver-action | push-subscribe | push-unsubscribe | guests.import
  */
 
 // لا تُعرض أخطاء PHP للزائر (قد تكشف مسارات الخادم)؛ تُسجَّل في سجل الأخطاء فقط
@@ -49,6 +49,8 @@ try {
         'GET push-key' => 'route_push_key',
         'POST push-subscribe' => 'route_push_subscribe',
         'POST push-unsubscribe' => 'route_push_unsubscribe',
+        'POST guests.import' => 'route_guests_import',
+        'GET guests-stats' => 'route_guests_stats',
     ];
     $handler = $handlers["$method $route"] ?? null;
     if (!$handler) throw new ApiException(404, 'طلب غير معروف', 'not_found');
@@ -315,20 +317,23 @@ function save_doc(PDO $pdo, string $col, string $id, ?array $data, int $rev): vo
 
 /**
  * التغييرات منذ مراجعة معيّنة (since=0: كل البيانات). المحذوف يرجع data = null.
- * السائق لا يرى بيانات المرضى، لذلك المزامنة لموظفي المكتب فقط.
+ * السائق لا يرى بيانات المرضى، لذلك المزامنة لموظفي المكتب فقط، وقائمة الضيوف للمدير والعيادة
+ * بلا العمر والرقم الصحي (sync_collections وpublic_doc في rules.php).
  */
 function route_sync(PDO $pdo): array
 {
-    require_role(current_user($pdo), OFFICE_ROLES);
+    $user = current_user($pdo);
+    require_role($user, OFFICE_ROLES);
     $since = max(0, (int)($_GET['since'] ?? 0));
     $rev = current_revision($pdo);
     if ($since > $rev) $since = 0;
-    $marks = implode(', ', array_fill(0, count(SYNC_COLLECTIONS), '?'));
+    $collections = sync_collections($user);
+    $marks = implode(', ', array_fill(0, count($collections), '?'));
     $sql = "SELECT col, id, data FROM docs WHERE rev > ? AND rev <= ? AND col IN ($marks)" . ($since === 0 ? ' AND data IS NOT NULL' : '');
     $stmt = $pdo->prepare($sql);
-    $stmt->execute([$since, $rev, ...SYNC_COLLECTIONS]);
+    $stmt->execute([$since, $rev, ...$collections]);
     $docs = [];
-    foreach ($stmt as $row) $docs[] = ['col' => $row['col'], 'id' => $row['id'], 'data' => decode_doc($row['data'])];
+    foreach ($stmt as $row) $docs[] = ['col' => $row['col'], 'id' => $row['id'], 'data' => public_doc($row['col'], decode_doc($row['data']))];
     return ['rev' => $rev, 'full' => $since === 0, 'docs' => $docs];
 }
 
@@ -342,10 +347,16 @@ function route_write(PDO $pdo, array $body): array
     require_role($user, OFFICE_ROLES);
     $ops = $body['ops'] ?? null;
     if (!is_array($ops) || !array_is_list($ops) || count($ops) > 3000) throw new ApiException(400, 'بيانات غير صالحة', 'bad_request');
-    // الموعد المحفوظ (بما حُفظ قبله في نفس الدفعة) لفحص طلبات السيارات الجديدة
-    $appointmentOf = function (string $appointmentId) use ($pdo): ?array {
-        $stmt = $pdo->prepare("SELECT data FROM docs WHERE col = 'appointments' AND id = ?");
-        $stmt->execute([$appointmentId]);
+    // المستند المحفوظ (بما حُفظ قبله في نفس الدفعة): الموعد لطلبات السيارات الجديدة، والضيف والمستشفى لمواعيد العيادة.
+    // بلا رقم: أي مستند من المجموعة (لمعرفة هل هي فارغة)
+    $docOf = function (string $col, ?string $id) use ($pdo): ?array {
+        if ($id === null) {
+            $stmt = $pdo->prepare('SELECT data FROM docs WHERE col = ? AND data IS NOT NULL LIMIT 1');
+            $stmt->execute([$col]);
+        } else {
+            $stmt = $pdo->prepare('SELECT data FROM docs WHERE col = ? AND id = ?');
+            $stmt->execute([$col, $id]);
+        }
         return decode_doc($stmt->fetchColumn() ?: null);
     };
     $pdo->beginTransaction();
@@ -373,7 +384,7 @@ function route_write(PDO $pdo, array $body): array
             } else {
                 throw new ApiException(400, 'بيانات غير صالحة', 'bad_request');
             }
-            if ($error = authorize_write($user, $col, $id, $before, $after, $appointmentOf)) throw new ApiException(403, $error, 'permission_denied');
+            if ($error = authorize_write($user, $col, $id, $before, $after, $docOf)) throw new ApiException(403, $error, 'permission_denied');
             // الوصف قبل الحفظ (يقرأ الموعد المرتبط بالطلب كما كان)، والتسجيل بعده في نفس المعاملة
             $entry = describe_write($pdo, $col, $id, $before, $after);
             save_doc($pdo, $col, $id, $after, $rev);
@@ -387,6 +398,82 @@ function route_write(PDO $pdo, array $body): array
         throw $error;
     }
     return ['rev' => $rev];
+}
+
+/** نفس المحتوى بغض النظر عن ترتيب الخانات (بلا خانة الترتيب _o) */
+function same_doc(?array $a, ?array $b): bool
+{
+    if ($a === null || $b === null) return $a === $b;
+    unset($a['_o'], $b['_o']);
+    ksort($a);
+    ksort($b);
+    return $a === $b;
+}
+
+/**
+ * رفع قائمة ضيوف المجمع من ملف Excel (المدير): الضيف الموجود بنفس الرقم يُحدَّث، والجديد يُضاف،
+ * و«remove» ضيوف غير موجودين في الملف يُحذفون إن اختار المدير ذلك. كلها أو لا شيء، وعملية واحدة في السجل.
+ */
+function route_guests_import(PDO $pdo, array $body): array
+{
+    $user = current_user($pdo);
+    require_role($user, ['admin']);
+    $guests = $body['guests'] ?? null;
+    $remove = $body['remove'] ?? [];
+    if (!is_array($guests) || !array_is_list($guests) || count($guests) > 10000 || !is_array($remove) || !array_is_list($remove) || count($remove) > 10000) {
+        throw new ApiException(400, 'بيانات غير صالحة', 'bad_request');
+    }
+    $pdo->beginTransaction();
+    try {
+        $rev = next_revision($pdo);
+        $existing = [];
+        foreach ($pdo->query("SELECT id, data FROM docs WHERE col = 'guests' AND data IS NOT NULL FOR UPDATE") as $row) $existing[(string)$row['id']] = decode_doc($row['data']);
+        $added = $updated = $unchanged = $removed = 0;
+        $seen = [];
+        foreach ($guests as $index => $guest) {
+            $id = is_array($guest) ? (string)($guest['id'] ?? '') : '';
+            if (!valid_doc_id($id) || isset($seen[$id]) || !valid_guest($guest, $id)) {
+                throw new ApiException(400, 'بيانات الضيف رقم ' . ($index + 1) . ' في الملف غير صالحة', 'invalid');
+            }
+            $seen[$id] = true;
+            $before = $existing[$id] ?? null;
+            $doc = $guest;
+            $doc['_o'] = $before['_o'] ?? $index;
+            if (same_doc($before, $doc)) {
+                $unchanged += 1;
+                continue;
+            }
+            save_doc($pdo, 'guests', $id, $doc, $rev);
+            if ($before === null) $added += 1;
+            else $updated += 1;
+        }
+        foreach ($remove as $id) {
+            if (!is_string($id) || !isset($existing[$id]) || isset($seen[$id])) continue;
+            save_doc($pdo, 'guests', $id, null, $rev);
+            $removed += 1;
+        }
+        $summary = "رفع قائمة الضيوف: $added جديد، $updated تحديث، $unchanged بلا تغيير" . ($removed ? "، وحذف $removed غير موجودين في الملف" : '');
+        log_activity($pdo, $user, 'guest', 'guest.import', $summary, '', ['changes' => (string)count($guests) . ' ضيف في الملف']);
+        $pdo->commit();
+    } catch (Throwable $error) {
+        $pdo->rollBack();
+        throw $error;
+    }
+    return ['added' => $added, 'updated' => $updated, 'unchanged' => $unchanged, 'removed' => $removed];
+}
+
+/** قائمة الضيوف كاملة مع العمر والرقم الصحي: للإحصائيات فقط (المدير ومشرف السيارات). */
+function route_guests_stats(PDO $pdo): array
+{
+    require_role(current_user($pdo), GUEST_STATS_ROLES);
+    $guests = [];
+    foreach ($pdo->query("SELECT data FROM docs WHERE col = 'guests' AND data IS NOT NULL") as $row) {
+        $guest = decode_doc($row['data']);
+        if (!$guest) continue;
+        unset($guest['_o']);
+        $guests[] = $guest;
+    }
+    return ['guests' => $guests];
 }
 
 function distance_m(float $lat1, float $lng1, float $lat2, float $lng2): float
