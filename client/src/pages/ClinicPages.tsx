@@ -11,6 +11,7 @@ import {
   CalendarPlus,
   Check,
   CheckCircle2,
+  ChevronDown,
   ClipboardPlus,
   Clock3,
   Download,
@@ -46,7 +47,7 @@ import {
   type ClinicAppointment,
   type Gender,
 } from "@shared/transport";
-import { matchHospital, type Hospital } from "@shared/hospitals";
+import { matchHospital, normalizePlaceName, type Hospital } from "@shared/hospitals";
 import { guestIndex, guestOfAppointment, searchGuests, type Guest } from "@shared/guests";
 import { Badge, DateChooser, EmptyState, Field, Panel, PageHeader, Segmented, Stat, StatusBadge, StatusBar, btn, choiceClass, cx, formatDay, inputClass, labelClass, longDate } from "@/components/ui-kit";
 import { FILTER_LABELS_AR, FILTER_LABELS_EN, FilterTable, useColumnFilters, type FilterColumn } from "@/components/ExcelFilter";
@@ -601,7 +602,7 @@ export function ClinicForm({ t, lang, initial, defaultDate, onBack, onSave }: {
       <Panel tone="brand" icon={ClipboardPlus} title={initial ? t.editTitle : t.newTitle} description={initial ? initial.id : undefined}>
         <form onSubmit={submit} className="grid gap-5 p-5 sm:grid-cols-2 sm:p-6">
           <GuestPicker t={t} guests={guests} guest={guest} onSelect={selectGuest} notListed={notListed} />
-          <HospitalSelect label={t.hospital} value={form.hospitalId} onChange={(hospitalId) => setForm({ ...form, hospitalId })} hospitals={hospitals} lang={lang} placeholder={t.hospitalChoose} wide />
+          <HospitalSelect id="hospital-first" label={t.hospital} value={form.hospitalId} onChange={(hospitalId) => setForm({ ...form, hospitalId })} hospitals={hospitals} lang={lang} placeholder={t.hospitalChoose} noMatch={t.hospitalNoMatch} wide />
           <Field label={t.mobile} value={form.mobile} onChange={(value) => setForm({ ...form, mobile: value })} type="tel" dir="ltr" wide />
           {!guest?.gender && <fieldset className="sm:col-span-2">
             <legend className={labelClass}>{t.gender}</legend>
@@ -654,7 +655,7 @@ export function ClinicForm({ t, lang, initial, defaultDate, onBack, onSave }: {
               </label>
               {second.enabled && (
                 <div className="mt-4 grid gap-4 sm:grid-cols-[minmax(0,1fr)_180px]">
-                  <HospitalSelect label={`${t.secondTitle} · ${t.hospital}`} value={second.hospitalId} onChange={(hospitalId) => setSecond({ ...second, hospitalId })} hospitals={hospitals} lang={lang} placeholder={t.hospitalChoose} />
+                  <HospitalSelect id="hospital-second" label={`${t.secondTitle} · ${t.hospital}`} value={second.hospitalId} onChange={(hospitalId) => setSecond({ ...second, hospitalId })} hospitals={hospitals} lang={lang} placeholder={t.hospitalChoose} noMatch={t.hospitalNoMatch} />
                   <Field label={`${t.secondTitle} · ${t.time}`} value={second.appointmentAt} onChange={(value) => setSecond({ ...second, appointmentAt: value })} type="time" />
                   <p className="text-xs leading-5 text-slate-500 sm:col-span-2">{t.secondHint}</p>
                 </div>
@@ -672,7 +673,13 @@ export function ClinicForm({ t, lang, initial, defaultDate, onBack, onSave }: {
   );
 }
 
-/** اختيار الضيف من قائمة ضيوف المجمع بالبحث (الاسم بالعربية أو الإنجليزية، أو المبنى والشقة، أو الهاتف). */
+/** ترتيب أرقام المباني والشقق: الأرقام بترتيبها ثم R1 وR2 */
+const byUnit = (a: string, b: string) => a.localeCompare(b, "en", { numeric: true });
+
+/**
+ * اختيار الضيف من قائمة ضيوف المجمع: بحث بالاسم (العربي أو الإنجليزي أو الهاتف)، أو بالمبنى والشقة
+ * لمن كُتب اسمه بطريقة مختلفة. القائمة تظهر تحت الحقول وتضيق مع كل اختيار.
+ */
 function GuestPicker({ t, guests, guest, onSelect, notListed }: {
   t: ClinicText;
   guests: Guest[];
@@ -682,19 +689,25 @@ function GuestPicker({ t, guests, guest, onSelect, notListed }: {
   notListed?: string;
 }) {
   const [query, setQuery] = useState("");
-  const [open, setOpen] = useState(false);
+  const [building, setBuilding] = useState("");
+  const [apartment, setApartment] = useState("");
   const [active, setActive] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
+  const buildings = useMemo(() => Array.from(new Set(guests.map((item) => item.buildingNumber))).sort(byUnit), [guests]);
+  const apartments = useMemo(() => (building
+    ? Array.from(new Set(guests.filter((item) => item.buildingNumber === building).map((item) => item.apartmentNumber))).sort(byUnit)
+    : []), [guests, building]);
   const searching = query.trim().length >= 2;
-  const results = useMemo(() => (searching ? searchGuests(guests, query, 5000) : []), [guests, query, searching]);
+  const filtering = searching || Boolean(building);
+  const results = useMemo(() => {
+    if (!filtering) return [];
+    const inUnit = guests.filter((item) => (!building || item.buildingNumber === building) && (!apartment || item.apartmentNumber === apartment));
+    return searching
+      ? searchGuests(inUnit, query, inUnit.length)
+      : [...inUnit].sort((a, b) => byUnit(a.apartmentNumber, b.apartmentNumber) || a.name.localeCompare(b.name, "ar"));
+  }, [guests, building, apartment, query, searching, filtering]);
   const shown = results.slice(0, 30);
   const listId = "guest-options";
-
-  function choose(next: Guest) {
-    onSelect(next);
-    setQuery("");
-    setOpen(false);
-  }
 
   if (guest) {
     return (
@@ -719,94 +732,205 @@ function GuestPicker({ t, guests, guest, onSelect, notListed }: {
   }
 
   function onKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
-    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+    if ((event.key === "ArrowDown" || event.key === "ArrowUp") && shown.length) {
       event.preventDefault();
-      setOpen(true);
-      if (shown.length) setActive((current) => (current + (event.key === "ArrowDown" ? 1 : shown.length - 1)) % shown.length);
+      setActive((current) => (current + (event.key === "ArrowDown" ? 1 : shown.length - 1)) % shown.length);
     } else if (event.key === "Enter") {
       // Enter يختار الضيف ولا يرسل النموذج
       event.preventDefault();
-      if (open && shown[active]) choose(shown[active]);
-    } else if (event.key === "Escape") {
-      setOpen(false);
+      if (shown[active]) onSelect(shown[active]);
     }
   }
 
+  const small = "mb-1 block text-[11px] font-medium text-slate-500";
+  const selectClass = (on: boolean) => cx(inputClass, on && "bg-brand-50 text-brand-700 ring-1 ring-inset ring-brand-200");
   return (
-    <div className="relative sm:col-span-2">
-      <label htmlFor="guest-search" className={labelClass}>{t.guest}</label>
-      <div className="relative">
-        <Search className="pointer-events-none absolute start-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-        <input
-          ref={inputRef}
-          id="guest-search"
-          role="combobox"
-          aria-expanded={open && searching}
-          aria-controls={listId}
-          aria-autocomplete="list"
-          aria-activedescendant={open && shown[active] ? `guest-${shown[active].id}` : undefined}
-          autoComplete="off"
-          disabled={!guests.length}
-          value={query}
-          onChange={(event) => { setQuery(event.target.value); setOpen(true); setActive(0); }}
-          onFocus={() => setOpen(true)}
-          onBlur={() => setOpen(false)}
-          onKeyDown={onKeyDown}
-          placeholder={t.guestSearch}
-          className={cx(inputClass, "ps-10")}
-        />
+    <fieldset className="sm:col-span-2">
+      <legend className={labelClass}>{t.guest}</legend>
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-[minmax(0,1fr)_140px_140px]">
+        <label className="col-span-2 block sm:col-span-1">
+          <span className={small}>{t.guestByName}</span>
+          <span className="relative block">
+            <Search className="pointer-events-none absolute start-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+            <input
+              ref={inputRef}
+              id="guest-search"
+              role="combobox"
+              aria-label={t.guest}
+              aria-expanded={filtering && shown.length > 0}
+              aria-controls={listId}
+              aria-autocomplete="list"
+              aria-activedescendant={filtering && shown[active] ? `guest-${shown[active].id}` : undefined}
+              autoComplete="off"
+              disabled={!guests.length}
+              value={query}
+              onChange={(event) => { setQuery(event.target.value); setActive(0); }}
+              onKeyDown={onKeyDown}
+              placeholder={t.guestSearch}
+              className={cx(inputClass, "ps-10")}
+            />
+          </span>
+        </label>
+        <label className="block">
+          <span className={small}>{t.building}</span>
+          <select value={building} disabled={!guests.length} onChange={(event) => { setBuilding(event.target.value); setApartment(""); setActive(0); }} className={selectClass(Boolean(building))}>
+            <option value="">{t.allBuildings}</option>
+            {buildings.map((item) => <option key={item} value={item}>{item}</option>)}
+          </select>
+        </label>
+        <label className="block">
+          <span className={small}>{t.apartment}</span>
+          <select value={apartment} disabled={!building} onChange={(event) => { setApartment(event.target.value); setActive(0); }} className={selectClass(Boolean(apartment))}>
+            <option value="">{t.allApartments}</option>
+            {apartments.map((item) => <option key={item} value={item}>{item}</option>)}
+          </select>
+        </label>
       </div>
-      {open && searching && (
-        <ul id={listId} role="listbox" aria-label={t.guest} className="absolute inset-x-0 top-full z-30 mt-1.5 max-h-80 overflow-y-auto rounded-xl bg-white p-1.5 shadow-raised ring-1 ring-slate-900/10">
-          {shown.length ? shown.map((item, position) => (
-            <li
-              key={item.id}
-              id={`guest-${item.id}`}
-              role="option"
-              aria-selected={position === active}
-              // قبل أن يفقد الحقل التركيز فتُغلق القائمة
-              onMouseDown={(event) => { event.preventDefault(); choose(item); }}
-              onMouseEnter={() => setActive(position)}
-              className={cx("flex cursor-pointer items-center justify-between gap-3 rounded-lg px-3 py-2", position === active ? "bg-brand-50" : "hover:bg-slate-50")}
-            >
-              <span className="min-w-0">
-                <span className="block truncate text-sm font-medium text-ink">{item.name}</span>
-                {item.nameEn && <span className="block truncate text-xs text-slate-500"><bdi>{item.nameEn}</bdi></span>}
-              </span>
-              <span className="shrink-0 text-xs text-slate-500 tabular">{t.guestUnit(item.buildingNumber, item.apartmentNumber)}</span>
-            </li>
-          )) : <li className="px-3 py-3 text-center text-sm text-slate-500">{t.guestNoMatch}</li>}
-          {results.length > shown.length && <li className="px-3 py-2 text-center text-[11px] text-slate-400">{t.guestMore(results.length - shown.length)}</li>}
-        </ul>
+      {filtering && (
+        <div className="mt-2 overflow-hidden rounded-xl bg-white ring-1 ring-slate-200">
+          <div className="flex items-center justify-between gap-2 border-b border-slate-100 bg-slate-50/80 px-3 py-1.5 text-[11px] text-slate-500">
+            <span>{t.guestsFound(results.length)}</span>
+            <button type="button" onClick={() => { setQuery(""); setBuilding(""); setApartment(""); inputRef.current?.focus(); }} className="rounded-md px-1.5 py-0.5 font-semibold text-slate-600 hover:bg-slate-200/70">{t.guestClear}</button>
+          </div>
+          <ul id={listId} role="listbox" aria-label={t.guest} className="max-h-72 overflow-y-auto p-1.5">
+            {shown.length ? shown.map((item, position) => (
+              <li
+                key={item.id}
+                id={`guest-${item.id}`}
+                role="option"
+                aria-selected={position === active}
+                onClick={() => onSelect(item)}
+                onMouseEnter={() => setActive(position)}
+                className={cx("flex cursor-pointer items-center justify-between gap-3 rounded-lg px-3 py-2", position === active ? "bg-brand-50" : "hover:bg-slate-50")}
+              >
+                <span className="min-w-0">
+                  <span className="block truncate text-sm font-medium text-ink">{item.name}</span>
+                  {item.nameEn && <span className="block truncate text-xs text-slate-500"><bdi>{item.nameEn}</bdi></span>}
+                </span>
+                <span className="shrink-0 text-xs text-slate-500 tabular">{t.guestUnit(item.buildingNumber, item.apartmentNumber)}</span>
+              </li>
+            )) : <li className="px-3 py-3 text-center text-sm text-slate-500">{t.guestNoMatch}</li>}
+            {results.length > shown.length && <li className="px-3 py-2 text-center text-[11px] text-slate-400">{t.guestMore(results.length - shown.length)}</li>}
+          </ul>
+        </div>
       )}
       {!guests.length
         ? <p role="alert" className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-900 ring-1 ring-inset ring-amber-200">{t.guestListEmpty}</p>
         : notListed
           ? <p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-900 ring-1 ring-inset ring-amber-200">{t.guestNotListed(notListed)}</p>
-          : !searching && <p className="mt-1.5 text-[11px] text-slate-400">{t.guestSearchHint}</p>}
-    </div>
+          : !filtering && <p className="mt-1.5 text-[11px] text-slate-400">{t.guestSearchHint}</p>}
+    </fieldset>
   );
 }
 
-/** المستشفى من دليل المستشفيات فقط (بالإنجليزية في الواجهة الإنجليزية). */
-function HospitalSelect({ label, value, onChange, hospitals, lang, placeholder, wide }: {
+/**
+ * المستشفى من دليل المستشفيات فقط: الكتابة تفلتر القائمة (بالاسم العربي أو الإنجليزي أو الأسماء البديلة)،
+ * والأسهم وEnter للاختيار. بالإنجليزية في الواجهة الإنجليزية.
+ */
+function HospitalSelect({ id, label, value, onChange, hospitals, lang, placeholder, noMatch, wide }: {
+  id: string;
   label: string;
   value: string;
   onChange: (hospitalId: string) => void;
   hospitals: Hospital[];
   lang: Lang;
   placeholder: string;
+  noMatch: string;
   wide?: boolean;
 }) {
+  // null: لا يكتب المستخدم الآن، فيظهر اسم المستشفى المختار
+  const [query, setQuery] = useState<string | null>(null);
+  const [active, setActive] = useState(0);
+  const listRef = useRef<HTMLUListElement>(null);
   const nameOf = (hospital: Hospital) => (lang === "en" ? hospital.nameEn || hospital.name : hospital.name);
+  const otherName = (hospital: Hospital) => (lang === "en" ? hospital.name : hospital.nameEn);
   const sorted = useMemo(() => [...hospitals].sort((a, b) => nameOf(a).localeCompare(nameOf(b), lang)), [hospitals, lang]); // eslint-disable-line react-hooks/exhaustive-deps
+  const selected = hospitals.find((hospital) => hospital.id === value);
+  const open = query !== null;
+  const matches = useMemo(() => {
+    const key = normalizePlaceName(query ?? "");
+    if (!key) return sorted;
+    // المطابقة في الاسم نفسه أولًا، ثم في الأسماء البديلة
+    const rank = (hospital: Hospital) => ([hospital.name, hospital.nameEn].some((name) => normalizePlaceName(name).includes(key)) ? 0
+      : hospital.aliases.some((name) => normalizePlaceName(name).includes(key)) ? 1 : 2);
+    return sorted.map((hospital) => ({ hospital, rank: rank(hospital) })).filter((item) => item.rank < 2)
+      .sort((a, b) => a.rank - b.rank).map((item) => item.hospital);
+  }, [query, sorted]);
+
+  // الخيار النشط ظاهر عند التنقل بالأسهم
+  useEffect(() => {
+    if (open) listRef.current?.querySelector<HTMLElement>(`[data-index="${active}"]`)?.scrollIntoView({ block: "nearest" });
+  }, [active, open]);
+
+  function choose(hospital: Hospital) {
+    onChange(hospital.id);
+    setQuery(null);
+  }
+
+  function onKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      if (!open) {
+        setQuery("");
+        setActive(0);
+      } else if (matches.length) {
+        setActive((current) => (current + (event.key === "ArrowDown" ? 1 : matches.length - 1)) % matches.length);
+      }
+    } else if (event.key === "Enter") {
+      event.preventDefault();
+      if (open && matches[active]) choose(matches[active]);
+    } else if (event.key === "Escape") {
+      setQuery(null);
+    }
+  }
+
   return (
-    <label className={cx("block", wide && "sm:col-span-2")}>
-      <span className={labelClass}>{label}</span>
-      <select value={value} onChange={(event) => onChange(event.target.value)} className={cx(inputClass, !value && "text-slate-400")}>
-        <option value="" disabled>{placeholder}</option>
-        {sorted.map((hospital) => <option key={hospital.id} value={hospital.id} className="text-ink">{nameOf(hospital)}</option>)}
-      </select>
-    </label>
+    <div className={cx("relative", wide && "sm:col-span-2")}>
+      <label htmlFor={id} className={labelClass}>{label}</label>
+      <div className="relative">
+        <Search className="pointer-events-none absolute start-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+        <input
+          id={id}
+          role="combobox"
+          aria-expanded={open}
+          aria-controls={`${id}-list`}
+          aria-autocomplete="list"
+          aria-activedescendant={open && matches[active] ? `${id}-${matches[active].id}` : undefined}
+          autoComplete="off"
+          value={open ? query : selected ? nameOf(selected) : ""}
+          // عند الكتابة يبقى اسم المختار ظاهرًا كتلميح
+          placeholder={selected ? nameOf(selected) : placeholder}
+          onFocus={() => { setQuery(""); setActive(Math.max(0, sorted.findIndex((hospital) => hospital.id === value))); }}
+          onChange={(event) => { setQuery(event.target.value); setActive(0); }}
+          onBlur={() => setQuery(null)}
+          onKeyDown={onKeyDown}
+          className={cx(inputClass, "ps-10 pe-9", selected && !open && "font-medium")}
+        />
+        <ChevronDown className="pointer-events-none absolute end-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+      </div>
+      {open && (
+        <ul ref={listRef} id={`${id}-list`} role="listbox" aria-label={label} className="absolute inset-x-0 top-full z-30 mt-1.5 max-h-72 overflow-y-auto rounded-xl bg-white p-1.5 shadow-raised ring-1 ring-slate-900/10">
+          {matches.length ? matches.map((hospital, position) => (
+            <li
+              key={hospital.id}
+              id={`${id}-${hospital.id}`}
+              data-index={position}
+              role="option"
+              aria-selected={hospital.id === value}
+              // قبل أن يفقد الحقل التركيز فتُغلق القائمة
+              onMouseDown={(event) => { event.preventDefault(); choose(hospital); }}
+              onMouseEnter={() => setActive(position)}
+              className={cx("flex cursor-pointer items-center justify-between gap-3 rounded-lg px-3 py-2", position === active ? "bg-brand-50" : "hover:bg-slate-50")}
+            >
+              <span className="min-w-0">
+                <span className="block truncate text-sm font-medium text-ink">{nameOf(hospital)}</span>
+                {otherName(hospital) && <span className="block truncate text-xs text-slate-500"><bdi>{otherName(hospital)}</bdi></span>}
+              </span>
+              {hospital.id === value && <Check className="h-4 w-4 shrink-0 text-brand-600" />}
+            </li>
+          )) : <li className="px-3 py-3 text-center text-sm text-slate-500">{noMatch}</li>}
+        </ul>
+      )}
+    </div>
   );
 }
