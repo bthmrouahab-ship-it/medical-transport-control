@@ -5,7 +5,6 @@ import {
   ClipboardList,
   Contact,
   Copy,
-  Info,
   KeyRound,
   Loader2,
   Map as MapIcon,
@@ -362,7 +361,6 @@ function VehiclesTab({ vehicles, requests, onChange }: {
 }) {
   // null = لا يوجد نموذج مفتوح، "" = سيارة جديدة، غير ذلك = رقم السيارة قيد التعديل
   const [editing, setEditing] = useState<string | null>(null);
-  const missingSeed = DEFAULT_VEHICLES.filter((seed) => !vehicles.some((vehicle) => vehicle.plate === seed.plate));
 
   function save(draft: VehicleDraft) {
     const original = editing ? vehicles.find((vehicle) => vehicle.plate === editing) : undefined;
@@ -403,12 +401,6 @@ function VehiclesTab({ vehicles, requests, onChange }: {
         subtitle={`${vehicles.length} سيارة · ${availableCount} متاحة للخدمة`}
         actions={<button onClick={() => setEditing("")} className={btn("primary")}><Plus className="h-4 w-4" /> إضافة سيارة</button>}
       />
-      {missingSeed.length > 0 && (
-        <div className="mb-6 flex flex-col gap-3 rounded-2xl bg-blue-50 p-4 text-sm text-blue-900 ring-1 ring-inset ring-blue-200 sm:flex-row sm:items-center sm:justify-between">
-          <span className="flex items-start gap-2"><Info className="mt-0.5 h-4 w-4 shrink-0" /><span><b>{missingSeed.length}</b> سيارة من ملف السائقين غير مضافة: <span dir="ltr">{missingSeed.map((vehicle) => vehicle.plate).join("، ")}</span></span></span>
-          <button onClick={() => onChange([...vehicles, ...missingSeed])} className={btn("dark", "sm")}>إضافة الكل</button>
-        </div>
-      )}
       {editing === "" && <VehicleForm onSave={save} onCancel={() => setEditing(null)} />}
       <Panel icon={Truck} title="السيارات" count={vehicles.length}>
         <div className="divide-y divide-slate-100">

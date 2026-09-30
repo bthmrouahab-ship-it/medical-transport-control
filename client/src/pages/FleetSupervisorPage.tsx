@@ -85,13 +85,13 @@ import {
   btn,
   cx,
   formatDay,
-  inputClass,
   longDate,
   timeLabel,
 } from "@/components/ui-kit";
 import NonMedicalTripForm from "./NonMedicalTripForm";
 import { RecentActivity } from "@/components/ActivityLog";
 import { AppointmentsOverview } from "@/components/AppointmentsOverview";
+import { KindIcon, KindLabel, VehiclePicker } from "@/components/VehiclePicker";
 import { useHospitals, useLiveVehicles, useNow } from "@/lib/useShared";
 import { NOTIFY_KEY, deviceNotificationsOn, useArrivalAlerts, useCancellationAlerts, useDenialAlerts, useRedirectAlerts } from "@/lib/arrivalAlerts";
 import { checkStateText, driverCheck } from "@shared/driverChecks";
@@ -153,8 +153,8 @@ const minutesText = (minutes: number) => (minutes <= 1 ? "دقيقة" : minutes 
 
 type DriverMessage = { vehicle: Vehicle; count: number; message: string };
 
-/** نوع السيارة مع تخصيص الباص: «باص · باص المجمع» */
-const kindText = (vehicle: Vehicle) => `${vehicle.kind}${busRoleOf(vehicle) ? ` · ${BUS_ROLE_LABELS[busRoleOf(vehicle)!]}` : ""}`;
+/** تخصيص الباص («باص المجمع»...) إن وُجد */
+const roleOf = (vehicle: Vehicle) => (busRoleOf(vehicle) ? BUS_ROLE_LABELS[busRoleOf(vehicle)!] : undefined);
 
 /** خيار سيارة لرحلة: متاحة لها الآن، أو غير متاحة مع السبب (مشغولة، أو قاعدة الباصات والمقاعد) */
 type VehicleChoice = { vehicle: Vehicle; why: string | null };
@@ -572,12 +572,16 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
                         </div>
                       </div>
                       <div className="flex flex-col gap-2 sm:flex-row lg:w-[440px]">
-                        <select aria-label="السيارة" value={ready.some((vehicle) => vehicle.plate === selectedPlate) ? selectedPlate : ""} onChange={(event) => setSelectedVehicles((current) => ({ ...current, [trip.request.id]: event.target.value }))} className={cx(inputClass, "h-10 min-w-0 flex-1")}>
-                          {!ready.length && <option value="">لا توجد سيارة متاحة</option>}
-                          {choices.map(({ vehicle, why }) => why
-                            ? <option key={vehicle.plate} value={vehicle.plate} disabled>{vehicle.plate} · {kindText(vehicle)} · {why}</option>
-                            : <option key={vehicle.plate} value={vehicle.plate}>{vehicle.plate} · {driverOf(vehicle.plate)} · {kindText(vehicle)} · {placeText(vehicle.plate)} · {tripsText(load.get(vehicle.plate) ?? 0)}</option>)}
-                        </select>
+                        <VehiclePicker
+                          label={`سيارة رحلة ${trip.appointment.patientName}`}
+                          options={choices}
+                          value={ready.some((vehicle) => vehicle.plate === selectedPlate) ? selectedPlate : ""}
+                          onChange={(plate) => setSelectedVehicles((current) => ({ ...current, [trip.request.id]: plate }))}
+                          placeholder={ready.length ? "اختر سيارة" : "لا توجد سيارة متاحة"}
+                          driverOf={(vehicle) => driverOf(vehicle.plate)}
+                          details={(vehicle) => `${placeText(vehicle.plate)} · ${tripsText(load.get(vehicle.plate) ?? 0)}`}
+                          roleOf={roleOf}
+                        />
                         <div className="flex gap-2">
                           <button disabled={!ready.length} onClick={() => dispatchSingle(trip)} className={cx(btn("primary"), "flex-1")}><Send className="h-4 w-4" /> إرسال</button>
                           {/* النقل بين موعدين يبدأ من مستشفى فلا يُجمع مع غيره */}
@@ -604,7 +608,9 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
                         <Badge tone="violet">{guestsText(members.length)}{group.persons > members.length ? ` · ${personsText(group.persons)}` : ""}</Badge>
                       </div>
                       <TripList trips={members} hospitals={hospitals} />
-                      <p className="mt-3 text-xs text-slate-500">السيارة المقترحة: <span className="font-semibold text-slate-700">{vehicle ? `${vehicle.plate} · ${driverOf(vehicle.plate)} · ${kindText(vehicle)}` : "لا توجد سيارة متاحة"}</span></p>
+                      <p className="mt-3 flex flex-wrap items-center gap-1.5 text-xs text-slate-500">السيارة المقترحة: {vehicle
+                        ? <span className="inline-flex items-center gap-1.5 font-semibold text-slate-700"><KindIcon vehicle={vehicle} size="sm" /><span dir="ltr">{vehicle.plate}</span> · {driverOf(vehicle.plate)} · <KindLabel vehicle={vehicle} extra={roleOf(vehicle)} /></span>
+                        : <span className="font-semibold text-slate-700">لا توجد سيارة متاحة</span>}</p>
                       <div className="mt-3 flex gap-2">
                         <button disabled={!vehicle} onClick={() => dispatchGroup(group.appointmentIds)} className={cx(btn("dark", "sm"), "flex-1")}><Send className="h-4 w-4" /> إرسال السيارة · {guestsText(members.length)}</button>
                         <button onClick={() => setEditing(members.map((trip) => trip.request.id))} title="إضافة ضيوف أو إزالتهم أو تغيير السيارة" className={btn("secondary", "sm")}><Pencil className="h-4 w-4" /> تعديل</button>
@@ -729,8 +735,11 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
                   <li key={vehicle.plate} className="flex items-center gap-3 px-4 py-3">
                     <Dot tone={state.tone} pulse={Boolean(live)} />
                     <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-medium text-ink"><span dir="ltr">{vehicle.plate}</span> · {live?.driver ?? vehicle.driver}</p>
-                      <p className="text-xs leading-5 text-slate-500">{kindText(vehicle)} · {state.text}{live ? " · GPS مباشر" : ""}</p>
+                      <p className="flex items-center gap-1.5 text-sm font-medium text-ink">
+                        <KindIcon vehicle={vehicle} size="sm" />
+                        <span className="truncate"><span dir="ltr" className="font-semibold">{vehicle.plate}</span> · {live?.driver ?? vehicle.driver}</span>
+                      </p>
+                      <p className="text-xs leading-5 text-slate-500"><KindLabel vehicle={vehicle} extra={roleOf(vehicle)} /> · {state.text}{live ? " · GPS مباشر" : ""}</p>
                       {vehicle.kind === "باص" && (
                         <select
                           aria-label={`تخصيص الباص ${vehicle.plate}`}
@@ -994,18 +1003,20 @@ function AutoDispatchDialog({ plan, free, load, rules, transferIds, personsOf, d
                       ))}
                     </ul>
                   )}
-                  <select
-                    aria-label={`سيارة رحلة ${names(row.appointments)}`}
-                    value={options.some((vehicle) => vehicle.plate === row.plate) ? row.plate : ""}
-                    disabled={!row.include}
-                    onChange={(event) => update(index, { plate: event.target.value })}
-                    className={cx(inputClass, "h-10 w-full", row.include && (used.get(row.plate) ?? 0) > 1 && "border-red-400 bg-red-50")}
-                  >
-                    {!options.some((vehicle) => vehicle.plate === row.plate) && <option value="">اختر سيارة</option>}
-                    {options.map((vehicle) => (
-                      <option key={vehicle.plate} value={vehicle.plate}>{vehicle.plate} · {driverOf(vehicle.plate, vehicle.driver)} · {kindText(vehicle)} · {placeText(vehicle.plate)} · {tripsText(load.get(vehicle.plate) ?? 0)}</option>
-                    ))}
-                  </select>
+                  <div className="flex">
+                    <VehiclePicker
+                      label={`سيارة رحلة ${names(row.appointments)}`}
+                      options={options.map((vehicle) => ({ vehicle, why: null }))}
+                      value={options.some((vehicle) => vehicle.plate === row.plate) ? row.plate : ""}
+                      disabled={!row.include}
+                      invalid={row.include && (used.get(row.plate) ?? 0) > 1}
+                      onChange={(plate) => update(index, { plate })}
+                      placeholder="اختر سيارة"
+                      driverOf={(vehicle) => driverOf(vehicle.plate, vehicle.driver)}
+                      details={(vehicle) => `${placeText(vehicle.plate)} · ${tripsText(load.get(vehicle.plate) ?? 0)}`}
+                      roleOf={roleOf}
+                    />
+                  </div>
                 </li>
               );
             })}
@@ -1122,13 +1133,20 @@ function GroupEditor({ initial, pending, hospitals, load, choicesFor, suggestFor
         </section>
 
         <section>
-          <label className="mb-1.5 block text-sm font-semibold text-ink" htmlFor="group-vehicle">السيارة</label>
-          <select id="group-vehicle" value={vehicle?.plate ?? ""} disabled={!members.length} onChange={(event) => setPlate(event.target.value)} className={cx(inputClass, "h-10")}>
-            {!vehicle && <option value="">{members.length ? "لا توجد سيارة تناسب هذه الرحلة الآن" : "—"}</option>}
-            {choices.map(({ vehicle: item, why }) => why
-              ? <option key={item.plate} value={item.plate} disabled>{item.plate} · {kindText(item)} · {why}</option>
-              : <option key={item.plate} value={item.plate}>{item.plate} · {driverOf(item.plate, item.driver)} · {kindText(item)} · {placeText(item.plate)} · {tripsText(load.get(item.plate) ?? 0)}</option>)}
-          </select>
+          <p className="mb-1.5 block text-sm font-semibold text-ink">السيارة</p>
+          <div className="flex">
+            <VehiclePicker
+              label="سيارة الرحلة المجمّعة"
+              options={choices}
+              value={vehicle?.plate ?? ""}
+              disabled={!members.length}
+              onChange={setPlate}
+              placeholder={members.length ? "لا توجد سيارة تناسب هذه الرحلة الآن" : "—"}
+              driverOf={(item) => driverOf(item.plate, item.driver)}
+              details={(item) => `${placeText(item.plate)} · ${tripsText(load.get(item.plate) ?? 0)}`}
+              roleOf={roleOf}
+            />
+          </div>
           {tooMany && <p className="mt-1.5 text-xs text-red-700">أكثر من 3 أشخاص (مع المرافقين والـ Nurse) يحتاجون باصًا متاحًا، أو أزل بعض الضيوف</p>}
         </section>
 
