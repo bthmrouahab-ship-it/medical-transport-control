@@ -17,6 +17,7 @@ import {
   MapPin,
   MessageCircle,
   Navigation,
+  UsersRound,
   Phone,
   Plus,
   Radio,
@@ -54,6 +55,8 @@ import {
   requestPersons,
   routeLabel,
   seatsFor,
+  groupSeats,
+  mergeVehicle,
   suggestJoinDispatched,
   vehicleLoad,
   vehicleRestriction,
@@ -67,7 +70,7 @@ import {
   type VehicleRules,
 } from "@shared/transport";
 import type { Hospital } from "@shared/hospitals";
-import { LATE_MINUTES, arrivalsOn, minutesSince, neededAt, suggestReturnRedirects, tripEndpoints, tripPhase, vehicleAvailability, vehicleLocationState, type TripPhase } from "@shared/trips";
+import { LATE_MINUTES, arrivalsOn, minutesSince, neededAt, returningText, suggestReturnPickups, suggestReturnRedirects, tripEndpoints, tripPhase, vehicleAvailability, vehicleLocationState, type TripPhase } from "@shared/trips";
 import {
   Badge,
   DateChooser,
@@ -271,7 +274,6 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
     if (direction === "عودة" || requestIds.some((id) => transferIds.has(id))) return requestIds.some((id) => redirectFor.get(id)?.vehicle.plate === vehicle.plate) ? 0 : 1;
     return isOutside(vehicle.plate) ? 1 : 0;
   };
-  const toPickupTrips = active.filter((trip) => phases.get(trip.request.id)!.kind === "toPickup");
 
   // النقل بين موعدين يبدأ من مستشفى، فلا يُجمع مع رحلات تبدأ من المجمع
   const groupable = pending.filter((trip) => !isTransfer(trip.request));
@@ -279,7 +281,18 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
   // حتى 14 ضيفًا إن كان باص متاح يناسبهم (رحلات غير طبية مع باصها، ومستشفى الثمامة وقت الذروة مع باص المجمع)
   const groups = buildTripGroups(groupable.map((trip) => ({ appointment: trip.appointment, direction: trip.request.direction, at: trip.at, persons: trip.persons })), hospitals, seatsFor(dispatchable, rules));
   const groupedIds = new Set(groups.flatMap((group) => group.appointmentIds));
-  const joins = suggestJoinDispatched(groupable.filter((trip) => !groupedIds.has(trip.appointment.id)), toPickupTrips.filter((trip) => onDate(trip) && !isTransfer(trip.request)), hospitals, vehicles, rules);
+  // ضم ضيف إلى سيارة في رحلة: لم تستلم ضيوفها بعد، أو استلمت ضيف الذهاب من المجمع قبل 5 دقائق أو أقل (joinWindow)
+  const joins = suggestJoinDispatched(groupable.filter((trip) => !groupedIds.has(trip.appointment.id)), active.filter((trip) => onDate(trip) && !isTransfer(trip.request)), hospitals, vehicles, rules);
+  // سيارة عائدة إلى المجمع فيها مقاعد فارغة، وطلب عودة قريب منها (GPS المباشر)
+  const joinedIds = new Set(joins.map((join) => join.requestId));
+  const returnPickups = suggestReturnPickups(
+    pending.filter((trip) => !groupedIds.has(trip.appointment.id) && !joinedIds.has(trip.request.id)),
+    active,
+    vehicles,
+    new Map(Array.from(liveGps, ([plate, location]) => [plate, { lat: location.lat, lng: location.lng }])),
+    hospitals,
+    rules,
+  );
   const unrequested = findUnrequestedMatches(appointments.filter(isApproved), requests, hospitals, now).filter((match) => match.appointment.appointmentDate === date);
 
   // الرحلات الجارية مجمّعة حسب السيارة (groupId أو الطلب نفسه)
@@ -382,7 +395,7 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
   function joinTrip(requestId: string, plate: string, groupId?: string) {
     const vehicle = vehicles.find((item) => item.plate === plate);
     if (!vehicle) return;
-    const partners = toPickupTrips.filter((trip) => trip.request.vehiclePlate === plate && (groupId ? trip.request.groupId === groupId : !trip.request.groupId)).map((trip) => trip.request.id);
+    const partners = active.filter((trip) => trip.request.vehiclePlate === plate && (groupId ? trip.request.groupId === groupId : !trip.request.groupId)).map((trip) => trip.request.id);
     onDispatch([requestId], vehicle, partners);
   }
 
@@ -595,8 +608,8 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
             ) : <EmptyState icon={CheckCircle2} title="لا توجد طلبات بانتظار التوزيع" hint="تظهر هنا طلبات مشرفي المباني فور وصولها" />}
           </Panel>
 
-          {(groups.length > 0 || joins.length > 0) && (
-            <Panel tone="violet" icon={Sparkles} title="اقتراحات جمع الرحلات" count={groups.length + joins.length} description="ضيوف لنفس الوجهة أو وجهات متجاورة في نفس التوقيت">
+          {(groups.length > 0 || joins.length > 0 || returnPickups.length > 0) && (
+            <Panel tone="violet" icon={Sparkles} title="اقتراحات جمع الرحلات" count={groups.length + joins.length + returnPickups.length} description="ضيوف لنفس الوجهة أو وجهات متجاورة في نفس التوقيت، وسيارات فيها مقاعد فارغة قريبة منهم">
               <div className="grid gap-4 p-4 sm:p-5 lg:grid-cols-2">
                 {groups.map((group) => {
                   const members = pending.filter((trip) => group.appointmentIds.includes(trip.appointment.id));
@@ -620,11 +633,30 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
                 })}
                 {joins.map((join) => {
                   const trip = pending.find((item) => item.request.id === join.requestId)!;
+                  const left = join.openUntil ? Math.max(0, Math.ceil((Date.parse(join.openUntil) - now.getTime()) / 60000)) : null;
                   return (
                     <div key={join.requestId} className="flex flex-col rounded-xl bg-emerald-50/50 p-4 ring-1 ring-emerald-100">
                       <p className="text-xs font-medium text-emerald-800">{join.reason}</p>
+                      {left !== null && (
+                        <p className="mt-1 flex items-center gap-1 text-xs font-semibold text-amber-800">
+                          <Clock3 className="h-3.5 w-3.5" /> يمكن الضم حتى <span dir="ltr" className="tabular">{timeLabel(new Date(join.openUntil!))}</span>{left > 0 ? ` (${minutesText(left)})` : ""}
+                        </p>
+                      )}
                       <TripList trips={[trip]} hospitals={hospitals} />
                       <button onClick={() => joinTrip(join.requestId, join.plate, join.groupId)} className={cx(btn("success", "sm"), "mt-3 w-full")}><Link2 className="h-4 w-4" /> ضم إلى السيارة {join.plate}</button>
+                    </div>
+                  );
+                })}
+                {returnPickups.map((pickup) => {
+                  const trip = pending.find((item) => item.request.id === pickup.request.id)!;
+                  return (
+                    <div key={pickup.request.id} className="flex flex-col rounded-xl bg-cyan-50/60 p-4 ring-1 ring-cyan-100">
+                      <p className="flex flex-wrap items-center gap-1.5 text-xs font-medium text-cyan-900">
+                        <Navigation className="h-3.5 w-3.5" /> السيارة <KindIcon vehicle={pickup.vehicle} size="sm" /> <span dir="ltr" className="font-semibold">{pickup.vehicle.plate}</span> · {driverOf(pickup.vehicle.plate)}
+                      </p>
+                      <p className="mt-1 text-xs text-cyan-900">{returningText(pickup)} · على بعد {pickup.distanceKm} كم من {pickup.pickup} (GPS)</p>
+                      <TripList trips={[trip]} hospitals={hospitals} />
+                      <button onClick={() => joinTrip(pickup.request.id, pickup.vehicle.plate, pickup.groupId)} className={cx(btn("success", "sm"), "mt-3 w-full")}><Link2 className="h-4 w-4" /> ضم إلى السيارة العائدة {pickup.vehicle.plate}</button>
                     </div>
                   );
                 })}
@@ -740,6 +772,20 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
                         <span className="truncate"><span dir="ltr" className="font-semibold">{vehicle.plate}</span> · {live?.driver ?? vehicle.driver}</span>
                       </p>
                       <p className="text-xs leading-5 text-slate-500"><KindLabel vehicle={vehicle} extra={roleOf(vehicle)} /> · {state.text}{live ? " · GPS مباشر" : ""}</p>
+                      {vehicle.kind === "سيدان" && (
+                        <button
+                          type="button"
+                          aria-pressed={Boolean(vehicle.fullCapacity)}
+                          aria-label={vehicle.fullCapacity ? `إعادة السيارة ${vehicle.plate} إلى 3 أشخاص` : `تشغيل السيارة ${vehicle.plate} بطاقتها الكاملة (4 أشخاص)`}
+                          title={vehicle.fullCapacity ? "إعادتها إلى 3 أشخاص" : "السيدان تحمل 4 أشخاص، ويُفضل 3"}
+                          onClick={() => onUpdate(vehicles.map((item) => (item.plate === vehicle.plate ? mergeVehicle(item, { fullCapacity: !item.fullCapacity }) : item)))}
+                          className={cx("mt-1 inline-flex h-7 max-w-full items-center gap-1 rounded-lg px-2 text-[11px] font-medium ring-1 ring-inset transition",
+                            vehicle.fullCapacity ? "bg-blue-50 text-blue-800 ring-blue-200 hover:bg-blue-100" : "bg-white text-slate-500 ring-slate-300 hover:bg-slate-50 hover:text-ink")}
+                        >
+                          <UsersRound className="h-3.5 w-3.5 shrink-0" />
+                          <span className="truncate">{vehicle.fullCapacity ? "بطاقتها الكاملة: 4 أشخاص" : "3 أشخاص · تشغيل بـ 4"}</span>
+                        </button>
+                      )}
                       {vehicle.kind === "باص" && (
                         <select
                           aria-label={`تخصيص الباص ${vehicle.plate}`}
@@ -826,8 +872,8 @@ function ActiveTrip({ trips, phase, late = false, vehicle, driver, hospitals, on
   const plate = trips[0].request.vehiclePlate ?? "";
   const message = buildDriverMessage(trips, { plate, driver }, hospitals);
   const phone = vehicle?.phone;
-  // المقاعد الباقية: الباص 14، والسيارة 3، ومع احتياجات خاصة 2
-  const seatsLeft = vehicleSeats(vehicle ?? { kind: "سيدان" }, trips.map((trip) => trip.appointment)) - sumPersons(trips);
+  // المقاعد الباقية: الباص 14، وسيارة الاحتياجات الخاصة 4، والسيدان 3 (أو 4 بطاقتها الكاملة)
+  const seatsLeft = vehicleSeats(vehicle ?? { kind: "سيدان" }) - sumPersons(trips);
   const step = phase.kind === "toPickup" ? (phase.atPickup ? 1 : 0) : phase.kind === "toDestination" ? 2 : 3;
   const destinations = Array.from(new Set(trips.map((trip) => tripEndpoints(trip.appointment, trip.request.direction, hospitals, trip.from).destination)));
   return (
@@ -1065,10 +1111,14 @@ function GroupEditor({ initial, pending, hospitals, load, choicesFor, suggestFor
   const timeOf = (trip: Trip) => trip.at ?? appointmentDateTime(trip.appointment);
   /** هل يناسب الضيف الرحلة: قرب الوجهة والتوقيت مع كل ضيوفها (كما في اقتراحات الجمع) */
   const fit = (trip: Trip) => {
+    // لا يُجمع ضيفا احتياجات خاصة في سيارة واحدة
+    if (trip.appointment.kind === "احتياجات خاصة" && members.some((member) => member.appointment.kind === "احتياجات خاصة")) {
+      return { ok: false, blocked: true, text: "ضيف احتياجات خاصة آخر" };
+    }
     const details = members.map((member) => calculateTripGroupingScore(member.appointment, trip.appointment, hospitals, [timeOf(member), timeOf(trip)]));
     const far = details.some((item) => !item.sameDestination && !item.nearbyDestination && !item.sameDirection);
     const gap = Math.max(0, ...details.map((item) => item.timeGapMinutes));
-    return { ok: details.every((item) => canShareVehicle(item, 45)), text: far ? "وجهة بعيدة" : `فارق ${gap} د` };
+    return { ok: details.every((item) => canShareVehicle(item, 45)), blocked: false, text: far ? "وجهة بعيدة" : `فارق ${gap} د` };
   };
   const candidates = pending
     .filter((trip) => !ids.includes(trip.request.id) && !isTransfer(trip.request) && (!direction || trip.request.direction === direction))
@@ -1080,8 +1130,10 @@ function GroupEditor({ initial, pending, hospitals, load, choicesFor, suggestFor
   const vehicle = ready.find((item) => item.plate === plate) ?? suggested;
   // المقاعد بالأشخاص: الضيف ومرافقه والـ Nurse
   const persons = sumPersons(members);
-  const seats = vehicle ? vehicleSeats(vehicle, members.map((trip) => trip.appointment)) : null;
-  const tooMany = members.length > 1 && persons > 3 && !ready.some((item) => item.kind === "باص");
+  const seats = vehicle ? vehicleSeats(vehicle) : null;
+  // لا توجد سيارة تتسع للرحلة: السيدان 3 (أو 4 بطاقتها الكاملة)، وسيارة الاحتياجات الخاصة ضيف احتياجات خاصة و3 عاديون
+  const special = members.some((trip) => trip.appointment.kind === "احتياجات خاصة");
+  const tooMany = members.length > 1 && !ready.length && persons > groupSeats(members.map((trip) => trip.appointment));
   const row = (trip: Trip) => (
     <span className="min-w-0 flex-1">
       <span className="flex flex-wrap items-center gap-1.5">
@@ -1147,7 +1199,13 @@ function GroupEditor({ initial, pending, hospitals, load, choicesFor, suggestFor
               roleOf={roleOf}
             />
           </div>
-          {tooMany && <p className="mt-1.5 text-xs text-red-700">أكثر من 3 أشخاص (مع المرافقين والـ Nurse) يحتاجون باصًا متاحًا، أو أزل بعض الضيوف</p>}
+          {tooMany && (
+            <p className="mt-1.5 text-xs text-red-700">
+              {special
+                ? "سيارة الاحتياجات الخاصة تتسع لضيف احتياجات خاصة و3 أشخاص عاديين (مع المرافقين والـ Nurse)؛ أزل بعض الضيوف"
+                : "أكثر من 3 أشخاص (مع المرافقين والـ Nurse) يحتاجون سيدان بطاقتها الكاملة (4) أو باصًا متاحًا، أو أزل بعض الضيوف"}
+            </p>
+          )}
         </section>
 
         <section>
@@ -1158,7 +1216,7 @@ function GroupEditor({ initial, pending, hospitals, load, choicesFor, suggestFor
                 <li key={trip.request.id} className="flex items-center gap-2 p-3">
                   {row(trip)}
                   <Badge tone={match.ok ? "violet" : "neutral"}>{match.ok ? "مناسب للجمع" : match.text}</Badge>
-                  <button type="button" onClick={() => setIds((current) => [...current, trip.request.id])} aria-label={`إضافة ${trip.appointment.patientName} إلى الرحلة`} className={btn("secondary", "sm")}>
+                  <button type="button" disabled={match.blocked} title={match.blocked ? "لا يُجمع ضيفا احتياجات خاصة في سيارة واحدة" : undefined} onClick={() => setIds((current) => [...current, trip.request.id])} aria-label={`إضافة ${trip.appointment.patientName} إلى الرحلة`} className={btn("secondary", "sm")}>
                     <Plus className="h-4 w-4" /> إضافة
                   </button>
                 </li>

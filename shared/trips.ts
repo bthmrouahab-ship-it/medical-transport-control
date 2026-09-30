@@ -1,5 +1,20 @@
 import { DEFAULT_HOSPITALS, ORIGIN, distanceKm, type Hospital } from "./hospitals";
-import { appointmentDateTime, appointmentHospital, isRushHour, localDateString, type ArrivalSource, type ClinicAppointment, type Vehicle, type VehicleRequest } from "./transport";
+import {
+  appointmentDateTime,
+  appointmentHospital,
+  isRushHour,
+  isTransfer,
+  localDateString,
+  personsText,
+  tripPersons,
+  vehicleRestriction,
+  vehicleSeats,
+  type ArrivalSource,
+  type ClinicAppointment,
+  type Vehicle,
+  type VehicleRequest,
+  type VehicleRules,
+} from "./transport";
 
 /**
  * الرحلة بعد استلام المريض: تقدير مدة الطريق، ومعرفة متى تصل السيارة وتعود متاحة.
@@ -324,3 +339,102 @@ export function suggestReturnRedirects(
   }
   return result.sort((a, b) => a.distanceKm - b.distanceKm);
 }
+
+// ————— ضم ضيف عودة إلى سيارة عائدة —————
+
+/** طلب عودة على هذه المسافة (كم) من سيارة عائدة إلى المجمع (GPS) يُقترح لضم ضيفه إليها. */
+export const RETURN_PICKUP_KM = 3;
+
+export type ReturnPickup = {
+  request: VehicleRequest;
+  appointment: ClinicAppointment;
+  vehicle: Vehicle;
+  /** بُعد السيارة الآن (GPS) عن مستشفى الضيف */
+  distanceKm: number;
+  /** مستشفى الضيف */
+  pickup: string;
+  /** الأشخاص في السيارة الآن، والمقاعد الفارغة قبل الضم */
+  onBoard: number;
+  seatsLeft: number;
+  /** رحلة السيارة الحالية (للضم إليها) */
+  groupId?: string;
+  memberIds: string[];
+};
+
+type RiderTrip = { request: VehicleRequest; appointment: ClinicAppointment; persons?: number };
+
+/**
+ * سيارة في طريق العودة إلى المجمع (استلمت ضيوف العودة ولم تصل) وفيها مقاعد فارغة، وموقعها مباشر (GPS):
+ * تُقترح لضيف ينتظر العودة من مستشفى على بعد RETURN_PICKUP_KM كم منها أو أقل، إن كانت تناسبه
+ * (المقاعد مع المرافقين والـ Nurse، وسيارة الاحتياجات الخاصة لضيف احتياجات خاصة واحد). لكل ضيف أقرب سيارة،
+ * وتُملأ مقاعد كل سيارة بالأقرب أولًا.
+ */
+export function suggestReturnPickups(
+  pendingReturns: RiderTrip[],
+  /** الطلبات الجارية (تُختار منها رحلات العودة التي استلمت ضيوفها) */
+  active: RiderTrip[],
+  vehicles: Vehicle[],
+  /** موقع كل سيارة الآن (GPS المباشر فقط) */
+  positions: Map<string, Point>,
+  hospitals: Hospital[] = DEFAULT_HOSPITALS,
+  rules: VehicleRules = {},
+): ReturnPickup[] {
+  const personsOf = (trip: RiderTrip) => trip.persons ?? tripPersons(trip.appointment, trip.request);
+  const byTrip = new Map<string, RiderTrip[]>();
+  for (const trip of active) {
+    if (!trip.request.vehiclePlate) continue;
+    const key = `${trip.request.vehiclePlate}|${trip.request.groupId ?? trip.request.id}`;
+    byTrip.set(key, [...(byTrip.get(key) ?? []), trip]);
+  }
+  const cars = Array.from(byTrip.values()).flatMap((members) => {
+    // كل ركاب السيارة عائدون إلى المجمع بعد استلامهم ولم يصلوا
+    if (!members.every((member) => member.request.direction === "عودة" && member.request.status === "تم استلام المريض" && !member.request.arrivedAt)) return [];
+    const vehicle = vehicles.find((item) => item.plate === members[0].request.vehiclePlate);
+    const position = vehicle && positions.get(vehicle.plate);
+    if (!vehicle || !position) return [];
+    return [{ vehicle, position, members, onBoard: members.reduce((sum, member) => sum + personsOf(member), 0) }];
+  });
+  const pairs: { car: (typeof cars)[number]; trip: RiderTrip; distance: number; pickup: string }[] = [];
+  for (const trip of pendingReturns) {
+    if (trip.request.status !== "بانتظار التوزيع" || trip.request.direction !== "عودة" || isTransfer(trip.request)) continue;
+    const hospital = appointmentHospital(trip.appointment, hospitals);
+    if (!hospital) continue;
+    for (const car of cars) {
+      const distance = distanceKm(car.position, hospital);
+      if (distance > RETURN_PICKUP_KM) continue;
+      const riders = [...car.members.map((member) => member.appointment), trip.appointment];
+      if (vehicleRestriction({ ...car.vehicle, available: true }, { appointments: riders, persons: car.onBoard + personsOf(trip) }, { ...rules, hospitals })) continue;
+      pairs.push({ car, trip, distance, pickup: hospital.name });
+    }
+  }
+  pairs.sort((a, b) => a.distance - b.distance);
+  const taken = new Map<string, RiderTrip[]>();
+  const done = new Set<string>();
+  const result: ReturnPickup[] = [];
+  for (const { car, trip, distance, pickup } of pairs) {
+    if (done.has(trip.request.id)) continue;
+    // المقاعد بعد من اقتُرح لهذه السيارة قبله
+    const added = taken.get(car.vehicle.plate) ?? [];
+    const riders = [...car.members, ...added, trip].map((item) => item.appointment);
+    const persons = car.onBoard + [...added, trip].reduce((sum, item) => sum + personsOf(item), 0);
+    if (vehicleRestriction({ ...car.vehicle, available: true }, { appointments: riders, persons }, { ...rules, hospitals })) continue;
+    taken.set(car.vehicle.plate, [...added, trip]);
+    done.add(trip.request.id);
+    result.push({
+      request: trip.request,
+      appointment: trip.appointment,
+      vehicle: car.vehicle,
+      distanceKm: Math.round(distance * 10) / 10,
+      pickup,
+      onBoard: car.onBoard,
+      seatsLeft: Math.max(0, vehicleSeats(car.vehicle) - car.onBoard),
+      groupId: car.members[0].request.groupId,
+      memberIds: car.members.map((member) => member.request.id),
+    });
+  }
+  return result;
+}
+
+/** وصف السيارة العائدة في الاقتراح: «عائدة إلى المجمع وفيها شخصان · مقعدان فارغان» */
+export const returningText = (pickup: Pick<ReturnPickup, "onBoard" | "seatsLeft">) =>
+  `عائدة إلى المجمع وفيها ${personsText(pickup.onBoard)} · ${pickup.seatsLeft === 1 ? "مقعد فارغ" : pickup.seatsLeft === 2 ? "مقعدان فارغان" : `${pickup.seatsLeft} مقاعد فارغة`}`;

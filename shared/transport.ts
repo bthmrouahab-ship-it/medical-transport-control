@@ -79,6 +79,8 @@ export type Vehicle = {
   available: boolean;
   /** للباص فقط: تخصيصه اليومي من مشرف السيارات (BusRole)، وبلا تخصيص باص عادي */
   busRole?: BusRole;
+  /** للسيدان فقط: يشغّلها مشرف السيارات بطاقتها الكاملة (4 أشخاص بدل 3) */
+  fullCapacity?: boolean;
 };
 
 /**
@@ -613,8 +615,15 @@ export function isRushHour(at: Date) {
 
 // ————— الباصات —————
 
-/** مقاعد الباص (السيارة 3 ضيوف، وسيارة الاحتياجات الخاصة ضيفان: groupCapacity) */
+/** مقاعد الباص */
 export const BUS_SEATS = 14;
+/** السيدان تحمل 4 أشخاص، ويُفضل 3 إلا إذا شغّلها مشرف السيارات بطاقتها الكاملة (fullCapacity) */
+export const SEDAN_SEATS = 4;
+export const SEDAN_PREFERRED_SEATS = 3;
+/** سيارة الاحتياجات الخاصة: ضيف احتياجات خاصة واحد وثلاثة أشخاص عاديين */
+export const ACCESSIBLE_SEATS = 4;
+/** لا يُجمع ضيفا احتياجات خاصة في سيارة واحدة */
+export const MAX_SPECIAL_PER_VEHICLE = 1;
 /** الباصات غير متاحة من 6 إلى 9 صباحًا */
 export const BUS_OFF_HOURS = { from: 6, to: 9 };
 /** مستشفى الثمامة (مركز الثمامة الصحي): الوجهة الوحيدة لباص المجمع، وقت الذروة فقط */
@@ -630,11 +639,19 @@ export function busesOff(at: Date) {
   return hour >= BUS_OFF_HOURS.from && hour < BUS_OFF_HOURS.to;
 }
 
-/** عدد الأشخاص الذين تتسع لهم السيارة في رحلة واحدة (مع المرافقين والـ Nurse): الباص 14، والسيارة 3، ومع ضيف احتياجات خاصة 2. */
-export function vehicleSeats(vehicle: Pick<Vehicle, "kind">, appointments: Pick<ClinicAppointment, "kind">[] = []) {
-  if (appointments.some((appointment) => appointment.kind === "احتياجات خاصة")) return groupCapacity("احتياجات خاصة");
-  return vehicle.kind === "باص" ? BUS_SEATS : groupCapacity("عادي");
+/**
+ * عدد الأشخاص الذين تتسع لهم السيارة في رحلة واحدة (مع المرافقين والـ Nurse): الباص 14، وسيارة الاحتياجات
+ * الخاصة 4 (ضيف احتياجات خاصة واحد و3 عاديون)، والسيدان 3 أو 4 إن شغّلها مشرف السيارات بطاقتها الكاملة.
+ */
+export function vehicleSeats(vehicle: Pick<Vehicle, "kind" | "fullCapacity">) {
+  if (vehicle.kind === "باص") return BUS_SEATS;
+  if (vehicle.kind === "احتياجات خاصة") return ACCESSIBLE_SEATS;
+  return vehicle.fullCapacity ? SEDAN_SEATS : SEDAN_PREFERRED_SEATS;
 }
+
+/** عدد ضيوف الاحتياجات الخاصة في رحلة */
+export const specialCount = (appointments: Pick<ClinicAppointment, "kind">[]) =>
+  appointments.filter((appointment) => appointment.kind === "احتياجات خاصة").length;
 
 /** رحلة بين المجمع ومستشفى الثمامة (ذهابًا أو عودة): يمكن أن يأخذها باص المجمع وقت الذروة. */
 export const isShuttleTrip = (appointment: ClinicAppointment, hospitals: Hospital[] = DEFAULT_HOSPITALS) =>
@@ -666,8 +683,14 @@ export function vehicleRestriction(vehicle: Vehicle, trip: TripLoad, rules: Vehi
   const role = busRoleOf(vehicle);
   if (role === "clinic") return "في خدمة العيادة";
   if (needsAccessibleVehicle(trip.appointments) && vehicle.kind !== "احتياجات خاصة") return "تحتاج سيارة احتياجات خاصة";
-  const seats = vehicleSeats(vehicle, trip.appointments);
-  if (trip.appointments.length > 1 && loadPersons(trip) > seats) return `تتسع ${seats === 2 ? "لشخصين" : `لـ ${personsText(seats)}`} فقط`;
+  if (specialCount(trip.appointments) > MAX_SPECIAL_PER_VEHICLE) return "ضيف احتياجات خاصة واحد فقط في السيارة";
+  const seats = vehicleSeats(vehicle);
+  const persons = loadPersons(trip);
+  if (trip.appointments.length > 1 && persons > seats) {
+    // السيدان بطاقتها المفضلة (3) تستطيع أن تحمل 4 إن شغّلها مشرف السيارات بطاقتها الكاملة
+    const full = vehicle.kind === "سيدان" && !vehicle.fullCapacity && persons <= SEDAN_SEATS;
+    return `تتسع لـ ${personsText(seats)} فقط${full ? " (أو 4 بطاقتها الكاملة)" : ""}`;
+  }
   if (vehicle.kind === "باص" && busesOff(now)) return "الباصات غير متاحة من 6 إلى 9 صباحًا";
   if (role === "shuttle" && !(isRushHour(now) && !trip.transfer && trip.appointments.every((appointment) => isShuttleTrip(appointment, rules.hospitals)))) {
     return "باص المجمع: مستشفى الثمامة وقت الذروة فقط";
@@ -726,16 +749,20 @@ export function assignVehicleForTrips(
 }
 
 /**
- * أقصى عدد أشخاص في رحلة مجمّعة فيها هذا الموعد: أكبر سيارة تناسبه من السيارات المعطاة (الباص 14 إن كان يناسبه الآن)،
- * وإلا 3 (و2 للاحتياجات الخاصة). لجمع الرحلات (buildTripGroups).
+ * أقصى عدد أشخاص في رحلة مجمّعة فيها هذا الموعد: أكبر سيارة تناسبه من السيارات المعطاة (الباص 14 إن كان يناسبه الآن،
+ * والسيدان 4 إن شُغّلت بطاقتها الكاملة)، وإلا groupCapacity. سيارة الاحتياجات الخاصة لضيف الاحتياجات الخاصة فقط
+ * (4 مع ثلاثة عاديين)، ولا تُحسب لجمع ضيوف عاديين حتى تبقى لمن يحتاجها. لجمع الرحلات (buildTripGroups).
  */
 export function seatsFor(vehicles: Vehicle[], rules: VehicleRules = {}) {
-  return (appointment: ClinicAppointment) => Math.max(
-    groupCapacity(appointment.kind),
-    ...vehicles
-      .filter((vehicle) => !vehicleRestriction(vehicle, { appointments: [appointment] }, rules))
-      .map((vehicle) => vehicleSeats(vehicle, [appointment])),
-  );
+  return (appointment: ClinicAppointment) => {
+    const special = appointment.kind === "احتياجات خاصة";
+    return Math.max(
+      groupCapacity(appointment.kind),
+      ...vehicles
+        .filter((vehicle) => (vehicle.kind === "احتياجات خاصة") === special && !vehicleRestriction(vehicle, { appointments: [appointment] }, rules))
+        .map((vehicle) => vehicleSeats(vehicle)),
+    );
+  };
 }
 
 /** رحلة في خطة التوزيع: الطلبات ومواعيدها بنفس الترتيب، وعدد الأشخاص فيها (مع المرافقين والـ Nurse) */
@@ -813,8 +840,8 @@ export function planDispatch(
       plan.assignments.push({ ...next, vehicle });
       continue;
     }
-    // رحلة مجمّعة للباص وأُخذ الباص: تُقسم على السيارات بالترتيب الزمني، كل سيارة حتى 3 أشخاص
-    const size = Math.min(...next.appointments.map((appointment) => groupCapacity(appointment.kind)));
+    // رحلة مجمّعة للباص وأُخذ الباص: تُقسم على السيارات بالترتيب الزمني، كل سيارة حتى 3 أشخاص (4 مع ضيف احتياجات خاصة)
+    const size = groupSeats(next.appointments);
     if (next.appointments.length > 1 && next.persons > size) {
       const order = next.appointments.map((appointment, index) => ({ appointment, id: next.requestIds[index] }))
         .sort((a, b) => a.appointment.appointmentAt.localeCompare(b.appointment.appointmentAt));
@@ -944,10 +971,11 @@ export function validateVehicle(
   return { vehicle: { plate, driver, phone, kind: input.kind } };
 }
 
-/** تحديث بيانات سيارة (من لوحة المدير أو ملف Excel): تخصيص الباص يبقى للباص فقط. */
+/** تحديث بيانات سيارة (من لوحة المدير أو ملف Excel): تخصيص الباص للباص فقط، والطاقة الكاملة للسيدان فقط. */
 export function mergeVehicle(vehicle: Vehicle, changes: Partial<Vehicle>): Vehicle {
   const next = { ...vehicle, ...changes };
   if (next.kind !== "باص") delete next.busRole;
+  if (next.kind !== "سيدان" || !next.fullCapacity) delete next.fullCapacity;
   return next;
 }
 
@@ -964,10 +992,17 @@ export const DEFAULT_VEHICLES: Vehicle[] = FLEET_SEED;
 
 // ————— جمع الرحلات —————
 
-/** أقصى عدد أشخاص في رحلة مجمّعة بسيارة عادية (مع المرافقين والـ Nurse): 3، ومع احتياجات خاصة 2 (الباص 14: vehicleSeats). */
+/**
+ * أقصى عدد أشخاص في رحلة مجمّعة (مع المرافقين والـ Nurse) بلا باص ولا سيدان بطاقتها الكاملة: 3 في السيدان،
+ * و4 مع ضيف احتياجات خاصة في سيارته (هو و3 عاديون). الباص 14 والسيدان بطاقتها الكاملة 4: vehicleSeats.
+ */
 export function groupCapacity(kind: AppointmentKind) {
-  return kind === "احتياجات خاصة" ? 2 : 3;
+  return kind === "احتياجات خاصة" ? ACCESSIBLE_SEATS : SEDAN_PREFERRED_SEATS;
 }
+
+/** مقاعد رحلة مجمّعة بلا باص: 4 إن كان فيها ضيف احتياجات خاصة (في سيارته)، وإلا 3. */
+export const groupSeats = (appointments: Pick<ClinicAppointment, "kind">[]) =>
+  (needsAccessibleVehicle(appointments) ? ACCESSIBLE_SEATS : SEDAN_PREFERRED_SEATS);
 
 export type TripGroup = {
   appointmentIds: string[];
@@ -1023,6 +1058,13 @@ export function buildTripGroups(
   const cap = (appointment: ClinicAppointment) => seatsOf.get(appointment.id) ?? groupCapacity(appointment.kind);
   const people = (appointment: ClinicAppointment) => personsOf.get(appointment.id) ?? 1;
   const total = (members: ClinicAppointment[]) => members.reduce((sum, member) => sum + people(member), 0);
+  // مقاعد المجموعة: مع ضيف احتياجات خاصة سيارته (4)، وإلا أصغر سيارة تناسب كل الأعضاء؛ ولا ضيفا احتياجات خاصة معًا
+  const capacityOf = (members: ClinicAppointment[]) => {
+    const specials = members.filter((member) => member.kind === "احتياجات خاصة");
+    return Math.min(...(specials.length ? specials : members).map(cap));
+  };
+  const fitsTogether = (members: ClinicAppointment[]) =>
+    specialCount(members) <= MAX_SPECIAL_PER_VEHICLE && total(members) <= capacityOf(members);
   const byRequest = items.some((item) => item.at);
   for (const direction of ["ذهاب", "عودة"] as const) {
     const list = items.filter((item) => item.direction === direction).map((item) => item.appointment);
@@ -1033,8 +1075,7 @@ export function buildTripGroups(
       for (let j = i + 1; j < list.length; j += 1) {
         const details = calculateTripGroupingScore(list[i], list[j], hospitals, [timeOf.get(list[i].id)!, timeOf.get(list[j].id)!]);
         score.set(key(list[i].id, list[j].id), details);
-        const fits = people(list[i]) + people(list[j]) <= Math.min(cap(list[i]), cap(list[j]));
-        if (fits && canShareVehicle(details, 45)) pairs.push({ a: list[i], b: list[j], details });
+        if (fitsTogether([list[i], list[j]]) && canShareVehicle(details, 45)) pairs.push({ a: list[i], b: list[j], details });
       }
     }
     pairs.sort((x, y) => y.details.score - x.details.score || x.details.timeGapMinutes - y.details.timeGapMinutes);
@@ -1046,13 +1087,13 @@ export function buildTripGroups(
     for (const pair of pairs) {
       if (used.has(pair.a.id) || used.has(pair.b.id)) continue;
       const members = [pair.a, pair.b];
-      const capacity = () => Math.min(...members.map(cap));
       // توسيع المجموعة بكل موعد متوافق مع كل الأعضاء ما دامت المقاعد تكفي أشخاصه (مع المرافق والـ Nurse):
       // أولًا من لا يقلل المقاعد (ركاب الباص)، ثم الباقي
       for (const keepSeats of [true, false]) {
         for (const candidate of list) {
           if (used.has(candidate.id) || members.includes(candidate)) continue;
-          if (total(members) + people(candidate) > Math.min(capacity(), cap(candidate)) || (keepSeats && cap(candidate) < capacity())) continue;
+          const next = [...members, candidate];
+          if (!fitsTogether(next) || (keepSeats && capacityOf(next) < capacityOf(members))) continue;
           if (members.every((member) => compatible(member, candidate))) members.push(candidate);
         }
       }
@@ -1076,12 +1117,35 @@ export function buildTripGroups(
   return groups.sort((a, b) => b.appointmentIds.length - a.appointmentIds.length || b.score - a.score);
 }
 
-export type JoinSuggestion = { requestId: string; appointmentId: string; plate: string; groupId?: string; reason: string };
+export type JoinSuggestion = {
+  requestId: string;
+  appointmentId: string;
+  plate: string;
+  groupId?: string;
+  reason: string;
+  /** السيارة استلمت ضيفها من المجمع: يمكن الضم حتى هذا الوقت (ISO) */
+  openUntil?: string;
+};
+
+/** بعد استلام ضيف الذهاب تبقى السيارة في المجمع هذه الدقائق، يمكن فيها ضم ضيف آخر في نفس الاتجاه إليها. */
+export const JOIN_AFTER_PICKUP_MINUTES = 5;
 
 /**
- * طلب جديد يمكن ضمّه لسيارة أُرسلت ولم تستلم مرضاها بعد، متجهة لنفس الوجهة أو وجهة مجاورة
- * وفي نفس التوقيت (at: وقت الحاجة إلى السيارة من وقت الطلب، وإلا وقت الموعد)، بشرط وجود مقعد فارغ
- * (الباص 14) وأن تناسبه السيارة.
+ * هل يمكن ضم ضيف إلى رحلة هذا الطلب الآن: السيارة أُرسلت أو وصلت إلى نقطة الاستلام، أو (ذهابًا من المجمع)
+ * استلمت ضيفها قبل JOIN_AFTER_PICKUP_MINUTES دقائق أو أقل. يعيد وقت انتهاء الضم بعد الاستلام، أو true، أو false.
+ */
+export function joinWindow(request: Pick<VehicleRequest, "status" | "direction" | "pickedUpAt" | "arrivedAt" | "vehiclePlate" | "fromAppointmentId">, now = new Date()): string | boolean {
+  if (!request.vehiclePlate) return false;
+  if (request.status === "تم إرسال السيارة" || request.status === "وصلت السيارة") return true;
+  if (request.status !== "تم استلام المريض" || request.direction !== "ذهاب" || request.fromAppointmentId || request.arrivedAt || !request.pickedUpAt) return false;
+  const until = Date.parse(request.pickedUpAt) + JOIN_AFTER_PICKUP_MINUTES * 60000;
+  return Number.isFinite(until) && now.getTime() <= until ? new Date(until).toISOString() : false;
+}
+
+/**
+ * طلب جديد يمكن ضمّه لسيارة في رحلة: أُرسلت ولم تستلم ضيوفها بعد، أو استلمت ضيف الذهاب من المجمع قبل 5 دقائق
+ * أو أقل (joinWindow)، متجهة لنفس الوجهة أو وجهة مجاورة أو في نفس الاتجاه وفي نفس التوقيت (at: وقت الحاجة إلى
+ * السيارة من وقت الطلب، وإلا وقت الموعد)، بشرط وجود مقعد فارغ وأن تناسبه السيارة (vehicleRestriction).
  */
 export function suggestJoinDispatched(
   /** persons (اختياري): عدد الأشخاص مع كل ضيف (requestPersons)، وإلا من احتياجاته */
@@ -1094,15 +1158,23 @@ export function suggestJoinDispatched(
 ): JoinSuggestion[] {
   const out: JoinSuggestion[] = [];
   const timeOf = (item: { appointment: ClinicAppointment; at?: Date }) => item.at ?? appointmentDateTime(item.appointment);
+  const now = rules.now ?? new Date();
   const byTrip = new Map<string, (typeof dispatched)[number][]>();
   for (const item of dispatched) {
-    if (item.request.status !== "تم إرسال السيارة" || !item.request.vehiclePlate) continue;
+    if (!item.request.vehiclePlate) continue;
     const tripKey = item.request.groupId ?? item.request.id;
     byTrip.set(tripKey, [...(byTrip.get(tripKey) ?? []), item]);
   }
+  // الرحلة كلها يجب أن تقبل الضم: إن استلمت السيارة ضيفًا قبل أكثر من 5 دقائق فقد غادرت
+  const trips = Array.from(byTrip.values()).flatMap((members) => {
+    const windows = members.map((member) => joinWindow(member.request, now));
+    if (windows.some((window) => window === false)) return [];
+    const closes = windows.filter((window): window is string => typeof window === "string").sort()[0];
+    return [{ members, openUntil: closes }];
+  });
   for (const item of pending) {
     let best: { suggestion: JoinSuggestion; score: number } | null = null;
-    for (const members of Array.from(byTrip.values())) {
+    for (const { members, openUntil } of trips) {
       if (members[0].request.direction !== item.request.direction) continue;
       const vehicle = vehicles.find((candidate) => candidate.plate === members[0].request.vehiclePlate);
       const riders = [...members.map((member) => member.appointment), item.appointment];
@@ -1111,11 +1183,12 @@ export function suggestJoinDispatched(
       const persons = onBoard + personsOf(item);
       if (vehicle) {
         if (vehicleRestriction({ ...vehicle, available: true }, { appointments: riders, persons }, { ...rules, hospitals })) continue;
-      } else if (persons > Math.min(...riders.map((rider) => groupCapacity(rider.kind)))) continue;
+      } else if (specialCount(riders) > MAX_SPECIAL_PER_VEHICLE || persons > groupSeats(riders)) continue;
       const scores = members.map((member) => calculateTripGroupingScore(member.appointment, item.appointment, hospitals, [timeOf(member), timeOf(item)]));
       if (!scores.every((details) => canShareVehicle(details, 30))) continue;
       const worst = Math.min(...scores.map((details) => details.score));
       if (!best || worst > best.score) {
+        const riding = `${members.length} ${members.length === 1 ? "ضيف" : "ضيوف"}${onBoard > members.length ? ` · ${personsText(onBoard)}` : ""}`;
         best = {
           score: worst,
           suggestion: {
@@ -1123,7 +1196,10 @@ export function suggestJoinDispatched(
             appointmentId: item.appointment.id,
             plate: members[0].request.vehiclePlate!,
             groupId: members[0].request.groupId,
-            reason: `${pairReason(scores[0])} · السيارة في الطريق (${members.length} ${members.length === 1 ? "ضيف" : "ضيوف"}${onBoard > members.length ? ` · ${personsText(onBoard)}` : ""})`,
+            reason: openUntil
+              ? `${pairReason(scores[0])} · السيارة استلمت ضيفها وما زالت في المجمع (${riding})`
+              : `${pairReason(scores[0])} · السيارة في الطريق (${riding})`,
+            ...(openUntil ? { openUntil } : {}),
           },
         };
       }
