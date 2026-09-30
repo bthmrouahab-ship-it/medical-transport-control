@@ -3,6 +3,7 @@ import { toast } from "sonner";
 import {
   CheckCircle2,
   ClipboardList,
+  Contact,
   Copy,
   Info,
   KeyRound,
@@ -52,8 +53,9 @@ import { authErrorMessage, createUser, resetUserPassword, updateUser, watchUsers
 
 // الخريطة والإحصائيات تُحمَّل عند فتح تبويبها فقط
 const FleetDashboard = lazy(() => import("@/components/FleetDashboard"));
+const GuestManager = lazy(() => import("@/components/GuestManager"));
 
-type Tab = "dashboard" | "users" | "vehicles" | "audit";
+type Tab = "dashboard" | "users" | "guests" | "vehicles" | "audit";
 
 function loadRequests() {
   return loadState<unknown[]>("fox_requests", [])
@@ -98,6 +100,7 @@ export default function AdminPanel({ profile, onLogout, onChangePassword }: {
   const tabs: { value: Tab; label: string; icon: typeof UsersRound }[] = [
     { value: "dashboard", label: "الخريطة والإحصائيات", icon: MapIcon },
     { value: "users", label: "المستخدمون", icon: UsersRound },
+    { value: "guests", label: "الضيوف", icon: Contact },
     { value: "vehicles", label: "السيارات", icon: Truck },
     { value: "audit", label: "سجل العمليات", icon: ClipboardList },
   ];
@@ -112,6 +115,7 @@ export default function AdminPanel({ profile, onLogout, onChangePassword }: {
         </nav>
         {tab === "dashboard" && <Suspense fallback={<div className="flex min-h-64 items-center justify-center text-slate-400"><Loader2 className="h-6 w-6 animate-spin" /><span className="sr-only">جارٍ التحميل</span></div>}><FleetDashboard canEdit actor={profile.displayName} /></Suspense>}
         {tab === "users" && <UsersTab profile={profile} vehicles={vehicles} />}
+        {tab === "guests" && <Suspense fallback={<div className="flex min-h-64 items-center justify-center text-slate-400"><Loader2 className="h-6 w-6 animate-spin" /><span className="sr-only">جارٍ التحميل</span></div>}><GuestManager /></Suspense>}
         {tab === "vehicles" && <VehiclesTab vehicles={vehicles} requests={requests} onChange={updateVehicles} />}
         {tab === "audit" && <AuditTab />}
       </main>

@@ -20,6 +20,8 @@ const COLLECTIONS: Partial<Record<SharedKey, { col: string; idField: string; sor
   fox_hospitals: { col: "hospitals", idField: "id" },
   // مواقع GPS يرسلها السائقون من صفحتهم؛ هنا للقراءة والمتابعة فقط
   fox_locations: { col: "vehicleLocations", idField: "plate" },
+  // قائمة ضيوف المجمع (للمدير والعيادة فقط، وبلا العمر والرقم الصحي)
+  fox_guests: { col: "guests", idField: "id", sort: (a, b) => String(a.name ?? "").localeCompare(String(b.name ?? ""), "ar") },
 };
 /** قيم تُحفظ كمستند واحد: ملخص الإحصائيات القديم. (سجل العمليات يكتبه الخادم في جدول مستقل.) */
 const SINGLE_DOCS: Partial<Record<SharedKey, { col: string; id: string; field: string }>> = {

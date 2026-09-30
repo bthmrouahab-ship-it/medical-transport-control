@@ -40,6 +40,9 @@ const REQUEST_FIELD_LABELS = [
     'arrivedAt' => 'وقت الوصول',
 ];
 
+/** العمر والرقم الصحي لا يُكتبان في السجل (يظهران في الإحصائيات فقط) */
+const GUEST_FIELD_LABELS = ['name' => 'الاسم', 'nameEn' => 'الاسم بالإنجليزية', 'gender' => 'الجنس', 'mobile' => 'الهاتف', 'buildingNumber' => 'المبنى', 'apartmentNumber' => 'الشقة'];
+
 const HOSPITAL_FIELD_LABELS = ['name' => 'الاسم', 'nameEn' => 'الاسم بالإنجليزية', 'zone' => 'المنطقة', 'lat' => 'خط العرض', 'lng' => 'خط الطول', 'aliases' => 'الأسماء البديلة'];
 
 /** الوقت بتوقيت قطر (HH:MM) من وقت ISO. */
@@ -279,6 +282,17 @@ function describe_write(PDO $pdo, string $col, string $id, ?array $before, ?arra
             if ($after === null) return ['hospital', 'hospital.delete', "حذف $name من دليل المستشفيات", ['destination' => $name]];
             $changes = changes_text(field_changes($before, $after, HOSPITAL_FIELD_LABELS));
             return ['hospital', 'hospital.update', "تعديل $name في دليل المستشفيات: " . ($changes ?: implode('، ', $changed)), ['destination' => $name, 'changes' => $changes]];
+
+        case 'guests':
+            $guest = $after ?? $before;
+            $name = $guest['name'] ?? $id;
+            $place = 'مبنى ' . ($guest['buildingNumber'] ?? '') . ' شقة ' . ($guest['apartmentNumber'] ?? '');
+            $details = ['patient' => $name, 'building' => $guest['buildingNumber'] ?? '', 'apartment' => $guest['apartmentNumber'] ?? ''];
+            if ($before === null) return ['guest', 'guest.create', "إضافة الضيف $name إلى قائمة الضيوف ($place)", $details];
+            if ($after === null) return ['guest', 'guest.delete', "حذف الضيف $name من قائمة الضيوف ($place)", $details];
+            $changes = changes_text(field_changes($before, $after, GUEST_FIELD_LABELS));
+            $details['changes'] = $changes;
+            return ['guest', 'guest.update', "تعديل بيانات الضيف $name: " . ($changes ?: 'العمر أو الرقم الصحي'), $details];
 
         case 'vehicleLocations':
             return ['location', 'location.delete', "حذف آخر موقع للسيارة $id", ['plate' => $id]];

@@ -599,6 +599,8 @@ function DriverCheckBox({ request, appointment, from, onReply }: {
   const now = useNow(1000);
   const hospitals = useHospitals();
   const check = pendingCheck(request, now);
+  // عودة الـ Nurse فقط: الراكب هو الـ Nurse. (قبل سطر النتيجة الذي يستعمله بعد الرد أو انتهاء المهلة)
+  const rider = (text: string) => (request.nurseOnly ? text.replace("الضيف", "الـ Nurse") : text);
   if (!check) {
     const done = (["arrival", "pickup"] as CheckKind[]).flatMap((kind) => {
       const item = driverCheck(request, kind, now);
@@ -620,8 +622,6 @@ function DriverCheckBox({ request, appointment, from, onReply }: {
   const pickup = tripEndpoints(appointment, request.direction, hospitals, from).from;
   const meters = point && pickup ? Math.round(distanceKm(point, pickup) * 1000) : null;
   const far = meters !== null && meters > 800;
-  // عودة الـ Nurse فقط: الراكب هو الـ Nurse
-  const rider = (text: string) => (request.nurseOnly ? text.replace("الضيف", "الـ Nurse") : text);
   const what = rider(checkLabel(check.kind));
   return (
     <div role="alert" className="mt-3 rounded-xl bg-amber-50 p-3 ring-1 ring-inset ring-amber-300">

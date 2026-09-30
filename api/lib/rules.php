@@ -7,13 +7,13 @@ declare(strict_types=1);
  */
 
 const APPOINTMENT_STATUSES = ['بانتظار طلب السيارة', 'تم طلب السيارة', 'تم استلام المريض', 'طلب عودة', 'مكتملة', 'ملغي'];
-const APPOINTMENT_FIELDS = ['id', 'patientName', 'clinic', 'buildingNumber', 'apartmentNumber', 'mobile', 'appointmentDate',
+const APPOINTMENT_FIELDS = ['id', 'guestId', 'patientName', 'clinic', 'buildingNumber', 'apartmentNumber', 'mobile', 'appointmentDate',
     'appointmentAt', 'hospitalId', 'category', 'kind', 'assistance', 'status', 'cancelReason', 'cancelledBy', 'cancelledAt',
     'gender', 'cancer', 'returnedSelf', 'returnedSelfBy', 'returnedSelfAt', 'approval', 'approvedBy', 'approvedAt', 'excludedBy', 'excludedAt', '_o'];
 /** موافقة مسؤول العيادة: بانتظار الموافقة، أو موافق عليه (باسمه ووقته)، أو مستبعد بلا حذف (باسمه ووقته) */
 const APPROVAL_FIELDS = ['approval', 'approvedBy', 'approvedAt', 'excludedBy', 'excludedAt'];
 /** بيانات الموعد نفسه: تعديل العيادة لها يعيد الموعد إلى انتظار موافقة مسؤولها */
-const APPOINTMENT_CONTENT_FIELDS = ['patientName', 'clinic', 'buildingNumber', 'apartmentNumber', 'mobile', 'appointmentDate', 'appointmentAt',
+const APPOINTMENT_CONTENT_FIELDS = ['guestId', 'patientName', 'clinic', 'buildingNumber', 'apartmentNumber', 'mobile', 'appointmentDate', 'appointmentAt',
     'hospitalId', 'category', 'kind', 'assistance', 'gender', 'cancer'];
 /** الضيف عاد إلى المجمع بنفسه بلا سيارة عودة (يسجّله مشرف المبنى باسمه ووقته) */
 const SELF_RETURN_FIELDS = ['returnedSelf', 'returnedSelfBy', 'returnedSelfAt'];
@@ -37,8 +37,73 @@ const BUS_ROLE_LABELS = ['shuttle' => 'باص المجمع', 'nonMedical' => 'ب
 /** إنهاء مشرف السيارات لرحلة عالقة يقدّم حالة الموعد كما عند استلام الضيف: [قبل => بعد] */
 const TRIP_END_APPOINTMENT_STATUS = ['تم طلب السيارة' => 'تم استلام المريض', 'طلب عودة' => 'مكتملة', 'تم استلام المريض' => 'مكتملة'];
 const HOSPITAL_FIELDS = ['id', 'name', 'nameEn', 'zone', 'lat', 'lng', 'aliases', 'verified', '_o'];
+/**
+ * قائمة ضيوف المجمع (يرفعها المدير). العمر والرقم الصحي لا يُرسلان مع القائمة (يظهران في الإحصائيات فقط عبر guests-stats).
+ * المزامنة للمدير والعيادة ومسؤولها فقط.
+ */
+const GUEST_FIELDS = ['id', 'name', 'nameEn', 'gender', 'mobile', 'buildingNumber', 'apartmentNumber', 'age', 'healthNumber', '_o'];
+const GUEST_PRIVATE_FIELDS = ['age', 'healthNumber'];
+const GUEST_LIST_ROLES = ['admin', 'clinic', 'clinicLead'];
+/** من يرى العمر والرقم الصحي (من يرى الإحصائيات) */
+const GUEST_STATS_ROLES = ['admin', 'fleetSupervisor'];
+/** بيانات الضيف في الموعد: يجب أن تطابق القائمة */
+const APPOINTMENT_GUEST_FIELDS = ['guestId', 'patientName', 'buildingNumber', 'apartmentNumber'];
 /** المجموعات التي تُزامن مع موظفي المكتب */
-const SYNC_COLLECTIONS = ['appointments', 'requests', 'fleet', 'hospitals', 'vehicleLocations', 'meta'];
+const SYNC_COLLECTIONS = ['appointments', 'requests', 'fleet', 'hospitals', 'vehicleLocations', 'meta', 'guests'];
+
+/** مجموعات المزامنة لهذا المستخدم: قائمة الضيوف للمدير والعيادة فقط */
+function sync_collections(array $user): array
+{
+    return array_values(array_filter(SYNC_COLLECTIONS, fn(string $col) => $col !== 'guests' || in_array($user['role'], GUEST_LIST_ROLES, true)));
+}
+
+/** المستند كما يُرسل في المزامنة: قائمة الضيوف بلا العمر والرقم الصحي */
+function public_doc(string $col, ?array $data): ?array
+{
+    if ($col !== 'guests' || $data === null) return $data;
+    foreach (GUEST_PRIVATE_FIELDS as $field) unset($data[$field]);
+    return $data;
+}
+
+function valid_guest(array $data, string $id): bool
+{
+    $unit = fn($value) => is_text($value, 20) && trim($value) !== '';
+    return only(array_keys($data), GUEST_FIELDS)
+        && ($data['id'] ?? null) === $id
+        && is_text($data['name'] ?? null, 120) && trim($data['name']) !== ''
+        && (!array_key_exists('nameEn', $data) || is_text($data['nameEn'], 120))
+        && in_array($data['gender'] ?? 'ذكر', ['ذكر', 'أنثى'], true)
+        && (!array_key_exists('mobile', $data) || (is_string($data['mobile']) && preg_match('/^\+?\d{7,15}$/', $data['mobile'])))
+        && $unit($data['buildingNumber'] ?? null) && $unit($data['apartmentNumber'] ?? null)
+        && (!array_key_exists('age', $data) || (is_int($data['age']) && $data['age'] >= 0 && $data['age'] <= 130))
+        && (!array_key_exists('healthNumber', $data) || is_text($data['healthNumber'], 30));
+}
+
+/**
+ * موعد العيادة لضيف من قائمة ضيوف المجمع ولمستشفى من الدليل: الاسم والمبنى والشقة كما في القائمة،
+ * والوجهة اسم المستشفى كما في الدليل. $changed = null عند الإضافة (يُفحص كل شيء)، وعند التعديل ما تغيّر فقط.
+ * $docOf(col, id) يقرأ المستند المحفوظ، و$docOf(col, null) أي مستند من المجموعة (لمعرفة هل هي فارغة).
+ */
+function registry_error(array $appointment, callable $docOf, ?array $changed = null): ?string
+{
+    if ($changed === null || array_intersect($changed, APPOINTMENT_GUEST_FIELDS)) {
+        $guestId = $appointment['guestId'] ?? null;
+        $guest = is_string($guestId) && preg_match('/^[A-Za-z0-9._:-]{1,160}$/', $guestId) ? $docOf('guests', $guestId) : null;
+        if ($guest === null) return 'الضيف غير موجود في قائمة ضيوف المجمع';
+        foreach (['patientName' => 'name', 'buildingNumber' => 'buildingNumber', 'apartmentNumber' => 'apartmentNumber'] as $field => $source) {
+            if (($appointment[$field] ?? null) !== ($guest[$source] ?? null)) return 'بيانات الضيف لا تطابق قائمة ضيوف المجمع';
+        }
+    }
+    if ($changed === null || array_intersect($changed, ['hospitalId', 'clinic'])) {
+        $hospitalId = $appointment['hospitalId'] ?? null;
+        if (!is_string($hospitalId) || !preg_match('/^[A-Za-z0-9._:-]{1,160}$/', $hospitalId)) return 'المستشفى غير موجود في دليل المستشفيات';
+        $hospital = $docOf('hospitals', $hospitalId);
+        // قبل أن يُحفظ الدليل في قاعدة البيانات (عند أول دخول للمدير) يُقبل مستشفى من الدليل الأولي في الصفحة
+        if ($hospital === null) return $docOf('hospitals', null) === null ? null : 'المستشفى غير موجود في دليل المستشفيات';
+        if (($appointment['clinic'] ?? null) !== ($hospital['name'] ?? null)) return 'المستشفى غير موجود في دليل المستشفيات';
+    }
+    return null;
+}
 
 /** الخانات التي تغيّرت بين نسختين من المستند */
 function changed_keys(array $before, array $after): array
@@ -168,9 +233,10 @@ function valid_appointment(array $data, string $id): bool
 
 /**
  * يعيد سبب الرفض، أو null إن كانت العملية مسموحة.
- * $appointmentOf (اختياري): يقرأ الموعد المحفوظ برقمه (لطلب السيارة الجديد).
+ * $docOf (اختياري): يقرأ مستندًا محفوظًا ($docOf('appointments', $id))، للموعد المرتبط بطلب السيارة الجديد
+ * وللضيف والمستشفى في موعد العيادة. $docOf($col, null): أي مستند من المجموعة أو null إن كانت فارغة.
  */
-function authorize_write(array $user, string $col, string $id, ?array $before, ?array $after, ?callable $appointmentOf = null): ?string
+function authorize_write(array $user, string $col, string $id, ?array $before, ?array $after, ?callable $docOf = null): ?string
 {
     $denied = 'ليست لديك صلاحية لتنفيذ هذا الإجراء.';
     $role = $user['role'];
@@ -183,6 +249,8 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
             if ($before === null) {
                 if (!valid_appointment($after, $id)) return 'بيانات الموعد غير صالحة';
                 if ($role === 'admin') return null;
+                // موعد العيادة لضيف من قائمة المجمع ولمستشفى من الدليل
+                if (has_role($user, CLINIC_ROLES) && $docOf && ($error = registry_error($after, $docOf))) return $error;
                 // موعد العيادة ينتظر موافقة مسؤولها، وما يضيفه المسؤول بنفسه موافق عليه باسمه
                 if ($role === 'clinic') return ($after['approval'] ?? null) === 'pending' ? null : $denied;
                 if ($role === 'clinicLead') {
@@ -199,6 +267,8 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
                     && in_array($after['gender'] ?? 'ذكر', ['ذكر', 'أنثى'], true) && is_bool($after['cancer'] ?? false);
                 if (!$valid) return $denied;
                 if ($role === 'admin') return null;
+                // تغيير الضيف أو الوجهة: من قائمة المجمع ودليل المستشفيات
+                if ($docOf && ($error = registry_error($after, $docOf, $changed))) return $error;
                 $approvalChanged = (bool)array_intersect($changed, APPROVAL_FIELDS);
                 if ($role === 'clinic') {
                     // العيادة لا توافق ولا تستبعد. الموعد المستبعد يبقى مستبعدًا، وتعديل غيره يعيده إلى انتظار الموافقة
@@ -258,14 +328,14 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
                 if (has_role($user, BUILDING_ROLES) && $owner !== (string)$user['id']) return 'بيانات الطلب غير صالحة';
                 if ($role === 'fleetSupervisor' && $owner !== null) return 'بيانات الطلب غير صالحة';
                 // مشرف المبنى يطلب سيارة لموعد وافق عليه مسؤول العيادة فقط
-                if (has_role($user, BUILDING_ROLES) && $appointmentOf) {
-                    $linked = $appointmentOf((string)($after['appointmentId'] ?? ''));
+                if (has_role($user, BUILDING_ROLES) && $docOf) {
+                    $linked = $docOf('appointments', (string)($after['appointmentId'] ?? ''));
                     if ($linked !== null && approval_of($linked) !== 'approved') return 'لم يوافق مسؤول العيادة على هذا الموعد بعد';
                 }
                 // مشرف السيارات يرى المواعيد الطبية ولا يطلب لها سيارة (يطلبها مشرف المبنى)، بل يضيف الرحلات غير الطبية.
                 // الموعد غير المحفوظ بعد هو رحلة غير طبية يضيفها معه في نفس اللحظة
-                if ($role === 'fleetSupervisor' && $appointmentOf) {
-                    $linked = $appointmentOf((string)($after['appointmentId'] ?? ''));
+                if ($role === 'fleetSupervisor' && $docOf) {
+                    $linked = $docOf('appointments', (string)($after['appointmentId'] ?? ''));
                     if ($linked !== null && ($linked['category'] ?? '') !== 'غير طبية') return $denied;
                 }
                 $valid = only(array_keys($after), REQUEST_FIELDS)
@@ -354,6 +424,11 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
                 && is_numeric($after['lng'] ?? null) && $after['lng'] > 50 && $after['lng'] < 52.5
                 && is_array($after['aliases'] ?? null) && count($after['aliases']) <= 40;
             return $valid ? null : 'بيانات المستشفى غير صالحة';
+
+        case 'guests':
+            // قائمة ضيوف المجمع: المدير يضيف ضيفًا ويعدّل بياناته (المبنى والشقة) ويحذفه
+            if ($role !== 'admin') return $denied;
+            return $after === null || valid_guest($after, $id) ? null : 'بيانات الضيف غير صالحة';
 
         case 'vehicleLocations':
             // السائق يرسل موقعه من صفحة السائق فقط؛ هنا الحذف للمدير

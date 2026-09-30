@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { DEFAULT_HOSPITALS, type Hospital } from "@shared/hospitals";
+import type { Guest } from "@shared/guests";
 import { loadState, subscribeState, type SharedKey } from "./appStore";
 import { locationFreshness, type VehicleLocation } from "./vehicleLocation";
 
@@ -22,6 +23,11 @@ export function useSharedState<T>(key: SharedKey, fallback: T): T {
 export function useHospitals(): Hospital[] {
   const hospitals = useSharedState<Hospital[]>("fox_hospitals", DEFAULT_HOSPITALS);
   return hospitals.length ? hospitals : DEFAULT_HOSPITALS;
+}
+
+/** قائمة ضيوف المجمع (تصل للمدير والعيادة فقط، بلا العمر والرقم الصحي). */
+export function useGuests(): Guest[] {
+  return useSharedState<Guest[]>("fox_guests", []);
 }
 
 /** الوقت الحالي، يتحدث كل فترة حتى تُغلق مهلة الطلب تلقائيًا على الشاشة. */

@@ -6,6 +6,7 @@ import {
   ArrowLeft,
   Ban,
   ArrowRight,
+  Building2,
   CalendarDays,
   CalendarPlus,
   Check,
@@ -24,7 +25,9 @@ import {
   Truck,
   Upload,
   Undo2,
+  UserRoundSearch,
   UsersRound,
+  Search,
 } from "lucide-react";
 import {
   ASSISTANCE_NEEDS,
@@ -43,12 +46,13 @@ import {
   type ClinicAppointment,
   type Gender,
 } from "@shared/transport";
-import { matchHospital } from "@shared/hospitals";
-import { Badge, DateChooser, EmptyState, Field, Panel, PageHeader, Segmented, Stat, StatusBadge, StatusBar, btn, choiceClass, cx, formatDay, labelClass, longDate } from "@/components/ui-kit";
+import { matchHospital, type Hospital } from "@shared/hospitals";
+import { guestIndex, guestOfAppointment, searchGuests, type Guest } from "@shared/guests";
+import { Badge, DateChooser, EmptyState, Field, Panel, PageHeader, Segmented, Stat, StatusBadge, StatusBar, btn, choiceClass, cx, formatDay, inputClass, labelClass, longDate } from "@/components/ui-kit";
 import { FILTER_LABELS_AR, FILTER_LABELS_EN, FilterTable, useColumnFilters, type FilterColumn } from "@/components/ExcelFilter";
 import { cancelReasonText, enableTranslation, hasArabic, useCancelReason } from "@/lib/translate";
 import type { ClinicText, Lang } from "@/lib/i18n";
-import { useHospitals, useNow } from "@/lib/useShared";
+import { useGuests, useHospitals, useNow } from "@/lib/useShared";
 
 const WAITING = "بانتظار طلب السيارة";
 
@@ -70,6 +74,7 @@ export function ClinicHome({ t, lang, appointments, date, onDateChange, onNew, o
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [importing, setImporting] = useState(false);
   const hospitals = useHospitals();
+  const guests = useGuests();
   const now = useNow();
 
   async function importExcel(file?: File) {
@@ -81,15 +86,18 @@ export function ClinicHome({ t, lang, appointments, date, onDateChange, onNew, o
       const firstSheet = workbook.SheetNames[0];
       if (!firstSheet) throw new Error("empty workbook");
       const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(workbook.Sheets[firstSheet], { defval: "" });
-      const result = parseImportedAppointments(rows, appointments, Date.now(), localDateString(), hospitals);
+      // الموعد لضيف من قائمة ضيوف المجمع ولمستشفى من الدليل فقط
+      const result = parseImportedAppointments(rows, appointments, Date.now(), localDateString(), hospitals, guests);
+      // أسباب رفض الصفوف (مكتوبة بالعربية في المنطق المشترك)، وبالإنجليزية شرح القاعدة
+      const reasons = <span className="whitespace-pre-line">{t.dir === "rtl" ? result.errors.slice(0, 4).join("\n") : t.importGuestsHint}</span>;
       if (!result.appointments.length) {
-        toast.error(t.dir === "rtl" && result.errors[0] ? result.errors[0] : t.importNone);
+        toast.error(t.importNone, { description: reasons, duration: 12000 });
         return;
       }
       if (!window.confirm(t.importFound(result.appointments.length))) return;
       onImport(result.appointments);
       toast.success(t.imported(result.appointments.length));
-      if (result.errors.length) toast.warning(t.skipped(result.errors.length));
+      if (result.errors.length) toast.warning(t.skipped(result.errors.length), { description: reasons, duration: 12000 });
     } catch {
       toast.error(t.importError);
     } finally {
@@ -482,21 +490,36 @@ export function ClinicForm({ t, lang, initial, defaultDate, onBack, onSave }: {
   onSave: (appointments: ClinicAppointment[]) => void;
 }) {
   const hospitals = useHospitals();
-  const [form, setForm] = useState(() => ({
-    patientName: initial?.patientName ?? "",
-    clinic: initial?.clinic ?? "",
-    buildingNumber: initial?.buildingNumber ?? "",
-    apartmentNumber: initial?.apartmentNumber ?? "",
-    mobile: initial?.mobile === "-" ? "" : initial?.mobile ?? "",
-    appointmentDate: initial?.appointmentDate ?? defaultDate,
-    appointmentAt: initial?.appointmentAt ?? "09:00",
-    kind: initial?.kind ?? "عادي" as AppointmentKind,
-    assistance: initial?.assistance ?? [] as AssistanceNeed[],
-    gender: initial?.gender,
-    cancer: initial?.cancer ?? false,
-  }));
+  // الموعد لضيف من قائمة ضيوف المجمع ولمستشفى من الدليل فقط
+  const guests = useGuests();
+  const index = useMemo(() => guestIndex(guests), [guests]);
+  const [form, setForm] = useState(() => {
+    const guest = initial ? guestOfAppointment(index, initial) : undefined;
+    const hospital = initial ? hospitals.find((item) => item.id === initial.hospitalId) ?? matchHospital(initial.clinic, hospitals) : null;
+    return {
+      guestId: guest?.id ?? "",
+      hospitalId: hospital?.id ?? "",
+      mobile: initial?.mobile === "-" ? "" : initial?.mobile ?? "",
+      appointmentDate: initial?.appointmentDate ?? defaultDate,
+      appointmentAt: initial?.appointmentAt ?? "09:00",
+      kind: initial?.kind ?? "عادي" as AppointmentKind,
+      assistance: initial?.assistance ?? [] as AssistanceNeed[],
+      gender: initial?.gender ?? guest?.gender,
+      cancer: initial?.cancer ?? false,
+    };
+  });
+  const guest = form.guestId ? index.byId.get(form.guestId) : undefined;
   // موعد ثانٍ لنفس الضيف في نفس اليوم (عند الإضافة فقط)
-  const [second, setSecond] = useState({ enabled: false, clinic: "", appointmentAt: "" });
+  const [second, setSecond] = useState({ enabled: false, hospitalId: "", appointmentAt: "" });
+
+  function selectGuest(next: Guest | undefined) {
+    setForm((current) => {
+      const previous = current.guestId ? index.byId.get(current.guestId) : undefined;
+      // هاتف الضيف من القائمة، إلا إذا كتبت العيادة رقمًا آخر
+      const mobile = !current.mobile || current.mobile === previous?.mobile ? next?.mobile ?? "" : current.mobile;
+      return { ...current, guestId: next?.id ?? "", mobile, gender: next?.gender ?? (next ? current.gender : undefined) };
+    });
+  }
 
   function toggleAssistance(need: AssistanceNeed) {
     setForm((current) => ({
@@ -507,7 +530,16 @@ export function ClinicForm({ t, lang, initial, defaultDate, onBack, onSave }: {
 
   function submit(event: React.FormEvent) {
     event.preventDefault();
-    if (!form.patientName.trim() || !form.clinic.trim() || !form.buildingNumber.trim() || !form.apartmentNumber.trim() || !form.mobile || !form.appointmentDate || !form.appointmentAt) {
+    if (!guest) {
+      toast.error(t.errGuest);
+      return;
+    }
+    const hospital = hospitals.find((item) => item.id === form.hospitalId);
+    if (!hospital) {
+      toast.error(t.errHospital);
+      return;
+    }
+    if (!form.mobile || !form.appointmentDate || !form.appointmentAt) {
       toast.error(t.errIncomplete);
       return;
     }
@@ -524,9 +556,10 @@ export function ClinicForm({ t, lang, initial, defaultDate, onBack, onSave }: {
       toast.error(t.errGender);
       return;
     }
+    const secondHospital = hospitals.find((item) => item.id === second.hospitalId);
     if (second.enabled && !initial) {
-      if (!second.clinic.trim() || !second.appointmentAt) {
-        toast.error(t.errSecondIncomplete);
+      if (!secondHospital || !second.appointmentAt) {
+        toast.error(secondHospital ? t.errSecondIncomplete : t.errSecondHospital);
         return;
       }
       if (second.appointmentAt <= form.appointmentAt) {
@@ -534,51 +567,50 @@ export function ClinicForm({ t, lang, initial, defaultDate, onBack, onSave }: {
         return;
       }
     }
-    const clinic = form.clinic.trim();
     const stamp = Date.now().toString().slice(-6);
-    const { cancer, gender, ...rest } = form;
     const first: ClinicAppointment = {
-      ...rest,
-      gender,
-      ...(cancer ? { cancer: true } : {}),
-      patientName: form.patientName.trim(),
-      buildingNumber: form.buildingNumber.trim(),
-      apartmentNumber: form.apartmentNumber.trim(),
-      clinic,
-      hospitalId: matchHospital(clinic, hospitals)?.id,
-      mobile,
       id: initial?.id ?? `APT-${stamp}`,
+      guestId: guest.id,
+      patientName: guest.name,
+      clinic: hospital.name,
+      hospitalId: hospital.id,
+      buildingNumber: guest.buildingNumber,
+      apartmentNumber: guest.apartmentNumber,
+      mobile,
+      appointmentDate: form.appointmentDate,
+      appointmentAt: form.appointmentAt,
+      kind: form.kind,
+      assistance: form.assistance,
+      gender: form.gender,
+      ...(form.cancer ? { cancer: true } : {}),
       status: initial?.status ?? WAITING,
     };
-    if (!second.enabled || initial) {
+    if (!second.enabled || initial || !secondHospital) {
       onSave([first]);
       return;
     }
     // الموعد الثاني: نفس الضيف والتاريخ والاحتياجات، بمستشفى ووقت آخرين
-    const secondClinic = second.clinic.trim();
-    onSave([first, { ...first, id: `APT-${stamp}-2`, clinic: secondClinic, hospitalId: matchHospital(secondClinic, hospitals)?.id, appointmentAt: second.appointmentAt }]);
+    onSave([first, { ...first, id: `APT-${stamp}-2`, clinic: secondHospital.name, hospitalId: secondHospital.id, appointmentAt: second.appointmentAt }]);
   }
 
   const BackIcon = t.dir === "rtl" ? ArrowRight : ArrowLeft;
+  const notListed = initial && !form.guestId && !guest ? initial.patientName : "";
   return (
     <div className="mx-auto max-w-3xl">
       <button onClick={onBack} className={cx(btn("ghost", "sm"), "mb-4 -ms-2")}><BackIcon className="h-4 w-4" /> {t.back}</button>
       <Panel tone="brand" icon={ClipboardPlus} title={initial ? t.editTitle : t.newTitle} description={initial ? initial.id : undefined}>
         <form onSubmit={submit} className="grid gap-5 p-5 sm:grid-cols-2 sm:p-6">
-          <Field label={t.patient} value={form.patientName} onChange={(value) => setForm({ ...form, patientName: value })} wide />
-          <Field label={t.hospital} value={form.clinic} onChange={(value) => setForm({ ...form, clinic: value })} placeholder={t.hospitalHint} list="hospital-options" wide />
-          <datalist id="hospital-options">{hospitals.map((hospital) => <option key={hospital.id} value={lang === "en" ? hospital.nameEn || hospital.name : hospital.name} />)}</datalist>
-          <Field label={t.building} value={form.buildingNumber} onChange={(value) => setForm({ ...form, buildingNumber: value })} dir="ltr" />
-          <Field label={t.apartment} value={form.apartmentNumber} onChange={(value) => setForm({ ...form, apartmentNumber: value })} dir="ltr" />
+          <GuestPicker t={t} guests={guests} guest={guest} onSelect={selectGuest} notListed={notListed} />
+          <HospitalSelect label={t.hospital} value={form.hospitalId} onChange={(hospitalId) => setForm({ ...form, hospitalId })} hospitals={hospitals} lang={lang} placeholder={t.hospitalChoose} wide />
           <Field label={t.mobile} value={form.mobile} onChange={(value) => setForm({ ...form, mobile: value })} type="tel" dir="ltr" wide />
-          <fieldset className="sm:col-span-2">
+          {!guest?.gender && <fieldset className="sm:col-span-2">
             <legend className={labelClass}>{t.gender}</legend>
             <div className="grid grid-cols-2 gap-3">
               {GENDERS.map((gender: Gender) => (
                 <button key={gender} type="button" aria-pressed={form.gender === gender} onClick={() => setForm({ ...form, gender })} className={choiceClass(form.gender === gender)}>{t.genderLabel(gender)}</button>
               ))}
             </div>
-          </fieldset>
+          </fieldset>}
           <div className="sm:col-span-2"><DateChooser label={t.date} value={form.appointmentDate} onChange={(value) => setForm({ ...form, appointmentDate: value })} labels={t.dateChoice} /></div>
           <Field label={t.time} value={form.appointmentAt} onChange={(value) => setForm({ ...form, appointmentAt: value })} type="time" />
 
@@ -622,7 +654,7 @@ export function ClinicForm({ t, lang, initial, defaultDate, onBack, onSave }: {
               </label>
               {second.enabled && (
                 <div className="mt-4 grid gap-4 sm:grid-cols-[minmax(0,1fr)_180px]">
-                  <Field label={`${t.secondTitle} · ${t.hospital}`} value={second.clinic} onChange={(value) => setSecond({ ...second, clinic: value })} placeholder={t.hospitalHint} list="hospital-options" />
+                  <HospitalSelect label={`${t.secondTitle} · ${t.hospital}`} value={second.hospitalId} onChange={(hospitalId) => setSecond({ ...second, hospitalId })} hospitals={hospitals} lang={lang} placeholder={t.hospitalChoose} />
                   <Field label={`${t.secondTitle} · ${t.time}`} value={second.appointmentAt} onChange={(value) => setSecond({ ...second, appointmentAt: value })} type="time" />
                   <p className="text-xs leading-5 text-slate-500 sm:col-span-2">{t.secondHint}</p>
                 </div>
@@ -637,5 +669,144 @@ export function ClinicForm({ t, lang, initial, defaultDate, onBack, onSave }: {
         </form>
       </Panel>
     </div>
+  );
+}
+
+/** اختيار الضيف من قائمة ضيوف المجمع بالبحث (الاسم بالعربية أو الإنجليزية، أو المبنى والشقة، أو الهاتف). */
+function GuestPicker({ t, guests, guest, onSelect, notListed }: {
+  t: ClinicText;
+  guests: Guest[];
+  guest?: Guest;
+  onSelect: (guest: Guest | undefined) => void;
+  /** اسم ضيف موعد قديم غير موجود في القائمة الحالية */
+  notListed?: string;
+}) {
+  const [query, setQuery] = useState("");
+  const [open, setOpen] = useState(false);
+  const [active, setActive] = useState(0);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const searching = query.trim().length >= 2;
+  const results = useMemo(() => (searching ? searchGuests(guests, query, 5000) : []), [guests, query, searching]);
+  const shown = results.slice(0, 30);
+  const listId = "guest-options";
+
+  function choose(next: Guest) {
+    onSelect(next);
+    setQuery("");
+    setOpen(false);
+  }
+
+  if (guest) {
+    return (
+      <div className="rounded-xl bg-slate-50 p-4 ring-1 ring-slate-200 sm:col-span-2">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-[13px] font-medium text-slate-500">{t.guest}</p>
+            <p className="mt-0.5 font-semibold text-ink">{guest.name}</p>
+            {guest.nameEn && <p className="text-xs text-slate-500"><bdi>{guest.nameEn}</bdi></p>}
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              <Badge tone="neutral" icon={Building2}>{t.guestUnit(guest.buildingNumber, guest.apartmentNumber)}</Badge>
+              {guest.gender && <Badge tone="neutral">{t.genderLabel(guest.gender)}</Badge>}
+            </div>
+            <p className="mt-2 text-[11px] leading-4 text-slate-400">{t.guestFromList}</p>
+          </div>
+          <button type="button" onClick={() => { onSelect(undefined); requestAnimationFrame(() => inputRef.current?.focus()); }} className={btn("secondary", "sm")}>
+            <UserRoundSearch className="h-4 w-4" /> {t.guestChange}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  function onKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      setOpen(true);
+      if (shown.length) setActive((current) => (current + (event.key === "ArrowDown" ? 1 : shown.length - 1)) % shown.length);
+    } else if (event.key === "Enter") {
+      // Enter يختار الضيف ولا يرسل النموذج
+      event.preventDefault();
+      if (open && shown[active]) choose(shown[active]);
+    } else if (event.key === "Escape") {
+      setOpen(false);
+    }
+  }
+
+  return (
+    <div className="relative sm:col-span-2">
+      <label htmlFor="guest-search" className={labelClass}>{t.guest}</label>
+      <div className="relative">
+        <Search className="pointer-events-none absolute start-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+        <input
+          ref={inputRef}
+          id="guest-search"
+          role="combobox"
+          aria-expanded={open && searching}
+          aria-controls={listId}
+          aria-autocomplete="list"
+          aria-activedescendant={open && shown[active] ? `guest-${shown[active].id}` : undefined}
+          autoComplete="off"
+          disabled={!guests.length}
+          value={query}
+          onChange={(event) => { setQuery(event.target.value); setOpen(true); setActive(0); }}
+          onFocus={() => setOpen(true)}
+          onBlur={() => setOpen(false)}
+          onKeyDown={onKeyDown}
+          placeholder={t.guestSearch}
+          className={cx(inputClass, "ps-10")}
+        />
+      </div>
+      {open && searching && (
+        <ul id={listId} role="listbox" aria-label={t.guest} className="absolute inset-x-0 top-full z-30 mt-1.5 max-h-80 overflow-y-auto rounded-xl bg-white p-1.5 shadow-raised ring-1 ring-slate-900/10">
+          {shown.length ? shown.map((item, position) => (
+            <li
+              key={item.id}
+              id={`guest-${item.id}`}
+              role="option"
+              aria-selected={position === active}
+              // قبل أن يفقد الحقل التركيز فتُغلق القائمة
+              onMouseDown={(event) => { event.preventDefault(); choose(item); }}
+              onMouseEnter={() => setActive(position)}
+              className={cx("flex cursor-pointer items-center justify-between gap-3 rounded-lg px-3 py-2", position === active ? "bg-brand-50" : "hover:bg-slate-50")}
+            >
+              <span className="min-w-0">
+                <span className="block truncate text-sm font-medium text-ink">{item.name}</span>
+                {item.nameEn && <span className="block truncate text-xs text-slate-500"><bdi>{item.nameEn}</bdi></span>}
+              </span>
+              <span className="shrink-0 text-xs text-slate-500 tabular">{t.guestUnit(item.buildingNumber, item.apartmentNumber)}</span>
+            </li>
+          )) : <li className="px-3 py-3 text-center text-sm text-slate-500">{t.guestNoMatch}</li>}
+          {results.length > shown.length && <li className="px-3 py-2 text-center text-[11px] text-slate-400">{t.guestMore(results.length - shown.length)}</li>}
+        </ul>
+      )}
+      {!guests.length
+        ? <p role="alert" className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-900 ring-1 ring-inset ring-amber-200">{t.guestListEmpty}</p>
+        : notListed
+          ? <p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-900 ring-1 ring-inset ring-amber-200">{t.guestNotListed(notListed)}</p>
+          : !searching && <p className="mt-1.5 text-[11px] text-slate-400">{t.guestSearchHint}</p>}
+    </div>
+  );
+}
+
+/** المستشفى من دليل المستشفيات فقط (بالإنجليزية في الواجهة الإنجليزية). */
+function HospitalSelect({ label, value, onChange, hospitals, lang, placeholder, wide }: {
+  label: string;
+  value: string;
+  onChange: (hospitalId: string) => void;
+  hospitals: Hospital[];
+  lang: Lang;
+  placeholder: string;
+  wide?: boolean;
+}) {
+  const nameOf = (hospital: Hospital) => (lang === "en" ? hospital.nameEn || hospital.name : hospital.name);
+  const sorted = useMemo(() => [...hospitals].sort((a, b) => nameOf(a).localeCompare(nameOf(b), lang)), [hospitals, lang]); // eslint-disable-line react-hooks/exhaustive-deps
+  return (
+    <label className={cx("block", wide && "sm:col-span-2")}>
+      <span className={labelClass}>{label}</span>
+      <select value={value} onChange={(event) => onChange(event.target.value)} className={cx(inputClass, !value && "text-slate-400")}>
+        <option value="" disabled>{placeholder}</option>
+        {sorted.map((hospital) => <option key={hospital.id} value={hospital.id} className="text-ink">{nameOf(hospital)}</option>)}
+      </select>
+    </label>
   );
 }
