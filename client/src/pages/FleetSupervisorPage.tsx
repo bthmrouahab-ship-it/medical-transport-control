@@ -41,6 +41,7 @@ import {
   calculateTripGroupingScore,
   canShareVehicle,
   findUnrequestedMatches,
+  isApproved,
   isNonMedical,
   isPriority,
   isRushHour,
@@ -279,7 +280,7 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
   const groups = buildTripGroups(groupable.map((trip) => ({ appointment: trip.appointment, direction: trip.request.direction, at: trip.at, persons: trip.persons })), hospitals, seatsFor(dispatchable, rules));
   const groupedIds = new Set(groups.flatMap((group) => group.appointmentIds));
   const joins = suggestJoinDispatched(groupable.filter((trip) => !groupedIds.has(trip.appointment.id)), toPickupTrips.filter((trip) => onDate(trip) && !isTransfer(trip.request)), hospitals, vehicles, rules);
-  const unrequested = findUnrequestedMatches(appointments, requests, hospitals, now).filter((match) => match.appointment.appointmentDate === date);
+  const unrequested = findUnrequestedMatches(appointments.filter(isApproved), requests, hospitals, now).filter((match) => match.appointment.appointmentDate === date);
 
   // الرحلات الجارية مجمّعة حسب السيارة (groupId أو الطلب نفسه)
   const activeGroups = Array.from(active.reduce((map, trip) => {

@@ -1,6 +1,8 @@
 import { useMemo, useState } from "react";
-import { Accessibility, ArrowLeftRight, Ban, CalendarDays, Clock3, Eye, Filter, Footprints, Ribbon, Stethoscope, Truck, UsersRound, X } from "lucide-react";
+import { Accessibility, ArrowLeftRight, Ban, CalendarDays, Clock3, Eye, EyeOff, Filter, Footprints, Ribbon, Stethoscope, Truck, UsersRound, X } from "lucide-react";
 import {
+  approvalOf,
+  isApproved,
   isNonMedical,
   isPriority,
   personsText,
@@ -18,6 +20,9 @@ import { Badge, EmptyState, Panel, Segmented, Stat, StatusBadge, btn, formatDay,
 const WAITING = "بانتظار طلب السيارة";
 const ACTIVE = ["تم طلب السيارة", "تم استلام المريض", "طلب عودة"];
 const NOT_REQUESTED = "لم يُطلب بعد";
+/** موافقة مسؤول العيادة: قبلها لا يظهر الموعد لمشرف المبنى */
+const PENDING_APPROVAL = "بانتظار موافقة مسؤول العيادة";
+const EXCLUDED = "مستبعد من مسؤول العيادة";
 
 /** نوع الطلب: ذهاب، عودة، نقل بين موعدين، أو عودة الـ Nurse فقط */
 const requestKind = (request: VehicleRequest) => (request.nurseOnly ? "عودة الـ Nurse فقط" : request.fromAppointmentId ? "نقل بين موعدين" : request.direction);
@@ -51,6 +56,8 @@ export function AppointmentsOverview({ appointments, requests, date, now }: {
   const lastRequest = (appointment: ClinicAppointment) => requestsOf(appointment).filter((request) => !request.nurseOnly).at(-1);
   const plates = (appointment: ClinicAppointment) => Array.from(new Set(requestsOf(appointment).flatMap((request) => (request.vehiclePlate ? [request.vehiclePlate] : []))));
   const drivers = (appointment: ClinicAppointment) => Array.from(new Set(requestsOf(appointment).flatMap((request) => (request.driver ? [request.driver] : []))));
+  // الموافقة تخص الموعد الذي لم يُطلب له سيارة بعد (الملغي والجاري بحالته)
+  const approvalState = (appointment: ClinicAppointment) => (appointment.status === WAITING ? approvalOf(appointment) : "approved");
   const notOpen = (appointment: ClinicAppointment) => appointment.status === WAITING && !requestsOf(appointment).length && !requestWindow(appointment, now).open;
 
   const columns: FilterColumn<ClinicAppointment>[] = [
@@ -86,8 +93,12 @@ export function AppointmentsOverview({ appointments, requests, date, now }: {
     {
       key: "status",
       label: "حالة الموعد",
-      value: (a) => (notOpen(a) ? "انتهت مهلة الطلب" : statusText(a.status)),
-      cell: (a) => (notOpen(a) ? <Badge tone="red">انتهت مهلة الطلب</Badge> : <StatusBadge status={a.status} />),
+      value: (a) => (approvalState(a) === "pending" ? PENDING_APPROVAL : approvalState(a) === "excluded" ? EXCLUDED : notOpen(a) ? "انتهت مهلة الطلب" : statusText(a.status)),
+      cell: (a) => (approvalState(a) === "pending"
+        ? <Badge tone="amber" icon={Clock3}>{PENDING_APPROVAL}</Badge>
+        : approvalState(a) === "excluded"
+          ? <Badge icon={EyeOff}>{EXCLUDED}{a.excludedBy ? ` · ${a.excludedBy}` : ""}</Badge>
+          : notOpen(a) ? <Badge tone="red">انتهت مهلة الطلب</Badge> : <StatusBadge status={a.status} />),
     },
     {
       key: "request",
@@ -99,6 +110,7 @@ export function AppointmentsOverview({ appointments, requests, date, now }: {
       cell: (a) => {
         const list = requestsOf(a);
         if (!list.length) {
+          if (!isApproved(a)) return <span className="text-xs text-slate-400">لا يظهر لمشرف المبنى</span>;
           const deadline = requestWindow(a, now);
           return a.status === WAITING
             ? <span className={deadline.open ? "text-xs text-amber-800" : "text-xs font-medium text-red-700"}>{deadline.open ? <>لم يطلب مشرف المبنى بعد · حتى <span dir="ltr" className="tabular">{timeLabel(deadline.deadline)}</span></> : "انتهت مهلة الطلب"}</span>

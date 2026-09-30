@@ -29,6 +29,7 @@ export const ACTIVITY_TYPES: Record<string, string> = {
 export const ACTIVITY_ROLES: Record<string, string> = {
   admin: "مدير النظام",
   clinic: "العيادة",
+  clinicLead: "مسؤول العيادة",
   buildingSupervisor: "مشرف المبنى",
   buildingLead: "مسؤول مشرفي المباني",
   fleetSupervisor: "مشرف السيارات",

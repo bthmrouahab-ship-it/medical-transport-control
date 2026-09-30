@@ -3,7 +3,9 @@ import { toast } from "sonner";
 import { ArrowRight, Languages, Loader2 } from "lucide-react";
 import {
   DEFAULT_VEHICLES,
+  approvalOf,
   buildDriverMessage,
+  isApproved,
   isNonMedical,
   localDateString,
   migrateAppointment,
@@ -11,6 +13,7 @@ import {
   requestPersons,
   statusText,
   whatsappLink,
+  type Approval,
   type ClinicAppointment,
   type Vehicle,
   type VehicleRequest,
@@ -18,7 +21,7 @@ import {
 import type { UserProfile } from "@shared/users";
 import { useHospitals } from "@/lib/useShared";
 import AppHeader from "@/components/AppHeader";
-import { btn, byAppointmentTime, headerButton, timeLabel } from "@/components/ui-kit";
+import { addDays, btn, byAppointmentTime, headerButton, timeLabel } from "@/components/ui-kit";
 import { pickupDetails } from "@shared/trips";
 import { checkReplyChanges, confirmPendingChecks, type CheckKind } from "@shared/driverChecks";
 import { CLINIC_TEXT, useLang } from "@/lib/i18n";
@@ -40,7 +43,7 @@ function PageLoading() {
   return <div className="flex min-h-screen items-center justify-center bg-page text-slate-400" dir="rtl"><Loader2 className="h-6 w-6 animate-spin" /><span className="sr-only">جارٍ التحميل</span></div>;
 }
 
-type Role = "clinic" | "buildingSupervisor" | "buildingLead" | "fleetSupervisor";
+type Role = "clinic" | "clinicLead" | "buildingSupervisor" | "buildingLead" | "fleetSupervisor";
 type Session = { role: Role; name: string; uid: string };
 type ClinicView = "home" | "form";
 
@@ -241,6 +244,7 @@ export default function RolePortal() {
 
 const ROLE_TITLES: Record<Role, string> = {
   clinic: "العيادة",
+  clinicLead: "مسؤول العيادة",
   buildingSupervisor: "مشرف المبنى",
   buildingLead: "مسؤول مشرفي المباني",
   fleetSupervisor: "مشرف السيارات",
@@ -258,9 +262,11 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
   const [view, setView] = useState<ClinicView>("home");
   const [editingAppointment, setEditingAppointment] = useState<ClinicAppointment | null>(null);
   const [lang, setLang] = useLang();
-  const [selectedDate, setSelectedDate] = useState(() => localDateString());
+  // مسؤول العيادة يبدأ بمواعيد الغد (يوافق عليها قبل يومها)
+  const [selectedDate, setSelectedDate] = useState(() => (session.role === "clinicLead" ? addDays(localDateString(), 1) : localDateString()));
   const hospitals = useHospitals();
-  const isClinic = session.role === "clinic";
+  const isClinic = session.role === "clinic" || session.role === "clinicLead";
+  const isClinicLead = session.role === "clinicLead";
   const t = CLINIC_TEXT[isClinic ? lang : "ar"];
 
   // تحديث الشاشة فورًا عند وصول تغييرات من مستخدمين آخرين
@@ -278,6 +284,9 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
 
   // المقارنة مع ما يعرضه الموقع (بعد التوحيد) حتى لا تُكتب مواعيد أو طلبات لم تتغير
   function updateAppointments(next: ClinicAppointment[]) { saveState("fox_appointments", next, appointments); setAppointments(next); }
+  // أحدث قائمة للمواعيد: للأزرار التي تعمل بعد تغيّر القائمة (مثل «تراجع» في رسالة الاستبعاد)
+  const latestAppointments = useRef(appointments);
+  latestAppointments.current = appointments;
   function updateRequests(next: VehicleRequest[]) { saveState("fox_requests", next, requests); setRequests(next); }
   function updateFleet(next: Vehicle[]) { setFleetVehicles(next); saveState("fox_fleet", next); }
 
@@ -399,17 +408,58 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
     setView("form");
   }
 
+  /**
+   * موافقة مسؤول العيادة على الموعد الجديد: ما يضيفه المسؤول موافق عليه باسمه، وما تضيفه العيادة ينتظر موافقته.
+   * تعديل العيادة لموعد غير مستبعد يعيده إلى انتظار الموافقة (المستبعد يبقى مستبعدًا).
+   */
+  function withApproval(appointment: ClinicAppointment, before?: ClinicAppointment): ClinicAppointment {
+    const { approval: _approval, approvedBy: _approvedBy, approvedAt: _approvedAt, excludedBy: _excludedBy, excludedAt: _excludedAt, ...rest } = appointment;
+    if (before) {
+      // نموذج التعديل لا يحمل خانات الموافقة: تبقى كما كانت للمسؤول وللموعد المستبعد
+      if (isClinicLead || approvalOf(before) === "excluded") {
+        const kept = Object.fromEntries((["approval", "approvedBy", "approvedAt", "excludedBy", "excludedAt"] as const)
+          .flatMap((field) => (before[field] !== undefined ? [[field, before[field]]] : [])));
+        return { ...rest, ...kept };
+      }
+      return { ...rest, approval: "pending" };
+    }
+    return isClinicLead
+      ? { ...rest, approval: "approved", approvedBy: session.name, approvedAt: new Date().toISOString() }
+      : { ...rest, approval: "pending" };
+  }
+
+  /** موافقة مسؤول العيادة أو استبعاده أو إرجاعه (للمواعيد التي لم يُطلب لها سيارة بعد)، لموعد أو أكثر في حفظ واحد */
+  function setApproval(changes: Record<string, Approval>) {
+    const at = new Date().toISOString();
+    const current = latestAppointments.current;
+    const next = current.map((appointment) => {
+      const approval = changes[appointment.id];
+      if (!approval || appointment.status !== "بانتظار طلب السيارة") return appointment;
+      const { approvedBy: _approvedBy, approvedAt: _approvedAt, excludedBy: _excludedBy, excludedAt: _excludedAt, ...rest } = appointment;
+      if (approval === "approved") return { ...rest, approval, approvedBy: session.name, approvedAt: at };
+      if (approval === "excluded") return { ...rest, approval, excludedBy: session.name, excludedAt: at };
+      return { ...rest, approval };
+    });
+    saveState("fox_appointments", next, current);
+    latestAppointments.current = next;
+    setAppointments(next);
+  }
+
   /** موعد واحد، أو موعدان لنفس الضيف في نفس اليوم يُضافان معًا في حفظ واحد */
   function saveAppointment(saved: ClinicAppointment[]) {
-    const [appointment] = saved;
+    const [first] = saved;
+    const before = editingAppointment ? appointments.find((item) => item.id === first.id) : undefined;
+    const stamped = saved.map((appointment) => withApproval(appointment, before));
+    const [appointment] = stamped;
     const next = editingAppointment
       ? appointments.map((item) => item.id === appointment.id ? appointment : item)
-      : [...appointments, ...saved];
+      : [...appointments, ...stamped];
     updateAppointments(next.sort(byAppointmentTime));
     setEditingAppointment(null);
     setSelectedDate(appointment.appointmentDate);
     setView("home");
-    toast.success(editingAppointment ? t.updated : saved.length > 1 ? t.savedTwo : t.saved);
+    const reset = Boolean(before) && approvalOf(before!) === "approved" && approvalOf(appointment) === "pending";
+    toast.success(editingAppointment ? t.updated : saved.length > 1 ? t.savedTwo : t.saved, { description: reset ? t.resetApproval : undefined });
   }
 
   function deleteAppointment(appointment: ClinicAppointment) {
@@ -468,7 +518,7 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
   return (
     <div className="min-h-screen bg-page" dir={t.dir}>
       <AppHeader
-        role={isClinic ? t.workspace : ROLE_TITLES[session.role]}
+        role={isClinicLead ? t.leadWorkspace : isClinic ? t.workspace : ROLE_TITLES[session.role]}
         name={session.name}
         labels={isClinic ? { changePassword: t.changePassword, logout: t.logout, app: lang === "en" ? "Al Thumama Complex Transport" : undefined } : undefined}
         actions={(
@@ -492,8 +542,10 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
             onEdit={openEditAppointment}
             onDelete={deleteAppointment}
             onImport={(imported) => {
-              updateAppointments([...appointments, ...imported].sort(byAppointmentTime));
+              updateAppointments([...appointments, ...imported.map((appointment) => withApproval(appointment))].sort(byAppointmentTime));
             }}
+            lead={isClinicLead}
+            onApproval={setApproval}
           />
         )}
         {view === "form" && isClinic && (
@@ -510,7 +562,8 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
           <SupervisorHome
             uid={session.uid}
             lead={session.role === "buildingLead"}
-            appointments={appointments}
+            // لا يظهر لمشرف المبنى إلا ما وافق عليه مسؤول العيادة
+            appointments={appointments.filter(isApproved)}
             requests={requests}
             vehicles={fleetVehicles}
             onRequest={(request, appointmentId) => {
