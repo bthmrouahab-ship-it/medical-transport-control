@@ -428,12 +428,13 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
       : { ...rest, approval: "pending" };
   }
 
-  /** موافقة مسؤول العيادة أو استبعاده أو إرجاعه (للمواعيد التي لم يُطلب لها سيارة بعد) */
-  function setApproval(ids: string[], approval: Approval) {
+  /** موافقة مسؤول العيادة أو استبعاده أو إرجاعه (للمواعيد التي لم يُطلب لها سيارة بعد)، لموعد أو أكثر في حفظ واحد */
+  function setApproval(changes: Record<string, Approval>) {
     const at = new Date().toISOString();
     const current = latestAppointments.current;
     const next = current.map((appointment) => {
-      if (!ids.includes(appointment.id) || appointment.status !== "بانتظار طلب السيارة") return appointment;
+      const approval = changes[appointment.id];
+      if (!approval || appointment.status !== "بانتظار طلب السيارة") return appointment;
       const { approvedBy: _approvedBy, approvedAt: _approvedAt, excludedBy: _excludedBy, excludedAt: _excludedAt, ...rest } = appointment;
       if (approval === "approved") return { ...rest, approval, approvedBy: session.name, approvedAt: at };
       if (approval === "excluded") return { ...rest, approval, excludedBy: session.name, excludedAt: at };

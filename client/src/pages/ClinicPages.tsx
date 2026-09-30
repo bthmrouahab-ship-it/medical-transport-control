@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
   Accessibility,
@@ -9,7 +9,6 @@ import {
   CalendarDays,
   CalendarPlus,
   Check,
-  CheckCheck,
   CheckCircle2,
   ClipboardPlus,
   Clock3,
@@ -63,9 +62,10 @@ export function ClinicHome({ t, lang, appointments, date, onDateChange, onNew, o
   onEdit: (appointment: ClinicAppointment) => void;
   onDelete: (appointment: ClinicAppointment) => void;
   onImport: (appointments: ClinicAppointment[]) => void;
-  /** مسؤول العيادة: يوافق على المواعيد أو يستبعدها أو يرجعها، ويرى التنبيهات */
+  /** مسؤول العيادة: يوافق على المواعيد أو يستبعدها أو يرجعها (واحدًا واحدًا أو المحدد معًا)، ويرى التنبيهات */
   lead?: boolean;
-  onApproval?: (ids: string[], approval: Approval) => void;
+  /** الحالة الجديدة لكل موعد (رقم الموعد ← الحالة)، في حفظ واحد */
+  onApproval?: (changes: Record<string, Approval>) => void;
 }) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [importing, setImporting] = useState(false);
@@ -125,7 +125,7 @@ export function ClinicHome({ t, lang, appointments, date, onDateChange, onNew, o
   }
 
   const today = localDateString(now);
-  const dayAppointments = appointments.filter((appointment) => appointment.appointmentDate === date);
+  const dayAppointments = useMemo(() => appointments.filter((appointment) => appointment.appointmentDate === date), [appointments, date]);
 
   // الجدول: اليوم المختار أو كل الأيام، وفلترة كل عمود مثل Excel
   const [scope, setScope] = useState<"day" | "all">("day");
@@ -141,13 +141,18 @@ export function ClinicHome({ t, lang, appointments, date, onDateChange, onNew, o
   const approvalTone = { pending: "amber", approved: "green", excluded: "neutral" } as const;
   const pendingOf = (appointment: ClinicAppointment) => approvalOf(appointment) === "pending" && appointment.status === WAITING;
 
-  function setApproval(appointment: ClinicAppointment, approval: Approval) {
-    const previous = approvalOf(appointment);
-    onApproval?.([appointment.id], approval);
-    if (approval === "approved") toast.success(t.approvedToast(1));
-    else if (approval === "excluded") toast.success(t.excludedToast, { action: { label: t.undo, onClick: () => onApproval?.([appointment.id], previous) }, duration: 8000 });
-    else toast.success(t.restoredToast);
+  /** موافقة أو استبعاد أو إرجاع لموعد أو أكثر في حفظ واحد، مع «تراجع» يعيد كل موعد إلى حالته السابقة */
+  function changeApproval(list: ClinicAppointment[], approval: Approval) {
+    if (!list.length) return;
+    const previous = Object.fromEntries(list.map((appointment) => [appointment.id, approvalOf(appointment)]));
+    onApproval?.(Object.fromEntries(list.map((appointment) => [appointment.id, approval])));
+    const message = approval === "approved" ? t.approvedToast(list.length) : approval === "excluded" ? t.excludedToast(list.length) : t.restoredToast(list.length);
+    toast.success(message, {
+      action: { label: t.undo, onClick: () => { onApproval?.(previous); toast.success(t.undone); } },
+      duration: 8000,
+    });
   }
+  const setApproval = (appointment: ClinicAppointment, approval: Approval) => changeApproval([appointment], approval);
 
   const approvalColumn: FilterColumn<ClinicAppointment> = {
     key: "approval",
@@ -319,13 +324,30 @@ export function ClinicHome({ t, lang, appointments, date, onDateChange, onNew, o
     setScope("day");
     table.setFilter(key, values);
   };
-  const pendingShown = shown.filter(pendingOf);
-  function approveShown() {
-    if (!pendingShown.length) return;
-    const withAlerts = pendingShown.filter((appointment) => (alertsOf.get(appointment.id) ?? []).length > 0).length;
-    if (!window.confirm(t.confirmApproveAll(pendingShown.length, withAlerts))) return;
-    onApproval?.(pendingShown.map((appointment) => appointment.id), "approved");
-    toast.success(t.approvedToast(pendingShown.length));
+
+  // التحديد (لمسؤول العيادة): مواعيد لم يُطلب لها سيارة بعد، ومن المعروض فقط؛ ما تخفيه الفلاتر أو تغيّرت حالته يخرج من التحديد
+  const [selected, setSelected] = useState<Set<string>>(() => new Set());
+  const canSelect = (appointment: ClinicAppointment) => appointment.status === WAITING;
+  useEffect(() => {
+    setSelected((current) => {
+      if (!current.size) return current;
+      const visible = new Set(shown.filter(canSelect).map((appointment) => appointment.id));
+      const next = new Set(Array.from(current).filter((id) => visible.has(id)));
+      return next.size === current.size ? current : next;
+    });
+  }, [shown]);
+  const chosen = lead ? shown.filter((appointment) => canSelect(appointment) && selected.has(appointment.id)) : [];
+  // كل زر على ما يناسبه من المحدد: الموافقة لما ينتظرها (لا تعيد المستبعد)، والاستبعاد لغير المستبعد، والإرجاع للمستبعد
+  const toApprove = chosen.filter(pendingOf);
+  const toExclude = chosen.filter((appointment) => approvalOf(appointment) !== "excluded");
+  const toRestore = chosen.filter((appointment) => approvalOf(appointment) === "excluded");
+  function applyToSelected(list: ClinicAppointment[], approval: Approval) {
+    if (approval === "approved") {
+      const withAlerts = list.filter((appointment) => (alertsOf.get(appointment.id) ?? []).length > 0).length;
+      if (withAlerts && !window.confirm(t.confirmApprove(list.length, withAlerts))) return;
+    }
+    changeApproval(list, approval);
+    setSelected(new Set());
   }
   return (
     <>
@@ -374,7 +396,6 @@ export function ClinicHome({ t, lang, appointments, date, onDateChange, onNew, o
         actions={(
           <>
             {(filtering || table.sort) && <button type="button" onClick={table.clear} className={btn("ghost", "sm")}><X className="h-4 w-4" /> {t.clearFilters}</button>}
-            {lead && pendingShown.length > 0 && <button type="button" onClick={approveShown} className={btn("success", "sm")}><CheckCheck className="h-4 w-4" /> {t.approveAll(pendingShown.length)}</button>}
             <Segmented size="sm" label={t.cols.date} value={scope} onChange={setScope} options={[{ value: "day", label: t.scopeDay }, { value: "all", label: t.scopeAll }]} />
           </>
         )}
@@ -388,8 +409,45 @@ export function ClinicHome({ t, lang, appointments, date, onDateChange, onNew, o
           labels={lang === "en" ? FILTER_LABELS_EN : FILTER_LABELS_AR}
           dir={t.dir}
           empty={<EmptyState icon={filtering ? Filter : UsersRound} title={filtering || rows.length ? t.noResults : t.empty} />}
+          selection={lead ? {
+            selected,
+            onChange: setSelected,
+            canSelect,
+            allLabel: t.selectAll,
+            rowLabel: (a) => t.selectRow(a.patientName),
+            lockedHint: t.selectLocked,
+          } : undefined}
         />
       </Panel>
+
+      {/* شريط المحدد: ثابت أسفل الشاشة ما دام هناك مواعيد محددة */}
+      {chosen.length > 0 && (
+        <>
+          <div aria-hidden="true" className="h-24" />
+          <div className="pointer-events-none fixed inset-x-0 bottom-4 z-[55] flex justify-center px-4">
+            <div role="region" aria-label={t.selectionLabel} className="animate-rise pointer-events-auto flex max-w-full flex-wrap items-center gap-2 rounded-2xl bg-navy-900 p-2 ps-4 text-white shadow-raised ring-1 ring-white/10">
+              <span className="me-1 flex items-center gap-2 text-sm font-semibold">
+                <span className="flex h-6 min-w-6 items-center justify-center rounded-full bg-white/15 px-1.5 text-xs tabular">{chosen.length}</span>
+                {t.selectedCount(chosen.length)}
+              </span>
+              <button type="button" disabled={!toApprove.length} title={t.approveSelectedHint} onClick={() => applyToSelected(toApprove, "approved")} className={btn("success", "sm")}>
+                <Check className="h-3.5 w-3.5" /> {t.approveSelected(toApprove.length)}
+              </button>
+              <button type="button" disabled={!toExclude.length} title={t.excludeSelectedHint} onClick={() => applyToSelected(toExclude, "excluded")} className={btn("secondary", "sm")}>
+                <EyeOff className="h-3.5 w-3.5" /> {t.excludeSelected(toExclude.length)}
+              </button>
+              {toRestore.length > 0 && (
+                <button type="button" title={t.restoreSelectedHint} onClick={() => applyToSelected(toRestore, "pending")} className={btn("secondary", "sm")}>
+                  <Undo2 className="h-3.5 w-3.5" /> {t.restoreSelected(toRestore.length)}
+                </button>
+              )}
+              <button type="button" onClick={() => setSelected(new Set())} aria-label={t.clearSelection} title={t.clearSelection} className="flex h-9 w-9 items-center justify-center rounded-xl text-slate-300 transition hover:bg-white/10 hover:text-white">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+        </>
+      )}
     </>
   );
 }

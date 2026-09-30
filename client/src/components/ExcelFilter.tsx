@@ -125,8 +125,20 @@ export function useColumnFilters<T>(rows: T[], columns: FilterColumn<T>[]) {
 
 export type ColumnFilters<T> = ReturnType<typeof useColumnFilters<T>>;
 
+/** تحديد الصفوف: مربع في أول كل صف، ومربع «تحديد الكل» في العنوان للصفوف المعروضة. Shift مع النقر يحدد مجموعة متتالية. */
+export type RowSelection<T> = {
+  selected: ReadonlySet<string>;
+  onChange: (next: Set<string>) => void;
+  /** الصفوف التي يمكن تحديدها (غيرها بمربع معطّل) */
+  canSelect?: (row: T) => boolean;
+  allLabel: string;
+  rowLabel: (row: T) => string;
+  /** سبب تعطيل المربع */
+  lockedHint?: string;
+};
+
 /** جدول بعناوين أعمدة فيها فلترة Excel. على الشاشة الضيقة يتحرك الجدول أفقيًا. */
-export function FilterTable<T>({ rows, columns, state, rowKey, rowClassName, labels, dir, empty }: {
+export function FilterTable<T>({ rows, columns, state, rowKey, rowClassName, labels, dir, empty, selection }: {
   rows: T[];
   columns: FilterColumn<T>[];
   state: ColumnFilters<T>;
@@ -135,12 +147,62 @@ export function FilterTable<T>({ rows, columns, state, rowKey, rowClassName, lab
   labels: FilterLabels;
   dir: "rtl" | "ltr";
   empty: ReactNode;
+  selection?: RowSelection<T>;
 }) {
+  // آخر صف ضُغط مربعه، لتحديد مجموعة متتالية بـ Shift
+  const lastClicked = useRef<string | null>(null);
+  const selectable = selection ? rows.filter((row) => selection.canSelect?.(row) ?? true) : [];
+  const selectedCount = selection ? selectable.filter((row) => selection.selected.has(rowKey(row))).length : 0;
+  const allSelected = selectable.length > 0 && selectedCount === selectable.length;
+
+  function toggleAll() {
+    if (!selection) return;
+    const next = new Set(selection.selected);
+    for (const row of selectable) {
+      if (allSelected) next.delete(rowKey(row));
+      else next.add(rowKey(row));
+    }
+    selection.onChange(next);
+  }
+
+  function toggleRow(row: T, range: boolean) {
+    if (!selection) return;
+    const key = rowKey(row);
+    const checked = !selection.selected.has(key);
+    const next = new Set(selection.selected);
+    const from = range && lastClicked.current ? rows.findIndex((item) => rowKey(item) === lastClicked.current) : -1;
+    const to = rows.indexOf(row);
+    const span = from >= 0 ? rows.slice(Math.min(from, to), Math.max(from, to) + 1) : [row];
+    for (const item of span) {
+      if (!(selection.canSelect?.(item) ?? true)) continue;
+      if (checked) next.add(rowKey(item));
+      else next.delete(rowKey(item));
+    }
+    lastClicked.current = key;
+    selection.onChange(next);
+  }
+
+  const checkClass = "h-[18px] w-[18px] cursor-pointer accent-brand-600 disabled:cursor-not-allowed disabled:opacity-40";
   return (
     <div className="overflow-x-auto">
       <table className="w-full min-w-max border-collapse text-sm">
         <thead>
           <tr className="border-b border-slate-200 bg-slate-50/80">
+            {selection && (
+              <th scope="col" className="w-11 px-2 py-1.5 align-bottom">
+                <label className="flex h-9 w-9 cursor-pointer items-center justify-center rounded-lg hover:bg-slate-200/60" title={selection.allLabel}>
+                  <input
+                    type="checkbox"
+                    aria-label={selection.allLabel}
+                    checked={allSelected}
+                    disabled={!selectable.length}
+                    ref={(element) => { if (element) element.indeterminate = selectedCount > 0 && !allSelected; }}
+                    onChange={toggleAll}
+                    className={checkClass}
+                  />
+                </label>
+              </th>
+            )}
             {columns.map((column) => (
               <th key={column.key} scope="col" className={cx("px-2 py-1.5 text-start align-bottom font-semibold", column.className)}>
                 {column.filterable === false
@@ -151,15 +213,43 @@ export function FilterTable<T>({ rows, columns, state, rowKey, rowClassName, lab
           </tr>
         </thead>
         <tbody>
-          {rows.map((row) => (
-            <tr key={rowKey(row)} className={cx("border-b border-slate-100 transition-colors last:border-0 hover:bg-slate-50/70", rowClassName?.(row))}>
-              {columns.map((column) => (
-                <td key={column.key} className={cx("px-3.5 py-3 align-top text-slate-700", column.className)}>
-                  {column.cell ? column.cell(row) : column.value(row) || <span className="text-slate-300">—</span>}
-                </td>
-              ))}
-            </tr>
-          ))}
+          {rows.map((row) => {
+            const key = rowKey(row);
+            const canSelect = selection ? selection.canSelect?.(row) ?? true : false;
+            const isSelected = canSelect && Boolean(selection?.selected.has(key));
+            return (
+              <tr
+                key={key}
+                aria-selected={selection ? isSelected : undefined}
+                className={cx(
+                  "border-b border-slate-100 transition-colors last:border-0 hover:bg-slate-50/70 aria-selected:bg-brand-50/70 aria-selected:hover:bg-brand-50",
+                  rowClassName?.(row),
+                )}
+              >
+                {selection && (
+                  <td className="w-11 px-2 py-2 align-top">
+                    <label className={cx("flex h-9 w-9 items-center justify-center rounded-lg", canSelect ? "cursor-pointer hover:bg-slate-200/60" : "cursor-not-allowed")} title={canSelect ? undefined : selection.lockedHint}>
+                      <input
+                        type="checkbox"
+                        aria-label={selection.rowLabel(row)}
+                        checked={isSelected}
+                        disabled={!canSelect}
+                        // النقر لا التغيير: حتى نعرف هل ضُغط Shift
+                        onClick={(event) => toggleRow(row, event.shiftKey)}
+                        onChange={() => {}}
+                        className={checkClass}
+                      />
+                    </label>
+                  </td>
+                )}
+                {columns.map((column) => (
+                  <td key={column.key} className={cx("px-3.5 py-3 align-top text-slate-700", column.className)}>
+                    {column.cell ? column.cell(row) : column.value(row) || <span className="text-slate-300">—</span>}
+                  </td>
+                ))}
+              </tr>
+            );
+          })}
         </tbody>
       </table>
       {!rows.length && empty}
