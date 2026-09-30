@@ -6,8 +6,10 @@ declare(strict_types=1);
  * لا يُطبع أي شيء عند طلب هذا الملف مباشرة.
  */
 
-const ROLES = ['admin', 'clinic', 'buildingSupervisor', 'buildingLead', 'fleetSupervisor', 'driver'];
-const OFFICE_ROLES = ['admin', 'clinic', 'buildingSupervisor', 'buildingLead', 'fleetSupervisor'];
+const ROLES = ['admin', 'clinic', 'clinicLead', 'buildingSupervisor', 'buildingLead', 'fleetSupervisor', 'driver'];
+const OFFICE_ROLES = ['admin', 'clinic', 'clinicLead', 'buildingSupervisor', 'buildingLead', 'fleetSupervisor'];
+/** العيادة ومسؤولها (يوافق على المواعيد قبل ظهورها لمشرف المبنى) */
+const CLINIC_ROLES = ['clinic', 'clinicLead'];
 /** مشرف المبنى، ومسؤول مشرفي المباني (نفس الصلاحيات، ويتابع كل الطلبات لا طلباته فقط) */
 const BUILDING_ROLES = ['buildingSupervisor', 'buildingLead'];
 /** خروج تلقائي بعد ساعة بلا نشاط */

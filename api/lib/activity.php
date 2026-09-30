@@ -9,6 +9,7 @@ declare(strict_types=1);
 const ACTIVITY_ROLE_LABELS = [
     'admin' => 'مدير النظام',
     'clinic' => 'العيادة',
+    'clinicLead' => 'مسؤول العيادة',
     'buildingSupervisor' => 'مشرف المبنى',
     'buildingLead' => 'مسؤول مشرفي المباني',
     'fleetSupervisor' => 'مشرف السيارات',
@@ -154,12 +155,22 @@ function describe_write(PDO $pdo, string $col, string $id, ?array $before, ?arra
             if (($after['returnedSelf'] ?? null) === true && ($before['returnedSelf'] ?? null) !== true) {
                 return ['appointment', 'appointment.self_return', "عودة $who إلى المجمع بنفسه من {$details['destination']} ($when) · بلا سيارة عودة", $details];
             }
+            // موافقة مسؤول العيادة أو استبعاده أو إرجاعه (بلا تعديل في بيانات الموعد)
+            $from = $before['approval'] ?? 'approved';
+            $to = $after['approval'] ?? 'approved';
+            $contentChanged = (bool)array_intersect($changed, APPOINTMENT_CONTENT_FIELDS);
+            if ($from !== $to && !$contentChanged) {
+                if ($to === 'approved') return ['appointment', 'appointment.approve', "موافقة مسؤول العيادة على موعد $who ({$details['destination']}، $when)", $details];
+                if ($to === 'excluded') return ['appointment', 'appointment.exclude', "استبعاد موعد $who ({$details['destination']}، $when) · بلا حذف", $details];
+                return ['appointment', 'appointment.restore', ($from === 'excluded' ? 'إرجاع موعد مستبعد: ' : 'إعادة موعد إلى انتظار الموافقة: ') . "$who ({$details['destination']}، $when)", $details];
+            }
             // تغيّر الحالة وحده نتيجة طلب السيارة أو استلام المريض، ويُسجَّل مع الطلب نفسه
             if (!array_diff($changed, ['status'])) return null;
             $changes = field_changes($before, $after, APPOINTMENT_FIELD_LABELS);
             if (!$changes) return null;
             $details['changes'] = changes_text($changes);
-            return ['appointment', 'appointment.update', "تعديل موعد $who: " . changes_text($changes), $details];
+            $reset = $from === 'approved' && $to === 'pending' ? ' · يعود إلى انتظار موافقة مسؤول العيادة' : '';
+            return ['appointment', 'appointment.update', "تعديل موعد $who: " . changes_text($changes) . $reset, $details];
 
         case 'requests':
             $request = $after ?? $before;

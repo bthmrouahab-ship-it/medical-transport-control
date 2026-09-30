@@ -43,7 +43,23 @@ export type ClinicAppointment = {
   returnedSelf?: boolean;
   returnedSelfBy?: string;
   returnedSelfAt?: string;
+  /**
+   * موافقة مسؤول العيادة: لا يظهر الموعد لمشرف المبنى إلا بعد موافقته (أو إن أضافه بنفسه).
+   * بلا قيمة: موعد قديم قبل هذه الميزة، ويُعتبر موافقًا عليه.
+   */
+  approval?: Approval;
+  approvedBy?: string;
+  approvedAt?: string;
+  /** استبعاد الموعد بلا حذف (يمكن إرجاعه): من استبعده ومتى */
+  excludedBy?: string;
+  excludedAt?: string;
 };
+
+/** بانتظار موافقة مسؤول العيادة، أو موافق عليه، أو مستبعد (بلا حذف). */
+export type Approval = "pending" | "approved" | "excluded";
+export const approvalOf = (appointment: Pick<ClinicAppointment, "approval">): Approval => appointment.approval ?? "approved";
+/** يظهر لمشرف المبنى: موافق عليه (أو موعد قديم بلا حالة موافقة) */
+export const isApproved = (appointment: Pick<ClinicAppointment, "approval">) => approvalOf(appointment) === "approved";
 
 export type Gender = "ذكر" | "أنثى";
 export const GENDERS: Gender[] = ["ذكر", "أنثى"];
@@ -324,6 +340,9 @@ export function migrateAppointment(value: unknown, index = 0): ClinicAppointment
     ...(raw.returnedSelf === true
       ? { returnedSelf: true, returnedSelfBy: toText(raw.returnedSelfBy) || undefined, returnedSelfAt: toText(raw.returnedSelfAt) || undefined }
       : {}),
+    ...(raw.approval === "pending" ? { approval: "pending" as const } : {}),
+    ...(raw.approval === "approved" ? { approval: "approved" as const, approvedBy: toText(raw.approvedBy) || undefined, approvedAt: toText(raw.approvedAt) || undefined } : {}),
+    ...(raw.approval === "excluded" ? { approval: "excluded" as const, excludedBy: toText(raw.excludedBy) || undefined, excludedAt: toText(raw.excludedAt) || undefined } : {}),
   };
 }
 
@@ -528,6 +547,34 @@ const guestKey = (appointment: Pick<ClinicAppointment, "patientName" | "building
 
 /** نفس الضيف: الاسم والمبنى والشقة. */
 export const sameGuest = (a: ClinicAppointment, b: ClinicAppointment) => guestKey(a) === guestKey(b);
+
+/** موعدان لنفس الضيف بفارق أقل من هذا يُعتبران في نفس الوقت (لا يمكن حضورهما معًا). */
+export const CONFLICT_MINUTES = 30;
+const clockMinutes = (time: string) => {
+  const [hours, minutes] = time.split(":").map(Number);
+  return hours * 60 + minutes;
+};
+const sameHospital = (a: ClinicAppointment, b: ClinicAppointment) => (a.hospitalId && b.hospitalId
+  ? a.hospitalId === b.hospitalId
+  : a.clinic.trim().replace(/\s+/g, " ").toLowerCase() === b.clinic.trim().replace(/\s+/g, " ").toLowerCase());
+
+/**
+ * تنبيهات مسؤول العيادة لموعد: للضيف نفسه في نفس اليوم موعد آخر في نفس الوقت (أو بفارق أقل من CONFLICT_MINUTES)،
+ * أو موعد آخر في نفس المستشفى في وقت مختلف (قد يكون مكررًا). الملغي والمستبعد لا يُحسبان.
+ */
+export type GuestAlert = { kind: "sameTime" | "sameHospital"; other: ClinicAppointment; gap: number };
+export function guestAlerts(appointment: ClinicAppointment, appointments: ClinicAppointment[]): GuestAlert[] {
+  const counts = (item: ClinicAppointment) => item.status !== "ملغي" && approvalOf(item) !== "excluded" && !isNonMedical(item);
+  if (!counts(appointment)) return [];
+  return appointments
+    .filter((other) => other.id !== appointment.id && other.appointmentDate === appointment.appointmentDate && counts(other) && sameGuest(other, appointment))
+    .flatMap((other): GuestAlert[] => {
+      const gap = Math.abs(clockMinutes(other.appointmentAt) - clockMinutes(appointment.appointmentAt));
+      if (gap < CONFLICT_MINUTES) return [{ kind: "sameTime", other, gap }];
+      return sameHospital(other, appointment) ? [{ kind: "sameHospital", other, gap }] : [];
+    })
+    .sort((a, b) => a.other.appointmentAt.localeCompare(b.other.appointmentAt));
+}
 
 /** مواعيد الضيف الأخرى في نفس اليوم (غير الملغاة)، بترتيب الوقت. */
 export function sameDayAppointments(appointment: ClinicAppointment, appointments: ClinicAppointment[]) {

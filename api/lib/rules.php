@@ -9,7 +9,12 @@ declare(strict_types=1);
 const APPOINTMENT_STATUSES = ['بانتظار طلب السيارة', 'تم طلب السيارة', 'تم استلام المريض', 'طلب عودة', 'مكتملة', 'ملغي'];
 const APPOINTMENT_FIELDS = ['id', 'patientName', 'clinic', 'buildingNumber', 'apartmentNumber', 'mobile', 'appointmentDate',
     'appointmentAt', 'hospitalId', 'category', 'kind', 'assistance', 'status', 'cancelReason', 'cancelledBy', 'cancelledAt',
-    'gender', 'cancer', 'returnedSelf', 'returnedSelfBy', 'returnedSelfAt', '_o'];
+    'gender', 'cancer', 'returnedSelf', 'returnedSelfBy', 'returnedSelfAt', 'approval', 'approvedBy', 'approvedAt', 'excludedBy', 'excludedAt', '_o'];
+/** موافقة مسؤول العيادة: بانتظار الموافقة، أو موافق عليه (باسمه ووقته)، أو مستبعد بلا حذف (باسمه ووقته) */
+const APPROVAL_FIELDS = ['approval', 'approvedBy', 'approvedAt', 'excludedBy', 'excludedAt'];
+/** بيانات الموعد نفسه: تعديل العيادة لها يعيد الموعد إلى انتظار موافقة مسؤولها */
+const APPOINTMENT_CONTENT_FIELDS = ['patientName', 'clinic', 'buildingNumber', 'apartmentNumber', 'mobile', 'appointmentDate', 'appointmentAt',
+    'hospitalId', 'category', 'kind', 'assistance', 'gender', 'cancer'];
 /** الضيف عاد إلى المجمع بنفسه بلا سيارة عودة (يسجّله مشرف المبنى باسمه ووقته) */
 const SELF_RETURN_FIELDS = ['returnedSelf', 'returnedSelfBy', 'returnedSelfAt'];
 /** خانات إلغاء الموعد (السبب إلزامي، ومن ألغاه، ومتى) */
@@ -118,6 +123,30 @@ function valid_check_replies(array $user, array $before, array $after, array $ch
     return true;
 }
 
+/** حالة الموافقة (الموعد القديم بلا حالة يُعتبر موافقًا عليه) */
+function approval_of(array $appointment): string
+{
+    return (string)($appointment['approval'] ?? 'approved');
+}
+
+/** الموافقة باسم ووقت، والاستبعاد باسم ووقت، وبانتظار الموافقة بلا أسماء. */
+function valid_approval(array $data): bool
+{
+    $keys = array_keys($data);
+    $approvedKeys = ['approvedBy', 'approvedAt'];
+    $excludedKeys = ['excludedBy', 'excludedAt'];
+    switch ($data['approval'] ?? null) {
+        case null:
+        case 'pending':
+            return !array_intersect($keys, [...$approvedKeys, ...$excludedKeys]);
+        case 'approved':
+            return is_text($data['approvedBy'] ?? null, 120) && is_iso($data['approvedAt'] ?? null) && !array_intersect($keys, $excludedKeys);
+        case 'excluded':
+            return is_text($data['excludedBy'] ?? null, 120) && is_iso($data['excludedAt'] ?? null) && !array_intersect($keys, $approvedKeys);
+    }
+    return false;
+}
+
 function valid_appointment(array $data, string $id): bool
 {
     return only(array_keys($data), APPOINTMENT_FIELDS)
@@ -133,7 +162,8 @@ function valid_appointment(array $data, string $id): bool
         && is_array($data['assistance'] ?? []) && count($data['assistance'] ?? []) <= 4
         && in_array($data['gender'] ?? 'ذكر', ['ذكر', 'أنثى'], true)
         && is_bool($data['cancer'] ?? false)
-        && is_bool($data['returnedSelf'] ?? false);
+        && is_bool($data['returnedSelf'] ?? false)
+        && valid_approval($data);
 }
 
 /**
@@ -149,17 +179,44 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
 
     switch ($col) {
         case 'appointments':
-            if ($after === null) return has_role($user, ['admin', 'clinic']) ? null : $denied;
+            if ($after === null) return has_role($user, ['admin', ...CLINIC_ROLES]) ? null : $denied;
             if ($before === null) {
                 if (!valid_appointment($after, $id)) return 'بيانات الموعد غير صالحة';
-                if (has_role($user, ['admin', 'clinic'])) return null;
-                // مشرف السيارات يضيف رحلات غير طبية فقط
-                return ($role === 'fleetSupervisor' && ($after['category'] ?? '') === 'غير طبية') ? null : $denied;
+                if ($role === 'admin') return null;
+                // موعد العيادة ينتظر موافقة مسؤولها، وما يضيفه المسؤول بنفسه موافق عليه باسمه
+                if ($role === 'clinic') return ($after['approval'] ?? null) === 'pending' ? null : $denied;
+                if ($role === 'clinicLead') {
+                    $approval = $after['approval'] ?? null;
+                    return $approval === 'pending' || ($approval === 'approved' && ($after['approvedBy'] ?? null) === $user['display_name']) ? null : $denied;
+                }
+                // مشرف السيارات يضيف رحلات غير طبية فقط (بلا موافقة العيادة)
+                return ($role === 'fleetSupervisor' && ($after['category'] ?? '') === 'غير طبية' && !array_key_exists('approval', $after)) ? null : $denied;
             }
-            if (has_role($user, ['admin', 'clinic'])) {
-                return only($changed, APPOINTMENT_FIELDS) && !in_array('id', $changed, true)
+            if (!valid_approval($after)) return 'بيانات الموعد غير صالحة';
+            if (has_role($user, ['admin', ...CLINIC_ROLES])) {
+                $valid = only($changed, APPOINTMENT_FIELDS) && !in_array('id', $changed, true)
                     && in_array($after['status'] ?? null, APPOINTMENT_STATUSES, true)
-                    && in_array($after['gender'] ?? 'ذكر', ['ذكر', 'أنثى'], true) && is_bool($after['cancer'] ?? false) ? null : $denied;
+                    && in_array($after['gender'] ?? 'ذكر', ['ذكر', 'أنثى'], true) && is_bool($after['cancer'] ?? false);
+                if (!$valid) return $denied;
+                if ($role === 'admin') return null;
+                $approvalChanged = (bool)array_intersect($changed, APPROVAL_FIELDS);
+                if ($role === 'clinic') {
+                    // العيادة لا توافق ولا تستبعد. الموعد المستبعد يبقى مستبعدًا، وتعديل غيره يعيده إلى انتظار الموافقة
+                    if (approval_of($before) === 'excluded') return $approvalChanged ? $denied : null;
+                    if ($approvalChanged && ($after['approval'] ?? null) !== 'pending') return $denied;
+                    if (array_intersect($changed, APPOINTMENT_CONTENT_FIELDS) && ($after['approval'] ?? null) !== 'pending') {
+                        return 'تعديل الموعد يعيده إلى انتظار موافقة مسؤول العيادة';
+                    }
+                    return null;
+                }
+                // مسؤول العيادة: الموافقة والاستبعاد والإرجاع باسمه، لموعد لم يُطلب له سيارة بعد
+                if ($approvalChanged) {
+                    if (($before['status'] ?? null) !== 'بانتظار طلب السيارة' || ($after['status'] ?? null) !== 'بانتظار طلب السيارة') return $denied;
+                    $to = $after['approval'] ?? null;
+                    if ($to === 'approved' && ($after['approvedBy'] ?? null) !== $user['display_name']) return $denied;
+                    if ($to === 'excluded' && ($after['excludedBy'] ?? null) !== $user['display_name']) return $denied;
+                }
+                return null;
             }
             // مشرف السيارات: عند إنهاء رحلة عالقة (لم يُسجَّل استلام ضيفها) تتقدم حالة الموعد كما عند الاستلام فقط
             if ($role === 'fleetSupervisor') {
@@ -200,6 +257,11 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
                 $owner = $after['requestedBy'] ?? null;
                 if (has_role($user, BUILDING_ROLES) && $owner !== (string)$user['id']) return 'بيانات الطلب غير صالحة';
                 if ($role === 'fleetSupervisor' && $owner !== null) return 'بيانات الطلب غير صالحة';
+                // مشرف المبنى يطلب سيارة لموعد وافق عليه مسؤول العيادة فقط
+                if (has_role($user, BUILDING_ROLES) && $appointmentOf) {
+                    $linked = $appointmentOf((string)($after['appointmentId'] ?? ''));
+                    if ($linked !== null && approval_of($linked) !== 'approved') return 'لم يوافق مسؤول العيادة على هذا الموعد بعد';
+                }
                 // مشرف السيارات يرى المواعيد الطبية ولا يطلب لها سيارة (يطلبها مشرف المبنى)، بل يضيف الرحلات غير الطبية.
                 // الموعد غير المحفوظ بعد هو رحلة غير طبية يضيفها معه في نفس اللحظة
                 if ($role === 'fleetSupervisor' && $appointmentOf) {
