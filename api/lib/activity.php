@@ -268,6 +268,11 @@ function describe_write(PDO $pdo, string $col, string $id, ?array $before, ?arra
                 return ['vehicle', 'vehicle.availability', !empty($after['available']) ? "إتاحة السيارة $plate للخدمة" : "إيقاف السيارة $plate عن الخدمة", $details];
             }
             $withRole = fn(?array $doc) => $doc ? ['busRole' => BUS_ROLE_LABELS[$doc['busRole'] ?? ''] ?? ''] + $doc : null;
+            if ($changed === ['fullCapacity']) {
+                return ['vehicle', 'vehicle.capacity', !empty($after['fullCapacity'])
+                    ? "تشغيل السيارة $plate بطاقتها الكاملة (4 أشخاص)"
+                    : "إعادة السيارة $plate إلى 3 أشخاص", $details];
+            }
             if ($changed === ['busRole']) {
                 $label = BUS_ROLE_LABELS[$after['busRole'] ?? ''] ?? '';
                 return ['vehicle', 'vehicle.bus_role', $label ? "تخصيص الباص $plate: $label" : "إلغاء تخصيص الباص $plate (باص عادي)", $details];

@@ -62,8 +62,8 @@ describe("persons in the car", () => {
     const special = guest("W", "10:00", [ESCORT, NURSE], { kind: "احتياجات خاصة" });
     const van = car("VAN", "احتياجات خاصة");
     expect(vehicleRestriction(van, { appointments: [special] }, { now: at(10) })).toBeNull();
-    expect(vehicleRestriction(van, { appointments: [special, guest("X", "10:00", [], { kind: "احتياجات خاصة" })] }, { now: at(10) })).toBe("تتسع لشخصين فقط");
-    expect(vehicleRestriction(car("A"), { appointments: [guest("A", "10:00", [ESCORT]), guest("B", "10:00", [ESCORT])] }, { now: at(10) })).toBe("تتسع لـ 3 أشخاص فقط");
+    expect(vehicleRestriction(van, { appointments: [special, guest("X", "10:00", [], { kind: "احتياجات خاصة" })] }, { now: at(10) })).toBe("ضيف احتياجات خاصة واحد فقط في السيارة");
+    expect(vehicleRestriction(car("A"), { appointments: [guest("A", "10:00", [ESCORT]), guest("B", "10:00", [ESCORT])] }, { now: at(10) })).toBe("تتسع لـ 3 أشخاص فقط (أو 4 بطاقتها الكاملة)");
   });
 
   it("splits a bus group across cars by persons when the bus is taken", () => {

@@ -240,9 +240,10 @@ describe("medical transport rules", () => {
     const groups = buildTripGroups(trips.map((item) => ({ appointment: item, direction: "ذهاب" as const })));
     expect(groups[0].appointmentIds).toHaveLength(3);
     expect(groups).toHaveLength(1);
+    // لا يُجمع ضيفا احتياجات خاصة في سيارة واحدة
     const special = buildTripGroups([make("S1", "09:00", { kind: "احتياجات خاصة" }), make("S2", "09:05", { kind: "احتياجات خاصة" }), make("S3", "09:10", { kind: "احتياجات خاصة" })]
       .map((item) => ({ appointment: item, direction: "ذهاب" as const })));
-    expect(Math.max(...special.map((group) => group.appointmentIds.length))).toBe(2);
+    expect(special).toHaveLength(0);
     const mixed = buildTripGroups([{ appointment: make("X", "09:00"), direction: "ذهاب" }, { appointment: make("Y", "09:05"), direction: "عودة" }]);
     expect(mixed).toHaveLength(0);
   });

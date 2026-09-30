@@ -29,7 +29,7 @@ const REQUEST_FIELDS = ['id', 'appointmentId', 'vehiclePlate', 'driver', 'direct
     'fromAppointmentId', 'nurseOnly', 'driverArrivedAt', 'arrivalGps', 'pickupGps', ...CHECK_FIELDS, '_o'];
 /** خانات مرحلة الطريق إلى الوجهة (تُكتب عند استلام المريض وعند الوصول) */
 const TRIP_FIELDS = ['pickedUpAt', 'etaAt', 'destLat', 'destLng', 'arrivedAt', 'arrivalSource'];
-const VEHICLE_FIELDS = ['plate', 'driver', 'phone', 'kind', 'available', 'busRole', '_o'];
+const VEHICLE_FIELDS = ['plate', 'driver', 'phone', 'kind', 'available', 'busRole', 'fullCapacity', '_o'];
 const VEHICLE_KINDS = ['سيدان', 'احتياجات خاصة', 'باص'];
 /** تخصيص الباص: باص المجمع، أو باص الرحلات غير الطبية، أو باص العيادة (نفس القيم في shared/transport.ts) */
 const BUS_ROLE_VALUES = ['shuttle', 'nonMedical', 'clinic'];
@@ -139,6 +139,13 @@ function follows_request(array $user, ?array $request): bool
     if ($user['role'] === 'buildingLead') return true;
     $owner = $request['requestedBy'] ?? null;
     return $owner === null || $owner === (string)$user['id'];
+}
+
+/** الطاقة الكاملة (4 أشخاص بدل 3) للسيدان فقط، وقيمتها true/false. */
+function valid_full_capacity(array $vehicle): bool
+{
+    return !array_key_exists('fullCapacity', $vehicle)
+        || (is_bool($vehicle['fullCapacity']) && ($vehicle['kind'] ?? null) === 'سيدان');
 }
 
 /** تخصيص الباص صالح: غير موجود، أو قيمة معروفة لسيارة من نوع باص. */
@@ -406,11 +413,13 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
             if ($after === null) return $role === 'admin' ? null : $denied;
             if ($role === 'admin') {
                 return only(array_keys($after), VEHICLE_FIELDS) && ($after['plate'] ?? null) === $id
-                    && in_array($after['kind'] ?? null, VEHICLE_KINDS, true) && valid_bus_role($after) ? null : 'بيانات السيارة غير صالحة';
+                    && in_array($after['kind'] ?? null, VEHICLE_KINDS, true) && valid_bus_role($after) && valid_full_capacity($after) ? null : 'بيانات السيارة غير صالحة';
             }
-            // مشرف السيارات يغيّر إتاحة السيارة، وتخصيص الباص (باص المجمع أو الرحلات غير الطبية أو العيادة)
+            // مشرف السيارات يغيّر إتاحة السيارة، وتخصيص الباص (باص المجمع أو الرحلات غير الطبية أو العيادة)،
+            // وتشغيل السيدان بطاقتها الكاملة (4 أشخاص)
             if ($role === 'fleetSupervisor' && $before !== null) {
-                return only($changed, ['available', 'busRole']) && is_bool($after['available'] ?? null) && valid_bus_role($after) ? null : $denied;
+                return only($changed, ['available', 'busRole', 'fullCapacity']) && is_bool($after['available'] ?? null)
+                    && valid_bus_role($after) && valid_full_capacity($after) ? null : $denied;
             }
             return $denied;
 
