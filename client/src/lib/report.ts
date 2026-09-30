@@ -270,7 +270,7 @@ export function reportHtml(report: Report) {
 <main>
   ${report.kpis.length ? `<div class="kpis">${report.kpis.map((kpi) => `<div class="kpi"><span>${escapeHtml(kpi.label)}</span><b>${escapeHtml(kpi.value)}</b></div>`).join("")}</div>` : ""}
   ${report.sections.map(sectionHtml).join("\n")}
-  <footer>سيارات مجمع الثمامة · الهلال الأحمر القطري</footer>
+  <footer>سيارات مجمع الثمامة</footer>
 </main>
 </body>
 </html>`;
