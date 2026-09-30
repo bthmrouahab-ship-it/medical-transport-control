@@ -95,7 +95,7 @@ export function useArrivalAlerts({ arrivals, appointments, hospitals, driverOf, 
       toast.success(title, { description: body, duration: 15000 });
       if (document.hidden && deviceNotificationsOn()) {
         try {
-          new Notification(title, { body, icon: "/favicon.svg", tag: `arrival-${plate}` });
+          new Notification(title, { body, icon: "/icon-192.png", tag: `arrival-${plate}` });
         } catch {
           /* المتصفح لا يدعم التنبيه هنا */
         }
@@ -115,7 +115,7 @@ export function useArrivalAlerts({ arrivals, appointments, hospitals, driverOf, 
       toast.info(title, { description: body, duration: 20000 });
       if (document.hidden && deviceNotificationsOn()) {
         try {
-          new Notification(title, { body, icon: "/favicon.svg", tag: "arrival-missed" });
+          new Notification(title, { body, icon: "/icon-192.png", tag: "arrival-missed" });
         } catch {
           /* المتصفح لا يدعم التنبيه هنا */
         }
@@ -127,7 +127,7 @@ export function useArrivalAlerts({ arrivals, appointments, hospitals, driverOf, 
 function notifyDevice(title: string, body: string, tag: string) {
   if (!document.hidden || !deviceNotificationsOn()) return;
   try {
-    new Notification(title, { body, icon: "/favicon.svg", tag });
+    new Notification(title, { body, icon: "/icon-192.png", tag });
   } catch {
     /* المتصفح لا يدعم التنبيه هنا */
   }

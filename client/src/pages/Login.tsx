@@ -101,7 +101,7 @@ export default function Login() {
           <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,rgba(38,75,120,0.55),transparent_60%),radial-gradient(ellipse_at_bottom_left,rgba(218,41,28,0.16),transparent_55%)]" />
           <div className="pointer-events-none absolute inset-0 opacity-[0.06] [background-image:linear-gradient(rgba(255,255,255,.7)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,.7)_1px,transparent_1px)] [background-size:40px_40px] [mask-image:radial-gradient(ellipse_at_center,black,transparent_75%)]" />
 
-          <div className="relative"><BrandLogo tone="dark" /></div>
+          <div className="relative"><BrandLogo /></div>
 
           <div className="relative mt-auto pt-10">
             <p className="text-end text-[13px] font-medium tracking-wide text-slate-300" dir="ltr">Al Thumama Complex Transport</p>

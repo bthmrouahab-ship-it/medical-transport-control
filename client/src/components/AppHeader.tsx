@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { KeyRound, LogOut } from "lucide-react";
-import { Crescent } from "./BrandLogo";
+import { LogoMark } from "./BrandLogo";
 
 /** رأس موحّد لكل الصفحات: شريط داكن فيه الشعار واسم النظام والدور، ثم أزرار الحساب. */
 export default function AppHeader({ role, name, actions, onChangePassword, onLogout, labels, children }: {
@@ -24,7 +24,7 @@ export default function AppHeader({ role, name, actions, onChangePassword, onLog
       <div className="h-[3px] bg-brand-600" />
       <div className="mx-auto flex h-16 max-w-7xl items-center justify-between gap-3 px-4 lg:px-8">
         <div className="flex min-w-0 items-center gap-3">
-          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white shadow-sm"><Crescent className="h-7 w-7" /></div>
+          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-white p-0.5 shadow-sm"><LogoMark className="h-full w-full" /></div>
           <div className="min-w-0 leading-tight">
             <p className="truncate text-[15px] font-semibold">{text.app}</p>
             <p className="mt-0.5 truncate text-xs text-slate-300">
