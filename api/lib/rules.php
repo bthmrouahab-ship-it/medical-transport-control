@@ -9,12 +9,13 @@ declare(strict_types=1);
 const APPOINTMENT_STATUSES = ['بانتظار طلب السيارة', 'تم طلب السيارة', 'تم استلام المريض', 'طلب عودة', 'مكتملة', 'ملغي'];
 const APPOINTMENT_FIELDS = ['id', 'guestId', 'patientName', 'clinic', 'buildingNumber', 'apartmentNumber', 'mobile', 'appointmentDate',
     'appointmentAt', 'hospitalId', 'category', 'kind', 'assistance', 'status', 'cancelReason', 'cancelledBy', 'cancelledAt',
-    'gender', 'cancer', 'returnedSelf', 'returnedSelfBy', 'returnedSelfAt', 'approval', 'approvedBy', 'approvedAt', 'excludedBy', 'excludedAt', '_o'];
+    'gender', 'cancer', 'returnedSelf', 'returnedSelfBy', 'returnedSelfAt', 'approval', 'approvedBy', 'approvedAt', 'excludedBy', 'excludedAt',
+    'returnOnly', '_o'];
 /** موافقة مسؤول العيادة: بانتظار الموافقة، أو موافق عليه (باسمه ووقته)، أو مستبعد بلا حذف (باسمه ووقته) */
 const APPROVAL_FIELDS = ['approval', 'approvedBy', 'approvedAt', 'excludedBy', 'excludedAt'];
 /** بيانات الموعد نفسه: تعديل العيادة لها يعيد الموعد إلى انتظار موافقة مسؤولها */
 const APPOINTMENT_CONTENT_FIELDS = ['guestId', 'patientName', 'clinic', 'buildingNumber', 'apartmentNumber', 'mobile', 'appointmentDate', 'appointmentAt',
-    'hospitalId', 'category', 'kind', 'assistance', 'gender', 'cancer'];
+    'hospitalId', 'category', 'kind', 'assistance', 'gender', 'cancer', 'returnOnly'];
 /** الضيف عاد إلى المجمع بنفسه بلا سيارة عودة (يسجّله مشرف المبنى باسمه ووقته) */
 const SELF_RETURN_FIELDS = ['returnedSelf', 'returnedSelfBy', 'returnedSelfAt'];
 /** خانات إلغاء الموعد (السبب إلزامي، ومن ألغاه، ومتى) */
@@ -235,6 +236,8 @@ function valid_appointment(array $data, string $id): bool
         && in_array($data['gender'] ?? 'ذكر', ['ذكر', 'أنثى'], true)
         && is_bool($data['cancer'] ?? false)
         && is_bool($data['returnedSelf'] ?? false)
+        // طلب عودة فقط من المستشفى: true أو بلا الخانة
+        && ($data['returnOnly'] ?? true) === true
         && valid_approval($data);
 }
 
@@ -271,7 +274,8 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
             if (has_role($user, ['admin', ...CLINIC_ROLES])) {
                 $valid = only($changed, APPOINTMENT_FIELDS) && !in_array('id', $changed, true)
                     && in_array($after['status'] ?? null, APPOINTMENT_STATUSES, true)
-                    && in_array($after['gender'] ?? 'ذكر', ['ذكر', 'أنثى'], true) && is_bool($after['cancer'] ?? false);
+                    && in_array($after['gender'] ?? 'ذكر', ['ذكر', 'أنثى'], true) && is_bool($after['cancer'] ?? false)
+                    && ($after['returnOnly'] ?? true) === true;
                 if (!$valid) return $denied;
                 if ($role === 'admin') return null;
                 // تغيير الضيف أو الوجهة: من قائمة المجمع ودليل المستشفيات
@@ -311,10 +315,11 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
                         && ($after['cancelledBy'] ?? null) === $user['display_name']
                         && is_text($after['cancelledAt'] ?? null, 40) && strtotime($after['cancelledAt']) !== false ? null : $denied;
                 }
-                // الضيف عاد بنفسه: ينتهي الموعد بعد ذهابه، باسم المشرف ووقته
+                // الضيف عاد بنفسه: ينتهي الموعد بعد ذهابه (أو طلب العودة فقط قبل طلب سيارته)، باسم المشرف ووقته
                 if (array_intersect($changed, SELF_RETURN_FIELDS)) {
+                    $waitingReturn = ($before['returnOnly'] ?? null) === true && ($before['status'] ?? null) === 'بانتظار طلب السيارة';
                     return only($changed, ['status', ...SELF_RETURN_FIELDS])
-                        && in_array($before['status'] ?? null, ['تم استلام المريض', 'تم طلب السيارة'], true)
+                        && (in_array($before['status'] ?? null, ['تم استلام المريض', 'تم طلب السيارة'], true) || $waitingReturn)
                         && ($after['status'] ?? null) === 'مكتملة' && ($after['returnedSelf'] ?? null) === true
                         && ($after['returnedSelfBy'] ?? null) === $user['display_name'] && is_iso($after['returnedSelfAt'] ?? null) ? null : $denied;
                 }
@@ -338,6 +343,10 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
                 if (has_role($user, BUILDING_ROLES) && $docOf) {
                     $linked = $docOf('appointments', (string)($after['appointmentId'] ?? ''));
                     if ($linked !== null && approval_of($linked) !== 'approved') return 'لم يوافق مسؤول العيادة على هذا الموعد بعد';
+                    // طلب العودة فقط من المستشفى: سيارة عودة فقط (لا ذهاب ولا نقل إليه)
+                    if ($linked !== null && ($linked['returnOnly'] ?? null) === true && ($after['direction'] ?? null) !== 'عودة') {
+                        return 'هذا طلب عودة فقط من المستشفى: يُطلب له سيارة عودة';
+                    }
                 }
                 // مشرف السيارات يرى المواعيد الطبية ولا يطلب لها سيارة (يطلبها مشرف المبنى)، بل يضيف الرحلات غير الطبية.
                 // الموعد غير المحفوظ بعد هو رحلة غير طبية يضيفها معه في نفس اللحظة

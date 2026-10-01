@@ -18,6 +18,7 @@ import {
   EyeOff,
   FileSpreadsheet,
   Filter,
+  House,
   Languages,
   Ribbon,
   Pencil,
@@ -35,6 +36,7 @@ import {
   GENDERS,
   approvalOf,
   guestAlerts,
+  isReturnOnly,
   localDateString,
   parseImportedAppointments,
   REQUEST_GRACE_MINUTES,
@@ -63,7 +65,8 @@ export function ClinicHome({ t, lang, appointments, date, onDateChange, onNew, o
   appointments: ClinicAppointment[];
   date: string;
   onDateChange: (date: string) => void;
-  onNew: () => void;
+  /** returnOnly: طلب عودة فقط من المستشفى بنفس نموذج الموعد */
+  onNew: (returnOnly?: boolean) => void;
   onEdit: (appointment: ClinicAppointment) => void;
   onDelete: (appointment: ClinicAppointment) => void;
   onImport: (appointments: ClinicAppointment[]) => void;
@@ -122,8 +125,10 @@ export function ClinicHome({ t, lang, appointments, date, onDateChange, onNew, o
         "احتياجات الضيف": "يحتاج مرافق، يحتاج Nurse، كرسي متحرك",
         "الجنس": "ذكر",
         "حالة سرطان": "لا",
+        // نعم: طلب عودة فقط من المستشفى («وقت الموعد» وقت العودة)
+        "عودة فقط": "لا",
       }]);
-      worksheet["!cols"] = [{ wch: 22 }, { wch: 28 }, { wch: 14 }, { wch: 14 }, { wch: 16 }, { wch: 14 }, { wch: 14 }, { wch: 18 }, { wch: 30 }, { wch: 10 }, { wch: 12 }];
+      worksheet["!cols"] = [{ wch: 22 }, { wch: 28 }, { wch: 14 }, { wch: 14 }, { wch: 16 }, { wch: 14 }, { wch: 14 }, { wch: 18 }, { wch: 30 }, { wch: 10 }, { wch: 12 }, { wch: 10 }];
       const workbook = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(workbook, worksheet, "المواعيد");
       XLSX.writeFile(workbook, "appointments-template.xlsx");
@@ -241,6 +246,15 @@ export function ClinicHome({ t, lang, appointments, date, onDateChange, onNew, o
         </div>
       ),
     },
+    {
+      // موعد (ذهاب وعودة)، أو طلب عودة فقط من المستشفى
+      key: "type",
+      label: t.cols.type,
+      value: (a) => t.requestType(isReturnOnly(a)),
+      cell: (a) => (isReturnOnly(a)
+        ? <span className="flex flex-col gap-1"><Badge tone="cyan" icon={House}>{t.returnOnly}</Badge><span className="max-w-[200px] whitespace-normal text-[11px] leading-4 text-slate-500">{t.returnTo(a.clinic)}</span></span>
+        : <span className="text-slate-500">{t.requestType(false)}</span>),
+    },
     approvalColumn,
     ...(lead ? [alertsColumn] : []),
     { key: "gender", label: t.cols.gender, value: (a) => (a.gender ? t.genderLabel(a.gender) : "") },
@@ -305,13 +319,14 @@ export function ClinicHome({ t, lang, appointments, date, onDateChange, onNew, o
         "نوع الرحلة": appointment.kind,
         ...Object.fromEntries(ASSISTANCE_NEEDS.map((need) => [need, yesNo(appointment.assistance.includes(need))])),
         "حالة سرطان": yesNo(Boolean(appointment.cancer)),
+        "عودة فقط": yesNo(isReturnOnly(appointment)),
         "الحالة": statusText(appointment.status),
         "الموافقة": ({ pending: "بانتظار الموافقة", approved: "موافق عليه", excluded: "مستبعد" } as const)[approvalOf(appointment)],
         "سبب الإلغاء": appointment.cancelReason ?? "",
         "ألغاه": appointment.cancelledBy ?? "",
       }));
       const worksheet = XLSX.utils.json_to_sheet(rows);
-      worksheet["!cols"] = [14, 24, 8, 30, 10, 10, 14, 13, 10, 14, 12, 12, 12, 12, 20, 28, 18].map((wch) => ({ wch }));
+      worksheet["!cols"] = [14, 24, 8, 30, 10, 10, 14, 13, 10, 14, 12, 12, 12, 12, 10, 20, 28, 18].map((wch) => ({ wch }));
       const workbook = XLSX.utils.book_new();
       workbook.Workbook = { Views: [{ RTL: true }] };
       XLSX.utils.book_append_sheet(workbook, worksheet, "المواعيد");
@@ -369,7 +384,8 @@ export function ClinicHome({ t, lang, appointments, date, onDateChange, onNew, o
             <button onClick={downloadTemplate} className={btn("ghost")}><Download className="h-4 w-4" /> {t.template}</button>
             <button disabled={importing} onClick={() => fileInputRef.current?.click()} className={btn("secondary")}><Upload className="h-4 w-4" /> {importing ? t.importing : t.import}</button>
             <button onClick={exportAppointments} className={btn("secondary")}><FileSpreadsheet className="h-4 w-4" /> {t.exportExcel}</button>
-            <button onClick={onNew} className={btn("primary")}><ClipboardPlus className="h-4 w-4" /> {t.add}</button>
+            <button onClick={() => onNew(true)} className={btn("secondary")}><House className="h-4 w-4" /> {t.addReturn}</button>
+            <button onClick={() => onNew()} className={btn("primary")}><ClipboardPlus className="h-4 w-4" /> {t.add}</button>
           </>
         )}
       />
@@ -481,11 +497,13 @@ function CancelReason({ t, lang, appointment }: { t: ClinicText; lang: Lang; app
   );
 }
 
-export function ClinicForm({ t, lang, initial, defaultDate, onBack, onSave }: {
+export function ClinicForm({ t, lang, initial, defaultDate, returnOnly = false, onBack, onSave }: {
   t: ClinicText;
   lang: Lang;
   defaultDate: string;
   initial: ClinicAppointment | null;
+  /** طلب عودة فقط من المستشفى: نفس النموذج، والمستشفى مكان الاستلام والوقت وقت العودة، بلا موعد ثانٍ */
+  returnOnly?: boolean;
   onBack: () => void;
   /** موعد واحد، أو موعدان لنفس الضيف في نفس اليوم يُضافان معًا */
   onSave: (appointments: ClinicAppointment[]) => void;
@@ -549,8 +567,9 @@ export function ClinicForm({ t, lang, initial, defaultDate, onBack, onSave }: {
       toast.error(t.errMobile);
       return;
     }
-    if (!requestWindow(form).open) {
-      toast.error(t.errPast(REQUEST_GRACE_MINUTES));
+    // طلب العودة يمكن تسجيله طوال يومه (ولو مضى وقت العودة)، والموعد حتى 30 دقيقة بعد وقته
+    if (!requestWindow({ ...form, returnOnly }).open) {
+      toast.error(returnOnly ? t.errPastDay : t.errPast(REQUEST_GRACE_MINUTES));
       return;
     }
     if (!form.gender) {
@@ -558,7 +577,7 @@ export function ClinicForm({ t, lang, initial, defaultDate, onBack, onSave }: {
       return;
     }
     const secondHospital = hospitals.find((item) => item.id === second.hospitalId);
-    if (second.enabled && !initial) {
+    if (second.enabled && !initial && !returnOnly) {
       if (!secondHospital || !second.appointmentAt) {
         toast.error(secondHospital ? t.errSecondIncomplete : t.errSecondHospital);
         return;
@@ -584,9 +603,10 @@ export function ClinicForm({ t, lang, initial, defaultDate, onBack, onSave }: {
       assistance: form.assistance,
       gender: form.gender,
       ...(form.cancer ? { cancer: true } : {}),
+      ...(returnOnly ? { returnOnly: true } : {}),
       status: initial?.status ?? WAITING,
     };
-    if (!second.enabled || initial || !secondHospital) {
+    if (!second.enabled || initial || returnOnly || !secondHospital) {
       onSave([first]);
       return;
     }
@@ -599,10 +619,20 @@ export function ClinicForm({ t, lang, initial, defaultDate, onBack, onSave }: {
   return (
     <div className="mx-auto max-w-3xl">
       <button onClick={onBack} className={cx(btn("ghost", "sm"), "mb-4 -ms-2")}><BackIcon className="h-4 w-4" /> {t.back}</button>
-      <Panel tone="brand" icon={ClipboardPlus} title={initial ? t.editTitle : t.newTitle} description={initial ? initial.id : undefined}>
+      <Panel
+        tone={returnOnly ? "cyan" : "brand"}
+        icon={returnOnly ? House : ClipboardPlus}
+        title={returnOnly ? (initial ? t.editReturnTitle : t.newReturnTitle) : initial ? t.editTitle : t.newTitle}
+        description={initial ? initial.id : undefined}
+      >
         <form onSubmit={submit} className="grid gap-5 p-5 sm:grid-cols-2 sm:p-6">
+          {returnOnly && (
+            <p className="flex items-start gap-2.5 rounded-xl bg-cyan-50 px-4 py-3 text-sm leading-6 text-cyan-900 ring-1 ring-inset ring-cyan-200 sm:col-span-2">
+              <House className="mt-1 h-4 w-4 shrink-0" /> {t.returnHint}
+            </p>
+          )}
           <GuestPicker t={t} guests={guests} guest={guest} onSelect={selectGuest} notListed={notListed} />
-          <HospitalSelect id="hospital-first" label={t.hospital} value={form.hospitalId} onChange={(hospitalId) => setForm({ ...form, hospitalId })} hospitals={hospitals} lang={lang} placeholder={t.hospitalChoose} noMatch={t.hospitalNoMatch} wide />
+          <HospitalSelect id="hospital-first" label={returnOnly ? t.returnHospital : t.hospital} value={form.hospitalId} onChange={(hospitalId) => setForm({ ...form, hospitalId })} hospitals={hospitals} lang={lang} placeholder={t.hospitalChoose} noMatch={t.hospitalNoMatch} wide />
           <Field label={t.mobile} value={form.mobile} onChange={(value) => setForm({ ...form, mobile: value })} type="tel" dir="ltr" wide />
           {!guest?.gender && <fieldset className="sm:col-span-2">
             <legend className={labelClass}>{t.gender}</legend>
@@ -612,8 +642,8 @@ export function ClinicForm({ t, lang, initial, defaultDate, onBack, onSave }: {
               ))}
             </div>
           </fieldset>}
-          <div className="sm:col-span-2"><DateChooser label={t.date} value={form.appointmentDate} onChange={(value) => setForm({ ...form, appointmentDate: value })} labels={t.dateChoice} /></div>
-          <Field label={t.time} value={form.appointmentAt} onChange={(value) => setForm({ ...form, appointmentAt: value })} type="time" />
+          <div className="sm:col-span-2"><DateChooser label={returnOnly ? t.returnDate : t.date} value={form.appointmentDate} onChange={(value) => setForm({ ...form, appointmentDate: value })} labels={t.dateChoice} /></div>
+          <Field label={returnOnly ? t.returnTime : t.time} value={form.appointmentAt} onChange={(value) => setForm({ ...form, appointmentAt: value })} type="time" />
 
           <fieldset className="sm:col-span-2">
             <legend className={labelClass}>{t.tripType}</legend>
@@ -647,7 +677,7 @@ export function ClinicForm({ t, lang, initial, defaultDate, onBack, onSave }: {
             <span className="text-xs font-normal text-slate-500">· {t.cancerHint}</span>
           </label>
 
-          {!initial && (
+          {!initial && !returnOnly && (
             <fieldset className="rounded-xl bg-slate-50 p-4 ring-1 ring-slate-200 sm:col-span-2">
               <label className="flex cursor-pointer items-center gap-2.5 text-sm font-semibold text-ink">
                 <input type="checkbox" checked={second.enabled} onChange={(event) => setSecond({ ...second, enabled: event.target.checked })} className="h-4 w-4 accent-brand-600" />
@@ -664,7 +694,7 @@ export function ClinicForm({ t, lang, initial, defaultDate, onBack, onSave }: {
           )}
 
           <div className="flex gap-3 border-t border-slate-100 pt-5 sm:col-span-2">
-            <button className={cx(btn("primary", "lg"), "flex-1")}><CheckCircle2 className="h-4 w-4" /> {initial ? t.saveChanges : t.save}</button>
+            <button className={cx(btn("primary", "lg"), "flex-1")}><CheckCircle2 className="h-4 w-4" /> {initial ? t.saveChanges : returnOnly ? t.saveReturn : t.save}</button>
             <button type="button" onClick={onBack} className={btn("secondary", "lg")}>{t.cancel}</button>
           </div>
         </form>

@@ -1,11 +1,13 @@
 import { useMemo, useState } from "react";
-import { Accessibility, ArrowLeftRight, Ban, CalendarDays, Clock3, Eye, EyeOff, Filter, Footprints, Ribbon, Stethoscope, Truck, UsersRound, X } from "lucide-react";
+import { Accessibility, ArrowLeftRight, Ban, CalendarDays, Clock3, Eye, EyeOff, Filter, Footprints, House, Ribbon, Stethoscope, Truck, UsersRound, X } from "lucide-react";
 import {
   approvalOf,
   isApproved,
   isNonMedical,
   isPriority,
+  isReturnOnly,
   personsText,
+  RETURN_ONLY_LABEL,
   requestPersons,
   requestWindow,
   statusText,
@@ -87,7 +89,15 @@ export function AppointmentsOverview({ appointments, requests, date, now }: {
     { key: "apartment", label: "الشقة", value: (a) => a.apartmentNumber, cell: (a) => <span className="tabular">{a.apartmentNumber}</span> },
     { key: "mobile", label: "الموبايل", value: (a) => (a.mobile === "-" ? "" : a.mobile), cell: (a) => (a.mobile && a.mobile !== "-" ? <span className="whitespace-nowrap text-xs"><GuestContact mobile={a.mobile} /></span> : <span className="text-slate-300">—</span>) },
     { key: "destination", label: "الوجهة", value: (a) => a.clinic, cell: (a) => <span className="block max-w-[200px] whitespace-normal">{a.clinic}</span> },
-    { key: "category", label: "الفئة", value: (a) => (isNonMedical(a) ? "غير طبية" : "طبية"), cell: (a) => (isNonMedical(a) ? <Badge tone="violet">غير طبية</Badge> : <span className="text-xs text-slate-500">طبية</span>) },
+    {
+      // طبية (موعد)، أو طلب عودة فقط من المستشفى، أو غير طبية
+      key: "category",
+      label: "الفئة",
+      value: (a) => (isNonMedical(a) ? "غير طبية" : isReturnOnly(a) ? RETURN_ONLY_LABEL : "طبية"),
+      cell: (a) => (isNonMedical(a)
+        ? <Badge tone="violet">غير طبية</Badge>
+        : isReturnOnly(a) ? <Badge tone="cyan" icon={House}>{RETURN_ONLY_LABEL}</Badge> : <span className="text-xs text-slate-500">طبية</span>),
+    },
     { key: "needs", label: "الاحتياجات", value: (a) => a.assistance.join("، "), cell: (a) => (a.assistance.length ? <span className="block max-w-[170px] whitespace-normal text-xs">{a.assistance.join("، ")}</span> : <span className="text-slate-300">—</span>) },
     { key: "persons", label: "الأشخاص", value: (a) => personsText(personsOf(a)), sortValue: (a) => String(personsOf(a)) },
     {
@@ -113,7 +123,9 @@ export function AppointmentsOverview({ appointments, requests, date, now }: {
           if (!isApproved(a)) return <span className="text-xs text-slate-400">لا يظهر لمشرف المبنى</span>;
           const deadline = requestWindow(a, now);
           return a.status === WAITING
-            ? <span className={deadline.open ? "text-xs text-amber-800" : "text-xs font-medium text-red-700"}>{deadline.open ? <>لم يطلب مشرف المبنى بعد · حتى <span dir="ltr" className="tabular">{timeLabel(deadline.deadline)}</span></> : "انتهت مهلة الطلب"}</span>
+            ? <span className={deadline.open ? "text-xs text-amber-800" : "text-xs font-medium text-red-700"}>{deadline.open
+              ? (isReturnOnly(a) ? "الضيف في المستشفى · لم يطلب مشرف المبنى سيارة العودة بعد" : <>لم يطلب مشرف المبنى بعد · حتى <span dir="ltr" className="tabular">{timeLabel(deadline.deadline)}</span></>)
+              : "انتهت مهلة الطلب"}</span>
             : <span className="text-slate-300">—</span>;
         }
         return (

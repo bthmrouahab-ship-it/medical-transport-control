@@ -7,6 +7,7 @@ import {
   buildDriverMessage,
   isApproved,
   isNonMedical,
+  isReturnOnly,
   localDateString,
   migrateAppointment,
   migrateRequest,
@@ -261,6 +262,8 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
   const [fleetVehicles, setFleetVehicles] = useState<Vehicle[]>(() => loadState("fox_fleet", DEFAULT_VEHICLES));
   const [view, setView] = useState<ClinicView>("home");
   const [editingAppointment, setEditingAppointment] = useState<ClinicAppointment | null>(null);
+  /** نموذج جديد لطلب عودة فقط من المستشفى (بدل موعد) */
+  const [newReturnOnly, setNewReturnOnly] = useState(false);
   const [lang, setLang] = useLang();
   // مسؤول العيادة يبدأ بمواعيد الغد (يوافق عليها قبل يومها)
   const [selectedDate, setSelectedDate] = useState(() => (session.role === "clinicLead" ? addDays(localDateString(), 1) : localDateString()));
@@ -459,7 +462,8 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
     setSelectedDate(appointment.appointmentDate);
     setView("home");
     const reset = Boolean(before) && approvalOf(before!) === "approved" && approvalOf(appointment) === "pending";
-    toast.success(editingAppointment ? t.updated : saved.length > 1 ? t.savedTwo : t.saved, { description: reset ? t.resetApproval : undefined });
+    const returnOnly = isReturnOnly(appointment);
+    toast.success(editingAppointment ? (returnOnly ? t.updatedReturn : t.updated) : saved.length > 1 ? t.savedTwo : returnOnly ? t.savedReturn : t.saved, { description: reset ? t.resetApproval : undefined });
   }
 
   function deleteAppointment(appointment: ClinicAppointment) {
@@ -538,7 +542,7 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
             appointments={appointments.filter((appointment) => !isNonMedical(appointment))}
             date={selectedDate}
             onDateChange={setSelectedDate}
-            onNew={() => { setEditingAppointment(null); setView("form"); }}
+            onNew={(returnOnly) => { setEditingAppointment(null); setNewReturnOnly(Boolean(returnOnly)); setView("form"); }}
             onEdit={openEditAppointment}
             onDelete={deleteAppointment}
             onImport={(imported) => {
@@ -554,6 +558,7 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
             lang={lang}
             defaultDate={selectedDate}
             initial={editingAppointment}
+            returnOnly={editingAppointment ? isReturnOnly(editingAppointment) : newReturnOnly}
             onBack={() => { setEditingAppointment(null); setView("home"); }}
             onSave={saveAppointment}
           />
@@ -578,8 +583,9 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
               updateRequests(requests.filter((item) => item.id !== request.id));
               // إلغاء عودة الـ Nurse فقط لا يغيّر موعد الضيف
               if (!request.nurseOnly) {
+                // طلب العودة فقط يعود إلى انتظار طلب سيارته (الضيف ما زال في المستشفى)
                 updateAppointments(appointments.map((item) => item.id === appointment.id
-                  ? { ...item, status: request.direction === "عودة" ? "تم استلام المريض" : "بانتظار طلب السيارة" }
+                  ? { ...item, status: request.direction === "عودة" && !isReturnOnly(item) ? "تم استلام المريض" : "بانتظار طلب السيارة" }
                   : item));
               }
               toast.success("تم إلغاء طلب السيارة");

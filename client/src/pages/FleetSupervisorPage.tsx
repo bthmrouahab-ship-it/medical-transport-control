@@ -46,6 +46,7 @@ import {
   isApproved,
   isNonMedical,
   isPriority,
+  isReturnOnly,
   isRushHour,
   isTransfer,
   localDateString,
@@ -54,6 +55,7 @@ import {
   personsText,
   planDispatch,
   requestPersons,
+  RETURN_ONLY_LABEL,
   routeLabel,
   seatsFor,
   groupSeats,
@@ -129,7 +131,8 @@ function requestTimes(trip: Trip) {
   const at = trip.request.createdAt;
   if (!at) return "";
   if (trip.from) return `طلب النقل ${at}`;
-  if (trip.request.direction === "عودة") return `${trip.outboundAt ? `طلب الذهاب ${trip.outboundAt} · ` : ""}طلب العودة ${at}`;
+  // طلب العودة فقط من المستشفى: بلا رحلة ذهاب
+  if (trip.request.direction === "عودة") return `${isReturnOnly(trip.appointment) ? `${RETURN_ONLY_LABEL} · ` : trip.outboundAt ? `طلب الذهاب ${trip.outboundAt} · ` : ""}طلب العودة ${at}`;
   return `طلب الذهاب ${at}`;
 }
 
