@@ -682,7 +682,16 @@ export type TripLoad = { appointments: ClinicAppointment[]; transfer?: boolean; 
 /** عدد الأشخاص في الرحلة. */
 export const loadPersons = (trip: TripLoad) => trip.persons ?? trip.appointments.reduce((sum, appointment) => sum + tripPersons(appointment), 0);
 /** وقت اختيار السيارة (لساعات الباصات ووقت الذروة) ودليل المستشفيات */
-export type VehicleRules = { now?: Date; hospitals?: Hospital[] };
+/**
+ * regularForSpecial: مشرف السيارات يختار السيارة بنفسه، فتُقبل سيارة عادية لضيف احتياجات خاصة بعد موافقته على
+ * التنبيه (`regularForSpecialWarning`). الاقتراح والتوزيع التلقائي والضم والتوجيه بلا هذا الخيار.
+ */
+export type VehicleRules = { now?: Date; hospitals?: Hospital[]; regularForSpecial?: boolean };
+
+/** تنبيه سيارة عادية لرحلة فيها ضيف احتياجات خاصة (يُرسلها مشرف السيارات بعد الموافقة عليه)، أو null */
+export function regularForSpecialWarning(vehicle: Pick<Vehicle, "kind">, appointments: Pick<ClinicAppointment, "kind">[]) {
+  return needsAccessibleVehicle(appointments) && vehicle.kind !== "احتياجات خاصة" ? "سيارة عادية · الضيف يحتاج سيارة احتياجات خاصة" : null;
+}
 
 /**
  * لماذا لا تناسب السيارة هذه الرحلة الآن، أو null إن كانت تناسبها (انشغالها برحلة يُفحص في مكان آخر):
@@ -698,7 +707,7 @@ export function vehicleRestriction(vehicle: Vehicle, trip: TripLoad, rules: Vehi
   if (!vehicle.available) return "خارج الخدمة";
   const role = busRoleOf(vehicle);
   if (role === "clinic") return "في خدمة العيادة";
-  if (needsAccessibleVehicle(trip.appointments) && vehicle.kind !== "احتياجات خاصة") return "تحتاج سيارة احتياجات خاصة";
+  if (!rules.regularForSpecial && needsAccessibleVehicle(trip.appointments) && vehicle.kind !== "احتياجات خاصة") return "تحتاج سيارة احتياجات خاصة";
   if (specialCount(trip.appointments) > MAX_SPECIAL_PER_VEHICLE) return "ضيف احتياجات خاصة واحد فقط في السيارة";
   const seats = vehicleSeats(vehicle);
   const persons = loadPersons(trip);

@@ -30,6 +30,12 @@ describe("hospital catalog", () => {
     expect(matchHospital("طوارئ أطفال الريان")).toBeNull();
     expect(matchHospital("Al Ahli Hospital")?.id).toBe("al-ahli");
     expect(matchHospital("مركز معيذر الصحي")?.id).toBe("muaither-hc");
+    // مركز غسيل الكلى والعلاج الطبيعي في الوكرة: ليس مستشفى الوكرة ولا مركز الكلى ولا العلاج الطبيعي بن عمران
+    expect(matchHospital("مركز غسيل الكلى والعلاج الطبيعي")?.id).toBe("wakra-dialysis");
+    expect(matchHospital("Haemodalysis and Physiotherapy Center")?.id).toBe("wakra-dialysis");
+    expect(matchHospital("Haemodialysis and Physiotherapy Center")?.id).toBe("wakra-dialysis");
+    expect(matchHospital("العلاج الطبيعي بن عمران")?.id).toBe("qri-bin-omran");
+    expect(matchHospital("مركز فهد بن جاسم للكلى")?.id).toBe("kidney");
     // وجهة الرحلة غير الطبية «أنصار جاليري المطار القديم» ليست المركز الصحي
     expect(matchHospital("أنصار جاليري المطار القديم")).toBeNull();
   });
@@ -44,6 +50,8 @@ describe("hospital catalog", () => {
     // مركز الوكرة الصحي يُضاف رغم أن اسمه يطابق «الوكرة» في الدليل المحفوظ
     const withoutWakraHc = DEFAULT_HOSPITALS.filter((hospital) => hospital.id !== "wakra-hc");
     expect(syncHospitals(withoutWakraHc).some((hospital) => hospital.id === "wakra-hc")).toBe(true);
+    const withoutDialysis = DEFAULT_HOSPITALS.filter((hospital) => hospital.id !== "wakra-dialysis");
+    expect(syncHospitals(withoutDialysis).find((hospital) => hospital.id === "wakra-dialysis")).toMatchObject({ lat: 25.172663, lng: 51.595984 });
   });
 
   it("finds hospitals on the same campus", () => {

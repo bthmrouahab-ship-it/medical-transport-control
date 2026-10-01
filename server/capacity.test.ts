@@ -3,6 +3,7 @@ import {
   buildTripGroups,
   joinWindow,
   planDispatch,
+  regularForSpecialWarning,
   seatsFor,
   suggestJoinDispatched,
   vehicleRestriction,
@@ -117,5 +118,20 @@ describe("returning car with free seats and a return request nearby", () => {
     // سيارة لم تستلم ضيفها بعد ليست «عائدة»
     const notYet = { ...riding, request: { ...riding.request, status: "تم إرسال السيارة" as const } };
     expect(suggestReturnPickups(pending, [notYet], [car("CAR")], near, undefined, { now: at(10) })).toEqual([]);
+  });
+});
+
+describe("regular car for a special-needs guest", () => {
+  it("is refused by the suggestions, and accepted with a warning when the fleet supervisor picks it", () => {
+    const trip = { appointments: [special("S", "10:00")] };
+    const sedan = car("111");
+    expect(vehicleRestriction(sedan, trip, { now: at(10) })).toBe("تحتاج سيارة احتياجات خاصة");
+    expect(vehicleRestriction(sedan, trip, { now: at(10), regularForSpecial: true })).toBeNull();
+    expect(regularForSpecialWarning(sedan, trip.appointments)).toContain("سيارة عادية");
+    expect(regularForSpecialWarning(car("333", "احتياجات خاصة"), trip.appointments)).toBeNull();
+    expect(regularForSpecialWarning(sedan, [guest("G", "10:00")])).toBeNull();
+    // ضيفا احتياجات خاصة لا يُجمعان حتى مع موافقة المشرف
+    expect(vehicleRestriction(sedan, { appointments: [special("S1", "10:00"), special("S2", "10:00")] }, { now: at(10), regularForSpecial: true }))
+      .toBe("ضيف احتياجات خاصة واحد فقط في السيارة");
   });
 });
