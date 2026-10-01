@@ -57,7 +57,16 @@ export type ClinicAppointment = {
   /** استبعاد الموعد بلا حذف (يمكن إرجاعه): من استبعده ومتى */
   excludedBy?: string;
   excludedAt?: string;
+  /**
+   * طلب عودة فقط من المستشفى (تضيفه العيادة مثل الموعد): الضيف في المستشفى (ذهب بنفسه أو بالإسعاف) ويحتاج سيارة
+   * تعيده إلى المجمع. appointmentAt وقت العودة المتوقع، ومشرف المبنى يطلب له سيارة عودة فقط (لا ذهاب) طوال يومه.
+   */
+  returnOnly?: boolean;
 };
+
+/** طلب عودة فقط من المستشفى (بلا ذهاب) */
+export const isReturnOnly = (appointment: Pick<ClinicAppointment, "returnOnly">) => appointment.returnOnly === true;
+export const RETURN_ONLY_LABEL = "عودة فقط من المستشفى";
 
 /** بانتظار موافقة مسؤول العيادة، أو موافق عليه، أو مستبعد (بلا حذف). */
 export type Approval = "pending" | "approved" | "excluded";
@@ -253,8 +262,11 @@ export function appointmentDateTime(appointment: Pick<ClinicAppointment, "appoin
 }
 
 /** هل ما زال طلب السيارة متاحًا؟ يُغلق بعد 30 دقيقة من وقت الموعد. */
-export function requestWindow(appointment: Pick<ClinicAppointment, "appointmentDate" | "appointmentAt">, now = new Date()) {
-  const deadline = new Date(appointmentDateTime(appointment).getTime() + REQUEST_GRACE_MINUTES * 60000);
+export function requestWindow(appointment: Pick<ClinicAppointment, "appointmentDate" | "appointmentAt" | "returnOnly">, now = new Date()) {
+  // طلب العودة فقط: الضيف في المستشفى حتى تُطلب سيارته، فيمكن طلبها طوال يومه
+  const deadline = appointment.returnOnly
+    ? appointmentDateTime({ appointmentDate: appointment.appointmentDate, appointmentAt: "23:59" })
+    : new Date(appointmentDateTime(appointment).getTime() + REQUEST_GRACE_MINUTES * 60000);
   const minutesLeft = Math.floor((deadline.getTime() - now.getTime()) / 60000);
   return { open: minutesLeft >= 0, deadline, minutesLeft };
 }
@@ -310,6 +322,7 @@ export function migrateAppointment(value: unknown, index = 0): ClinicAppointment
     ...(raw.approval === "pending" ? { approval: "pending" as const } : {}),
     ...(raw.approval === "approved" ? { approval: "approved" as const, approvedBy: toText(raw.approvedBy) || undefined, approvedAt: toText(raw.approvedAt) || undefined } : {}),
     ...(raw.approval === "excluded" ? { approval: "excluded" as const, excludedBy: toText(raw.excludedBy) || undefined, excludedAt: toText(raw.excludedAt) || undefined } : {}),
+    ...(raw.returnOnly === true ? { returnOnly: true } : {}),
   };
 }
 
@@ -352,6 +365,8 @@ export function parseImportedAppointments(
     for (const need of ASSISTANCE_NEEDS) if (!assistance.includes(need) && isYes(readAliased(row, [need]))) assistance.push(need);
     let gender = normalizeGender(readAliased(row, ["الجنس", "gender", "sex"]));
     const cancer = isYes(readAliased(row, ["حالة سرطان", "سرطان", "cancer"]), /سرطان|cancer/);
+    // طلب عودة فقط من المستشفى (عمود «عودة فقط»: نعم/لا)
+    const returnOnly = isYes(readAliased(row, ["عودة فقط", "طلب عودة فقط", "return only"]), /عودة فقط|return only/i);
 
     // مع قائمة الضيوف: الضيف منها (والمبنى والشقة والجنس منها، والهاتف إن لم يُكتب)، والوجهة من دليل المستشفيات
     let guestId: string | undefined;
@@ -417,6 +432,7 @@ export function parseImportedAppointments(
       status: "بانتظار طلب السيارة",
       ...(gender ? { gender } : {}),
       ...(cancer ? { cancer: true } : {}),
+      ...(returnOnly ? { returnOnly: true } : {}),
     });
   });
 
@@ -587,7 +603,7 @@ export function sameDayAppointments(appointment: ClinicAppointment, appointments
 export function nextAppointmentOf(appointment: ClinicAppointment, appointments: ClinicAppointment[], now = new Date()) {
   if (isNonMedical(appointment)) return null;
   return sameDayAppointments(appointment, appointments)
-    .find((other) => other.appointmentAt > appointment.appointmentAt && other.status === "بانتظار طلب السيارة" && requestWindow(other, now).open) ?? null;
+    .find((other) => other.appointmentAt > appointment.appointmentAt && other.status === "بانتظار طلب السيارة" && !isReturnOnly(other) && requestWindow(other, now).open) ?? null;
 }
 
 /** عدد رحلات كل سيارة في يوم (الرحلة المجمّعة رحلة واحدة)، لتوزيع العمل على السيارات بالتساوي. */
@@ -1229,7 +1245,9 @@ export function findUnrequestedMatches(
   now = new Date(),
 ): UnrequestedMatch[] {
   const requested = new Set(requests.map((request) => request.appointmentId));
+  // طلب العودة فقط لا يُطلب له ذهاب، فلا يُقارن برحلات الذهاب
   const open = appointments.filter((appointment) => appointment.status === "بانتظار طلب السيارة"
+    && !isReturnOnly(appointment)
     && !requested.has(appointment.id)
     && requestWindow(appointment, now).open);
   const active = requests

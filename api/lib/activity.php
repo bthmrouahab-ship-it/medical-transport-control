@@ -146,13 +146,17 @@ function describe_write(PDO $pdo, string $col, string $id, ?array $before, ?arra
             $who = $details['patient'] ?? $id;
             $when = trim(($details['date'] ?? '') . ' ' . ($details['time'] ?? ''));
             $nonMedical = ($doc['category'] ?? '') === 'غير طبية';
+            // طلب عودة فقط من المستشفى يُسجَّل باسمه لا «موعد»
+            $returnOnly = ($doc['returnOnly'] ?? null) === true;
+            $noun = $returnOnly ? 'طلب عودة' : 'موعد';
             if ($before === null) {
+                if ($returnOnly) return ['appointment', 'appointment.create', "إضافة طلب عودة من المستشفى لـ $who من {$details['destination']} إلى المجمع ($when)", $details];
                 return ['appointment', 'appointment.create', ($nonMedical ? 'إضافة رحلة غير طبية لـ ' : 'إضافة موعد ') . "$who إلى {$details['destination']} ($when)", $details];
             }
-            if ($after === null) return ['appointment', 'appointment.delete', "حذف موعد $who ({$details['destination']}، $when)", $details];
+            if ($after === null) return ['appointment', 'appointment.delete', "حذف $noun $who ({$details['destination']}، $when)", $details];
             if (($after['status'] ?? null) === 'ملغي' && ($before['status'] ?? null) !== 'ملغي') {
                 $details['reason'] = $after['cancelReason'] ?? '';
-                return ['appointment', 'appointment.cancel', "إلغاء موعد $who ({$details['destination']}، $when): " . ($after['cancelReason'] ?? ''), $details];
+                return ['appointment', 'appointment.cancel', "إلغاء $noun $who ({$details['destination']}، $when): " . ($after['cancelReason'] ?? ''), $details];
             }
             // الضيف عاد إلى المجمع بنفسه (يسجّله مشرف المبنى)
             if (($after['returnedSelf'] ?? null) === true && ($before['returnedSelf'] ?? null) !== true) {
@@ -163,9 +167,9 @@ function describe_write(PDO $pdo, string $col, string $id, ?array $before, ?arra
             $to = $after['approval'] ?? 'approved';
             $contentChanged = (bool)array_intersect($changed, APPOINTMENT_CONTENT_FIELDS);
             if ($from !== $to && !$contentChanged) {
-                if ($to === 'approved') return ['appointment', 'appointment.approve', "موافقة مسؤول العيادة على موعد $who ({$details['destination']}، $when)", $details];
-                if ($to === 'excluded') return ['appointment', 'appointment.exclude', "استبعاد موعد $who ({$details['destination']}، $when) · بلا حذف", $details];
-                return ['appointment', 'appointment.restore', ($from === 'excluded' ? 'إرجاع موعد مستبعد: ' : 'إعادة موعد إلى انتظار الموافقة: ') . "$who ({$details['destination']}، $when)", $details];
+                if ($to === 'approved') return ['appointment', 'appointment.approve', "موافقة مسؤول العيادة على $noun $who ({$details['destination']}، $when)", $details];
+                if ($to === 'excluded') return ['appointment', 'appointment.exclude', "استبعاد $noun $who ({$details['destination']}، $when) · بلا حذف", $details];
+                return ['appointment', 'appointment.restore', ($from === 'excluded' ? "إرجاع $noun مستبعد: " : "إعادة $noun إلى انتظار الموافقة: ") . "$who ({$details['destination']}، $when)", $details];
             }
             // تغيّر الحالة وحده نتيجة طلب السيارة أو استلام المريض، ويُسجَّل مع الطلب نفسه
             if (!array_diff($changed, ['status'])) return null;
@@ -173,7 +177,7 @@ function describe_write(PDO $pdo, string $col, string $id, ?array $before, ?arra
             if (!$changes) return null;
             $details['changes'] = changes_text($changes);
             $reset = $from === 'approved' && $to === 'pending' ? ' · يعود إلى انتظار موافقة مسؤول العيادة' : '';
-            return ['appointment', 'appointment.update', "تعديل موعد $who: " . changes_text($changes) . $reset, $details];
+            return ['appointment', 'appointment.update', "تعديل $noun $who: " . changes_text($changes) . $reset, $details];
 
         case 'requests':
             $request = $after ?? $before;
@@ -198,6 +202,10 @@ function describe_write(PDO $pdo, string $col, string $id, ?array $before, ?arra
                 }
                 if (!empty($request['nurseOnly'])) {
                     return ['request', 'request.create', "طلب عودة الـ Nurse فقط من {$details['destination']} (مرافقة {$details['patient']}، مبنى {$details['building']}) · يبقى الضيف في موعده", $details];
+                }
+                // طلب العودة فقط من المستشفى (من العيادة مباشرة إلى مشرف السيارات)
+                if ((appointment_doc($pdo, (string)($request['appointmentId'] ?? ''))['returnOnly'] ?? null) === true) {
+                    return ['request', 'request.create', "طلب سيارة عودة لـ $who من {$details['destination']} إلى المجمع (وقت العودة " . ($details['time'] ?? '') . ") · عودة فقط من المستشفى", $details];
                 }
                 return ['request', 'request.create', "طلب سيارة $direction لـ $who (مبنى {$details['building']} ← {$details['destination']}، " . ($details['time'] ?? '') . ')', $details];
             }

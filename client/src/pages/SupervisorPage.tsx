@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
-import { Accessibility, AlertTriangle, ArrowLeftRight, Ban, BellRing, Building2, Check, CheckCircle2, ChevronDown, Clock3, Footprints, Hospital, Link2, MapPin, Ribbon, RotateCcw, ShieldCheck, Smartphone, Stethoscope, Timer, Truck, Users, XCircle } from "lucide-react";
+import { Accessibility, AlertTriangle, ArrowLeftRight, Ban, BellRing, Building2, Check, CheckCircle2, ChevronDown, Clock3, Footprints, Hospital, House, Link2, MapPin, Ribbon, RotateCcw, ShieldCheck, Smartphone, Stethoscope, Timer, Truck, Users, XCircle } from "lucide-react";
 import {
   CANCEL_REASONS,
   appointmentPickupLabel,
@@ -14,6 +14,8 @@ import {
   localDateString,
   nextAppointmentOf,
   REQUEST_GRACE_MINUTES,
+  RETURN_ONLY_LABEL,
+  isReturnOnly,
   requestWindow,
   sameDayAppointments,
   personsText,
@@ -96,7 +98,8 @@ function newRequest(appointment: ClinicAppointment): VehicleRequest {
   return {
     id: `REQ-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
     appointmentId: appointment.id,
-    direction: "ذهاب",
+    // طلب العودة فقط من المستشفى: سيارة عودة إلى المجمع
+    direction: isReturnOnly(appointment) ? "عودة" : "ذهاب",
     status: "بانتظار التوزيع",
     notificationMethod: "whatsapp",
     createdAt: timeLabel(new Date()),
@@ -200,9 +203,9 @@ export function SupervisorHome({ uid, lead = false, appointments, requests, vehi
   const matches = new Map(findUnrequestedMatches(todays, requests, hospitals, now).map((match) => [match.appointment.id, match]));
   const matchCount = toRequest.filter((row) => matches.has(row.appointment.id)).length;
   // مواعيد بلا طلب يمكن طلبها معًا (نفس الوجهة أو وجهة مجاورة خلال 30 دقيقة)، ولو في مبنى آخر
-  const openUnrequested = todays.filter((appointment) => appointment.status === "بانتظار طلب السيارة" && !latest.has(appointment.id) && requestWindow(appointment, now).open);
+  const openUnrequested = todays.filter((appointment) => appointment.status === "بانتظار طلب السيارة" && !isReturnOnly(appointment) && !latest.has(appointment.id) && requestWindow(appointment, now).open);
   const partnerOf = (appointment: ClinicAppointment) => openUnrequested.find((other) => {
-    if (other.id === appointment.id) return false;
+    if (other.id === appointment.id || isReturnOnly(appointment)) return false;
     const details = calculateTripGroupingScore(appointment, other, hospitals);
     return details.timeGapMinutes <= 30 && (details.sameDestination || details.nearbyDestination);
   });
@@ -277,7 +280,7 @@ export function SupervisorHome({ uid, lead = false, appointments, requests, vehi
           </Panel>
         )}
 
-        <Panel id="sup-request" tone="amber" icon={BellRing} title="مواعيد تحتاج طلب سيارة" count={toRequest.length} description={`يمكن الطلب حتى ${REQUEST_GRACE_MINUTES} دقيقة بعد وقت الموعد`}>
+        <Panel id="sup-request" tone="amber" icon={BellRing} title="مواعيد تحتاج طلب سيارة" count={toRequest.length} description={`يمكن الطلب حتى ${REQUEST_GRACE_MINUTES} دقيقة بعد وقت الموعد · طلب العودة من المستشفى طوال يومه`}>
           {toRequest.length ? (
             <div className="divide-y divide-slate-100">
               {toRequest.map(({ appointment }) => (
@@ -287,9 +290,10 @@ export function SupervisorHome({ uid, lead = false, appointments, requests, vehi
                   day={dayOf(appointment)}
                   match={matches.get(appointment.id)}
                   partner={partnerOf(appointment)}
-                  earlier={sameDayAppointments(appointment, appointments).find((other) => other.appointmentAt < appointment.appointmentAt && other.status !== "مكتملة")}
+                  earlier={isReturnOnly(appointment) ? undefined : sameDayAppointments(appointment, appointments).find((other) => other.appointmentAt < appointment.appointmentAt && other.status !== "مكتملة")}
                   now={now}
                   onRequest={onRequest}
+                  onSelfReturn={onSelfReturn}
                   onCancelAppointment={() => setCancelling({ appointment })}
                 />
               ))}
@@ -694,7 +698,9 @@ function GuestSummary({ appointment, request, from, day, timeTone, status }: {
   status?: ReactNode;
 }) {
   const pickup = from ? from.clinic : appointmentPickupLabel(appointment);
-  const returning = request?.direction === "عودة";
+  // طلب العودة فقط: من المستشفى إلى المجمع، قبل طلب سيارته وبعده
+  const returnOnly = isReturnOnly(appointment);
+  const returning = request ? request.direction === "عودة" : returnOnly;
   return (
     <>
       <TimeBlock time={appointment.appointmentAt} day={day} tone={timeTone} />
@@ -703,9 +709,11 @@ function GuestSummary({ appointment, request, from, day, timeTone, status }: {
           <span className="font-semibold text-ink">
             {request?.nurseOnly ? <>الـ Nurse <span className="font-normal text-slate-500">· مرافقة {appointment.patientName}</span></> : appointment.patientName}
           </span>
-          {request && (from
-            ? <Badge tone="cyan" icon={ArrowLeftRight}>نقل بين موعدين</Badge>
-            : request.nurseOnly ? <Badge tone="amber" icon={Stethoscope}>عودة الـ Nurse فقط</Badge> : <Badge tone={returning ? "amber" : "neutral"}>{request.direction}</Badge>)}
+          {returnOnly
+            ? <Badge tone="cyan" icon={House}>{RETURN_ONLY_LABEL}</Badge>
+            : request && (from
+              ? <Badge tone="cyan" icon={ArrowLeftRight}>نقل بين موعدين</Badge>
+              : request.nurseOnly ? <Badge tone="amber" icon={Stethoscope}>عودة الـ Nurse فقط</Badge> : <Badge tone={returning ? "amber" : "neutral"}>{request.direction}</Badge>)}
           {isNonMedical(appointment) && <Badge tone="violet">غير طبية</Badge>}
           {appointment.kind === "احتياجات خاصة" && <Badge icon={Accessibility}>احتياجات خاصة</Badge>}
           {appointment.cancer && <Badge tone="red" icon={Ribbon}>أولوية · حالة سرطان</Badge>}
@@ -753,7 +761,7 @@ function GuestDetails({ appointment, request, driver, persons }: {
   );
 }
 
-function RequestRow({ appointment, day, match, partner, earlier, now, onRequest, onCancelAppointment }: {
+function RequestRow({ appointment, day, match, partner, earlier, now, onRequest, onSelfReturn, onCancelAppointment }: {
   appointment: ClinicAppointment;
   day?: string;
   match?: UnrequestedMatch;
@@ -762,9 +770,47 @@ function RequestRow({ appointment, day, match, partner, earlier, now, onRequest,
   earlier?: ClinicAppointment;
   now: Date;
   onRequest: RequestHandlers["onRequest"];
+  /** طلب العودة فقط: الضيف عاد من المستشفى بنفسه قبل طلب سيارته */
+  onSelfReturn: RequestHandlers["onSelfReturn"];
   onCancelAppointment: () => void;
 }) {
   const deadline = requestWindow(appointment, now);
+  // طلب عودة فقط: الضيف في المستشفى، وتُطلب سيارة العودة عند جاهزيته (طوال يومه)
+  const returnOnly = isReturnOnly(appointment);
+
+  if (returnOnly) {
+    return (
+      <Expandable
+        label={`تفاصيل طلب عودة ${appointment.patientName}`}
+        summary={(
+          <GuestSummary
+            appointment={appointment}
+            day={day}
+            status={(
+              <span className="inline-flex items-center gap-1 text-xs text-slate-500">
+                <Clock3 className="h-3.5 w-3.5" /> الضيف في المستشفى · وقت العودة <span dir="ltr" className="tabular">{appointment.appointmentAt}</span>
+              </span>
+            )}
+          />
+        )}
+        action={<button onClick={() => onRequest(newRequest(appointment), appointment.id)} className={btn("primary")}><RotateCcw className="h-4 w-4" /> طلب سيارة العودة</button>}
+      >
+        <GuestDetails appointment={appointment} />
+        <Note tone="cyan" icon={House}>
+          طلب عودة فقط من {appointment.clinic} إلى المجمع (لم يذهب الضيف بسيارة من المجمع). اطلب السيارة عندما يكون الضيف جاهزًا، أو سجّل أنه عاد بنفسه.
+        </Note>
+        <div className={moreActions}>
+          <button
+            onClick={() => window.confirm(`تأكيد أن ${appointment.patientName} عاد إلى المجمع بنفسه؟ ينتهي طلب العودة بلا سيارة.`) && onSelfReturn(appointment)}
+            className={cx(btn("ghost"), "text-emerald-700 hover:bg-emerald-50")}
+          >
+            <Footprints className="h-4 w-4" /> عاد بنفسه
+          </button>
+          {canCancelAppointment(appointment) && <CancelAppointmentButton onClick={onCancelAppointment} />}
+        </div>
+      </Expandable>
+    );
+  }
 
   function requestCar() {
     if (!requestWindow(appointment).open) {

@@ -3,6 +3,7 @@ import {
   appointmentDateTime,
   appointmentHospital,
   isRushHour,
+  isReturnOnly,
   isTransfer,
   localDateString,
   personsText,
@@ -115,7 +116,8 @@ export function requestedAt(request: Pick<VehicleRequest, "createdAt">, appointm
 export function neededAt(request: VehicleRequest, appointment: ClinicAppointment, hospitals: Hospital[] = DEFAULT_HOSPITALS) {
   const requested = requestedAt(request, appointment);
   const appointmentAt = appointmentDateTime(appointment);
-  if (request.direction === "عودة") return requested ?? appointmentAt;
+  // طلب العودة فقط من المستشفى: تحتاجه من وقت العودة الذي حددته العيادة (ولو أُضيف قبله)
+  if (request.direction === "عودة") return isReturnOnly(appointment) ? appointmentAt : requested ?? appointmentAt;
   const { from, to } = tripEndpoints(appointment, request.direction, hospitals);
   const travel = from && to ? estimateTravelMinutes(from, to, appointmentAt) : UNKNOWN_TRAVEL_MINUTES;
   const departure = new Date(appointmentAt.getTime() - travel * 60000);

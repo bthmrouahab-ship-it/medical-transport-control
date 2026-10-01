@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import {
   AlertTriangle,
@@ -6,6 +6,7 @@ import {
   BellRing,
   CarFront,
   CheckCircle2,
+  ChevronLeft,
   Copy,
   Download,
   Flag,
@@ -45,6 +46,7 @@ import {
   isApproved,
   isNonMedical,
   isPriority,
+  isReturnOnly,
   isRushHour,
   isTransfer,
   localDateString,
@@ -53,6 +55,7 @@ import {
   personsText,
   planDispatch,
   requestPersons,
+  RETURN_ONLY_LABEL,
   routeLabel,
   seatsFor,
   groupSeats,
@@ -70,7 +73,7 @@ import {
   type VehicleRules,
 } from "@shared/transport";
 import type { Hospital } from "@shared/hospitals";
-import { LATE_MINUTES, arrivalsOn, minutesSince, neededAt, returningText, suggestReturnPickups, suggestReturnRedirects, tripEndpoints, tripPhase, vehicleAvailability, vehicleLocationState, type TripPhase } from "@shared/trips";
+import { LATE_MINUTES, arrivalsOn, minutesSince, neededAt, returningText, suggestReturnPickups, suggestReturnRedirects, tripEndpoints, tripPhase, vehicleAvailability, vehicleLocationState, type TripPhase, type VehicleLocationState } from "@shared/trips";
 import {
   Badge,
   DateChooser,
@@ -89,13 +92,17 @@ import {
   cx,
   formatDay,
   longDate,
+  stamp,
   timeLabel,
+  type Tone,
 } from "@/components/ui-kit";
 import NonMedicalTripForm from "./NonMedicalTripForm";
 import { RecentActivity } from "@/components/ActivityLog";
 import { AppointmentsOverview } from "@/components/AppointmentsOverview";
 import { KindIcon, KindLabel, VehiclePicker } from "@/components/VehiclePicker";
-import { useHospitals, useLiveVehicles, useNow } from "@/lib/useShared";
+import GuestContact from "@/components/GuestContact";
+import { useHospitals, useLiveVehicles, useNow, useSharedState } from "@/lib/useShared";
+import { locationFreshness, type VehicleLocation } from "@/lib/vehicleLocation";
 import { NOTIFY_KEY, deviceNotificationsOn, useArrivalAlerts, useCancellationAlerts, useDenialAlerts, useRedirectAlerts } from "@/lib/arrivalAlerts";
 import { checkStateText, driverCheck } from "@shared/driverChecks";
 
@@ -124,7 +131,8 @@ function requestTimes(trip: Trip) {
   const at = trip.request.createdAt;
   if (!at) return "";
   if (trip.from) return `طلب النقل ${at}`;
-  if (trip.request.direction === "عودة") return `${trip.outboundAt ? `طلب الذهاب ${trip.outboundAt} · ` : ""}طلب العودة ${at}`;
+  // طلب العودة فقط من المستشفى: بلا رحلة ذهاب
+  if (trip.request.direction === "عودة") return `${isReturnOnly(trip.appointment) ? `${RETURN_ONLY_LABEL} · ` : trip.outboundAt ? `طلب الذهاب ${trip.outboundAt} · ` : ""}طلب العودة ${at}`;
   return `طلب الذهاب ${at}`;
 }
 
@@ -187,6 +195,8 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
   const [editing, setEditing] = useState<string[] | null>(null);
   /** توزيع السيارات، أو كل المواعيد للعرض فقط */
   const [view, setView] = useState<"dispatch" | "appointments">("dispatch");
+  /** السيارة المعروضة تفاصيلها (الضغط عليها في قائمة السيارات) */
+  const [shownPlate, setShownPlate] = useState<string | null>(null);
   const hospitals = useHospitals();
   const now = useNow(15000);
   const today = localDateString(now);
@@ -467,6 +477,18 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
   const latePending = pending.filter(pendingLate);
   const lateTrips = activeGroups.filter(tripLate);
   const jump = (id: string) => document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+  // تفاصيل السيارة المعروضة: رحلاتها في اليوم المختار (الرحلة المجمّعة رحلة واحدة)
+  const shownVehicle = vehicles.find((vehicle) => vehicle.plate === shownPlate);
+  const tripsOfDay = (plate: string) => Array.from(requests
+    .filter((request) => request.vehiclePlate === plate)
+    .map(withAppointment)
+    .filter(isTrip)
+    .filter(onDate)
+    .reduce((map, trip) => {
+      const key = trip.request.groupId ?? trip.request.id;
+      return map.set(key, [...(map.get(key) ?? []), trip]);
+    }, new Map<string, Trip[]>())
+    .values());
 
   return (
     <>
@@ -764,14 +786,30 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
                 const state = availabilityText(vehicle);
                 const live = liveGps.get(vehicle.plate);
                 return (
-                  <li key={vehicle.plate} className="flex items-center gap-3 px-4 py-3">
-                    <Dot tone={state.tone} pulse={Boolean(live)} />
+                  <li key={vehicle.plate} className="flex items-center gap-2 px-3 py-2.5">
                     <div className="min-w-0 flex-1">
-                      <p className="flex items-center gap-1.5 text-sm font-medium text-ink">
-                        <KindIcon vehicle={vehicle} size="sm" />
-                        <span className="truncate"><span dir="ltr" className="font-semibold">{vehicle.plate}</span> · {live?.driver ?? vehicle.driver}</span>
-                      </p>
-                      <p className="text-xs leading-5 text-slate-500"><KindLabel vehicle={vehicle} extra={roleOf(vehicle)} /> · {state.text}{live ? " · GPS مباشر" : ""}</p>
+                      {/* الضغط على السيارة يفتح تفاصيلها: السائق ورقمه، والحالة، ومن فيها، ورحلاتها اليوم */}
+                      <button
+                        type="button"
+                        aria-haspopup="dialog"
+                        aria-label={`تفاصيل السيارة ${vehicle.plate} · ${live?.driver ?? vehicle.driver}`}
+                        onClick={() => setShownPlate(vehicle.plate)}
+                        className="group flex w-full items-center gap-3 rounded-xl px-1 py-1 text-start transition hover:bg-slate-50"
+                      >
+                        <Dot tone={state.tone} pulse={Boolean(live)} />
+                        <div className="min-w-0 flex-1">
+                          <p className="flex items-center gap-1.5 text-sm font-medium text-ink">
+                            <KindIcon vehicle={vehicle} size="sm" />
+                            <span className="truncate"><span dir="ltr" className="font-semibold">{vehicle.plate}</span> · {live?.driver ?? vehicle.driver}</span>
+                          </p>
+                          <p className="text-xs leading-5 text-slate-500"><KindLabel vehicle={vehicle} extra={roleOf(vehicle)} /> · {state.text}{live ? " · GPS مباشر" : ""}</p>
+                        </div>
+                        <div className="shrink-0 text-center" title="رحلات اليوم المختار">
+                          <p className="text-sm font-semibold text-ink tabular">{load.get(vehicle.plate) ?? 0}</p>
+                          <p className="text-[11px] leading-none text-slate-400">رحلة</p>
+                        </div>
+                        <ChevronLeft className="h-4 w-4 shrink-0 text-slate-300 transition group-hover:text-slate-500" aria-hidden="true" />
+                      </button>
                       {vehicle.kind === "سيدان" && (
                         <button
                           type="button"
@@ -779,7 +817,7 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
                           aria-label={vehicle.fullCapacity ? `إعادة السيارة ${vehicle.plate} إلى 3 أشخاص` : `تشغيل السيارة ${vehicle.plate} بطاقتها الكاملة (4 أشخاص)`}
                           title={vehicle.fullCapacity ? "إعادتها إلى 3 أشخاص" : "السيدان تحمل 4 أشخاص، ويُفضل 3"}
                           onClick={() => onUpdate(vehicles.map((item) => (item.plate === vehicle.plate ? mergeVehicle(item, { fullCapacity: !item.fullCapacity }) : item)))}
-                          className={cx("mt-1 inline-flex h-7 max-w-full items-center gap-1 rounded-lg px-2 text-[11px] font-medium ring-1 ring-inset transition",
+                          className={cx("ms-[26px] inline-flex h-7 max-w-[calc(100%-26px)] items-center gap-1 rounded-lg px-2 text-[11px] font-medium ring-1 ring-inset transition",
                             vehicle.fullCapacity ? "bg-blue-50 text-blue-800 ring-blue-200 hover:bg-blue-100" : "bg-white text-slate-500 ring-slate-300 hover:bg-slate-50 hover:text-ink")}
                         >
                           <UsersRound className="h-3.5 w-3.5 shrink-0" />
@@ -791,16 +829,12 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
                           aria-label={`تخصيص الباص ${vehicle.plate}`}
                           value={busRoleOf(vehicle) ?? ""}
                           onChange={(event) => setBusRole(vehicle, event.target.value as BusRole | "")}
-                          className="mt-1 h-8 max-w-full rounded-lg border border-slate-300 bg-white px-2 text-xs text-ink outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-600/15"
+                          className="ms-[26px] h-8 max-w-[calc(100%-26px)] rounded-lg border border-slate-300 bg-white px-2 text-xs text-ink outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-600/15"
                         >
                           <option value="">باص عادي</option>
                           {BUS_ROLES.map((role) => <option key={role} value={role}>{BUS_ROLE_LABELS[role]}{role === "shuttle" ? " (يلف داخل المجمع)" : role === "clinic" ? " (في خدمة العيادة)" : ""}</option>)}
                         </select>
                       )}
-                    </div>
-                    <div className="shrink-0 text-center" title="رحلات اليوم المختار">
-                      <p className="text-sm font-semibold text-ink tabular">{load.get(vehicle.plate) ?? 0}</p>
-                      <p className="text-[11px] leading-none text-slate-400">رحلة</p>
                     </div>
                     <Switch
                       checked={vehicle.available}
@@ -837,6 +871,21 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
         />
       )}
       {driverMessages && <DriverMessagesDialog messages={driverMessages} driverOf={driverOf} onClose={() => setDriverMessages(null)} />}
+      {shownVehicle && (
+        <VehicleDetailsDialog
+          vehicle={shownVehicle}
+          driver={driverOf(shownVehicle.plate)}
+          state={availabilityText(shownVehicle)}
+          place={locationStates.get(shownVehicle.plate)}
+          current={active.filter((trip) => trip.request.vehiclePlate === shownVehicle.plate)}
+          dayTrips={tripsOfDay(shownVehicle.plate)}
+          phaseOf={(request) => phases.get(request.id) ?? tripPhase(request, now, gpsLive(request.vehiclePlate))}
+          date={date}
+          now={now}
+          hospitals={hospitals}
+          onClose={() => setShownPlate(null)}
+        />
+      )}
     </>
   );
 }
@@ -942,6 +991,173 @@ function ActiveTrip({ trips, phase, late = false, vehicle, driver, hospitals, on
         )}
       </div>
     </article>
+  );
+}
+
+const freeSeatsText = (count: number) => (count <= 0 ? "لا مقاعد فارغة" : count === 1 ? "مقعد فارغ" : count === 2 ? "مقعدان فارغان" : `${count} مقاعد فارغة`);
+const SOURCE_TEXT: Record<string, string> = { gps: "GPS", manual: "تأكيد يدوي", estimate: "تقديري" };
+
+/** مقاعد السيارة: السيدان 3 (أو 4 بطاقتها الكاملة)، وسيارة الاحتياجات الخاصة ضيف واحد منهم و3 أشخاص، والباص 14 */
+function seatsText(vehicle: Vehicle) {
+  const seats = vehicleSeats(vehicle);
+  if (vehicle.kind === "احتياجات خاصة") return `${personsText(seats)}: ضيف احتياجات خاصة واحد و${personsText(seats - 1)} عاديين`;
+  if (vehicle.kind === "سيدان") return vehicle.fullCapacity ? `${personsText(seats)} (بطاقتها الكاملة)` : `${personsText(seats)} (تحمل 4 بطاقتها الكاملة)`;
+  return personsText(seats);
+}
+
+/** من أين إلى أين: الذهاب من المبنى، والعودة من المستشفى إلى المجمع، والنقل من المستشفى الأول */
+function tripRoute(trip: Trip, hospitals: Hospital[]) {
+  const from = trip.from ? trip.from.clinic : trip.request.direction === "عودة" ? trip.appointment.clinic : appointmentPickupLabel(trip.appointment);
+  return `${from} ← ${tripEndpoints(trip.appointment, trip.request.direction, hospitals, trip.from).destination}`;
+}
+
+const directionText = (trip: Trip) => (trip.from ? "نقل بين موعدين" : trip.request.nurseOnly ? "عودة الـ Nurse" : trip.request.direction);
+
+function Info({ label, wide = false, children }: { label: string; wide?: boolean; children: ReactNode }) {
+  return (
+    <div className={cx("min-w-0", wide && "sm:col-span-2")}>
+      <dt className="text-[11px] font-medium text-slate-400">{label}</dt>
+      <dd className="mt-0.5 text-sm leading-6 text-ink">{children}</dd>
+    </div>
+  );
+}
+
+/**
+ * تفاصيل سيارة عند الضغط عليها في قائمة السيارات: حالتها، والسائق ورقمه، ومن فيها الآن والمقاعد الفارغة،
+ * وآخر موقع GPS، ورحلتها الجارية، ورحلاتها في اليوم المختار.
+ */
+function VehicleDetailsDialog({ vehicle, driver, state, place, current, dayTrips, phaseOf, date, now, hospitals, onClose }: {
+  vehicle: Vehicle;
+  /** السائق الذي يقودها الآن (من هاتفه) أو المسجل للسيارة */
+  driver: string;
+  state: { tone: Tone; text: string };
+  place?: VehicleLocationState;
+  /** رحلتها الجارية الآن (ضيف أو أكثر) */
+  current: Trip[];
+  /** رحلاتها في اليوم المختار، كل رحلة مجمّعة معًا */
+  dayTrips: Trip[][];
+  phaseOf: (request: VehicleRequest) => TripPhase;
+  date: string;
+  now: Date;
+  hospitals: Hospital[];
+  onClose: () => void;
+}) {
+  const locations = useSharedState<VehicleLocation[]>("fox_locations", []);
+  const location = locations.find((item) => item.plate === vehicle.plate);
+  const fresh = location ? locationFreshness(location, now.getTime()) : null;
+  const seats = vehicleSeats(vehicle);
+  const riding = sumPersons(current);
+  const phase = current.length ? groupPhase(current.map((trip) => phaseOf(trip.request))) : null;
+  const sentAt = (trips: Trip[]) => trips.find((trip) => trip.request.notificationSentAt)?.request.notificationSentAt;
+  const pickedUpAt = (trips: Trip[]) => trips.find((trip) => trip.request.pickedUpAt)?.request.pickedUpAt;
+  const trips = [...dayTrips].sort((a, b) => (sentAt(a) ?? a[0].appointment.appointmentAt).localeCompare(sentAt(b) ?? b[0].appointment.appointmentAt));
+  const dayPersons = dayTrips.reduce((total, group) => total + sumPersons(group), 0);
+  // اليوم، غدًا، أمس، أو التاريخ كاملًا
+  const relative = formatDay(date, now);
+  const dayLabel = relative === date ? longDate(date) : relative;
+
+  const lastSeen = location ? new Date(location.updatedAt) : null;
+  const lastSeenText = lastSeen ? (localDateString(lastSeen) === localDateString(now) ? timeLabel(lastSeen) : stamp(lastSeen)) : "";
+  const locationText = !location || !lastSeen
+    ? "لم يشارك السائق موقعه بعد"
+    : fresh?.state === "live"
+      ? [`GPS مباشر · آخر تحديث ${lastSeenText}`, location.accuracy ? `دقة ${Math.round(location.accuracy)} م` : "", location.speed ? `${location.speed} كم/س` : ""].filter(Boolean).join(" · ")
+      : `${location.sharing === false ? "أوقف السائق مشاركة الموقع" : "لا يصل موقعها الآن"} · آخر موقع ${lastSeenText}`;
+  const heading = Array.from(new Set(current.map((trip) => tripEndpoints(trip.appointment, trip.request.direction, hospitals, trip.from).destination))).join("، ");
+  const placeText = phase?.kind === "toPickup" ? (phase.atPickup ? "عند نقطة الاستلام" : "في الطريق إلى الاستلام")
+    : phase?.kind === "toDestination" ? `في الطريق إلى ${heading}`
+    : place?.kind === "outside" ? `خارج المجمع · عائدة من ${place.from || "الوجهة"} · تصل ${timeLabel(place.backAt)}`
+    : "داخل المجمع";
+  const ridingText = !phase
+    ? `لا ركاب الآن · تتسع لـ ${personsText(seats)}`
+    : `${personsText(riding)} ${phase.kind === "toPickup" ? "في الطريق إلى استلامهم" : "في السيارة"} · ${freeSeatsText(seats - riding)}`;
+  const step = phase?.kind === "toPickup" ? (phase.atPickup ? 1 : 0) : phase?.kind === "toDestination" ? 2 : 3;
+
+  return (
+    <Modal
+      tone={state.tone}
+      title={(
+        <span className="flex items-center gap-2">
+          <KindIcon vehicle={vehicle} size="sm" />
+          <span className="min-w-0 truncate"><span dir="ltr">{vehicle.plate}</span> · {driver}</span>
+        </span>
+      )}
+      description={<><KindLabel vehicle={vehicle} extra={roleOf(vehicle)} /> · {seatsText(vehicle)}</>}
+      onClose={onClose}
+      footer={<button type="button" onClick={onClose} className={btn("secondary")}>إغلاق</button>}
+    >
+      <p className="flex items-center gap-2.5 rounded-xl bg-slate-50 px-3 py-2.5 text-sm font-medium text-ink ring-1 ring-inset ring-slate-200/70">
+        <Dot tone={state.tone} pulse={fresh?.state === "live"} />
+        <span>{state.text}</span>
+      </p>
+
+      <dl className="mt-4 grid gap-x-5 gap-y-3 sm:grid-cols-2">
+        <Info label="السائق">
+          {driver || "—"}
+          {driver !== vehicle.driver && vehicle.driver && <span className="block text-xs text-slate-500">السائق المسجل للسيارة: {vehicle.driver}</span>}
+        </Info>
+        <Info label="رقم السائق">
+          {vehicle.phone ? <GuestContact mobile={vehicle.phone} labels={{ call: "اتصال بالسائق", whatsapp: "واتساب" }} /> : <span className="text-slate-400">غير مسجل</span>}
+        </Info>
+        <Info label="الركاب الآن">{ridingText}</Info>
+        <Info label="المكان">{placeText}</Info>
+        <Info label="الموقع (GPS)">{locationText}</Info>
+        <Info label={`رحلات ${dayLabel}`}>
+          {trips.length ? `${trips.length === 1 ? "رحلة واحدة" : trips.length === 2 ? "رحلتان" : `${trips.length} رحلات`} · ${personsText(dayPersons)}` : "لا رحلات"}
+        </Info>
+      </dl>
+
+      {phase && (
+        <section className="mt-5" aria-label="الرحلة الجارية">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h3 className="text-sm font-semibold text-ink">الرحلة الجارية</h3>
+            <StatusBadge status={current[0].request.status} />
+          </div>
+          <div className="mt-2"><Steps steps={STEPS} current={step} /></div>
+          <ul className="mt-2 space-y-1.5">
+            {current.map((trip) => (
+              <li key={trip.request.id} className="rounded-lg bg-slate-50 px-3 py-2 text-sm">
+                <p className="font-medium text-ink">{riderName(trip)} <span className="font-normal text-slate-500">· {personsText(trip.persons)}</span></p>
+                <p className="text-xs leading-5 text-slate-500">{directionText(trip)} · {tripRoute(trip, hospitals)} · الموعد <span dir="ltr" className="tabular">{trip.appointment.appointmentAt}</span></p>
+              </li>
+            ))}
+          </ul>
+          <p className="mt-2 text-xs leading-5 text-slate-500">
+            {[
+              sentAt(current) ? `أُرسلت ${sentAt(current)}` : "",
+              pickedUpAt(current) ? `استُلم الضيف ${timeLabel(new Date(pickedUpAt(current)!))}` : "",
+              phase.kind === "toDestination" ? `الوصول المتوقع ${timeLabel(phase.etaAt)}${phase.late ? " (متأخرة)" : ""}` : "",
+            ].filter(Boolean).join(" · ")}
+          </p>
+        </section>
+      )}
+
+      <section className="mt-5" aria-label={`رحلات ${dayLabel}`}>
+        <h3 className="text-sm font-semibold text-ink">رحلات {dayLabel}</h3>
+        {trips.length ? (
+          <ol className="mt-2 divide-y divide-slate-100 rounded-xl ring-1 ring-slate-200/70">
+            {trips.map((group) => {
+              const groupState = groupPhase(group.map((trip) => phaseOf(trip.request)));
+              const destinations = Array.from(new Set(group.map((trip) => tripEndpoints(trip.appointment, trip.request.direction, hospitals, trip.from).destination)));
+              return (
+                <li key={group[0].request.groupId ?? group[0].request.id} className="flex items-start gap-3 px-3 py-2.5">
+                  <span dir="ltr" className="mt-0.5 w-11 shrink-0 text-sm font-semibold text-ink tabular">{sentAt(group) ?? group[0].appointment.appointmentAt}</span>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-medium text-ink">{group.map(riderName).join("، ")}</p>
+                    <p className="text-xs leading-5 text-slate-500">
+                      {directionText(group[0])} إلى {destinations.join("، ")} · {personsText(sumPersons(group))}
+                    </p>
+                  </div>
+                  {groupState.kind === "arrived"
+                    ? <Badge tone="green" icon={CheckCircle2}>وصلت{groupState.at ? ` ${timeLabel(groupState.at)}` : ""}{SOURCE_TEXT[groupState.source] ? ` · ${SOURCE_TEXT[groupState.source]}` : ""}</Badge>
+                    : <StatusBadge status={group[0].request.status} />}
+                </li>
+              );
+            })}
+          </ol>
+        ) : <p className="mt-2 rounded-xl bg-slate-50 px-3 py-3 text-sm text-slate-500">لا رحلات لهذه السيارة {relative === date ? "في هذا اليوم" : dayLabel}</p>}
+      </section>
+    </Modal>
   );
 }
 
