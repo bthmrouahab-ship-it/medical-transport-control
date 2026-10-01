@@ -1,15 +1,21 @@
 import { useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import { Check, FileSpreadsheet, FilterX, Loader2, Lock, Pencil, Search, Trash2, Upload, UserPlus, UsersRound, X } from "lucide-react";
+import { Check, FileSpreadsheet, FilterX, Loader2, Lock, Pencil, Search, BriefcaseMedical, Trash2, Upload, UserPlus, UsersRound, X } from "lucide-react";
 import {
+  NURSE_APARTMENT,
+  NURSE_BUILDING,
+  NURSE_LABEL,
   guestIndex,
   guestOfAppointment,
+  isNurse,
   normalizeAge,
   normalizeGuestMobile,
   normalizeHealthNumber,
   normalizeUnit,
   parseGuestRows,
+  parseNurseRows,
   planGuestImport,
+  tableRows,
   searchGuests,
   validateGuest,
   type Guest,
@@ -25,8 +31,11 @@ import { Badge, EmptyState, Panel, PageHeader, btn, cx, inputClass, labelClass }
 const PAGE = 50;
 const WAITING = "بانتظار طلب السيارة";
 const COLUMNS_HINT = "الاسم باللغة العربية، الاسم باللغة الإنجليزية، الجنس، العمر، الرقم الصحي، رقم الهاتف، رقم المبنى، رقم الشقة";
+const NURSE_COLUMNS_HINT = "الاسم كامل عربي، الاسم انجليزي، رقم الجوال، الجهة/المؤسسة";
 
-type ImportPreview = { fileName: string; plan: ReturnType<typeof planGuestImport>; errors: string[]; removeMissing: boolean };
+/** nurses: قائمة الممرضات (تُقارن بالممرضات فقط، وملف الضيوف بالضيوف فقط) */
+type ImportPreview = { fileName: string; nurses: boolean; plan: ReturnType<typeof planGuestImport>; errors: string[]; removeMissing: boolean };
+type KindFilter = "all" | "guests" | "nurses";
 
 /** ترتيب المباني: الأرقام أولًا بترتيبها ثم R1 وR2 */
 const byUnit = (a: string, b: string) => a.localeCompare(b, "en", { numeric: true });
@@ -38,8 +47,10 @@ const byUnit = (a: string, b: string) => a.localeCompare(b, "en", { numeric: tru
 export default function GuestManager() {
   const guests = useGuests();
   const fileInput = useRef<HTMLInputElement>(null);
+  const nurseInput = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState("");
   const [building, setBuilding] = useState("all");
+  const [kind, setKind] = useState<KindFilter>("all");
   const [limit, setLimit] = useState(PAGE);
   const [editing, setEditing] = useState<{ id: string; buildingNumber: string; apartmentNumber: string } | null>(null);
   const [adding, setAdding] = useState(false);
@@ -48,27 +59,37 @@ export default function GuestManager() {
   const [saving, setSaving] = useState(false);
 
   const buildings = useMemo(() => Array.from(new Set(guests.map((guest) => guest.buildingNumber))).sort(byUnit), [guests]);
-  const filtering = Boolean(query.trim()) || building !== "all";
+  const nurseCount = useMemo(() => guests.filter(isNurse).length, [guests]);
+  const filtering = Boolean(query.trim()) || building !== "all" || kind !== "all";
   const shown = useMemo(() => {
     const list = query.trim() ? searchGuests(guests, query, guests.length) : guests;
-    return building === "all" ? list : list.filter((guest) => guest.buildingNumber === building);
-  }, [guests, query, building]);
+    return list.filter((guest) => (building === "all" || guest.buildingNumber === building)
+      && (kind === "all" || isNurse(guest) === (kind === "nurses")));
+  }, [guests, query, building, kind]);
 
-  async function readFile(file?: File) {
+  /** ملف الضيوف، أو قائمة الممرضات (نموذج إضافة البيانات: العناوين بعد عنوان النموذج، والسكن مبنى 03 شقة 001) */
+  async function readFile(file: File | undefined, nurses: boolean) {
     if (!file) return;
     setReading(true);
     try {
       const XLSX = await import("xlsx");
       const workbook = XLSX.read(await file.arrayBuffer(), { type: "array" });
-      // أول ورقة فيها بيانات
-      const sheet = workbook.SheetNames.map((name) => workbook.Sheets[name]).find((item) => item["!ref"]);
-      const rows = sheet ? XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: "" }) : [];
-      const { guests: incoming, errors } = parseGuestRows(rows);
+      const sheets = workbook.SheetNames.map((name) => workbook.Sheets[name]).filter((item) => item["!ref"]);
+      let parsed: ReturnType<typeof parseGuestRows>;
+      if (nurses) {
+        // أول ورقة فيها جدول بعمود الاسم
+        const table = sheets.map((sheet) => tableRows(XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, defval: "" }))).find((item) => item.rows.length);
+        parsed = table ? parseNurseRows(table.rows, table.firstRow) : { guests: [], errors: [] };
+      } else {
+        // أول ورقة فيها بيانات
+        parsed = parseGuestRows(sheets[0] ? XLSX.utils.sheet_to_json<Record<string, unknown>>(sheets[0], { defval: "" }) : []);
+      }
+      const { guests: incoming, errors } = parsed;
       if (!incoming.length) {
-        toast.error("لم يُعثر على ضيوف في الملف", { description: errors[0] ?? `الأعمدة المطلوبة: ${COLUMNS_HINT}`, duration: 12000 });
+        toast.error(nurses ? "لم يُعثر على ممرضات في الملف" : "لم يُعثر على ضيوف في الملف", { description: errors[0] ?? `الأعمدة المطلوبة: ${nurses ? NURSE_COLUMNS_HINT : COLUMNS_HINT}`, duration: 12000 });
         return;
       }
-      setPreview({ fileName: file.name, plan: planGuestImport(incoming, guests), errors, removeMissing: false });
+      setPreview({ fileName: file.name, nurses, plan: planGuestImport(incoming, guests), errors, removeMissing: false });
       setAdding(false);
     } catch (error) {
       console.error("[guests] import", error);
@@ -76,6 +97,7 @@ export default function GuestManager() {
     } finally {
       setReading(false);
       if (fileInput.current) fileInput.current.value = "";
+      if (nurseInput.current) nurseInput.current.value = "";
     }
   }
 
@@ -86,8 +108,9 @@ export default function GuestManager() {
       const result = await api<{ added: number; updated: number; unchanged: number; removed: number }>("guests.import", {
         guests: JSON.parse(JSON.stringify(preview.plan.guests)),
         remove: preview.removeMissing ? preview.plan.missing.map((guest) => guest.id) : [],
+        kind: preview.nurses ? "nurses" : "guests",
       });
-      toast.success("حُفظت قائمة الضيوف", {
+      toast.success(preview.nurses ? "حُفظت قائمة الممرضات" : "حُفظت قائمة الضيوف", {
         description: `${result.added} جديد، ${result.updated} تحديث، ${result.unchanged} بلا تغيير${result.removed ? `، وحُذف ${result.removed}` : ""}. تظهر في الصفحة خلال ثوانٍ.`,
         duration: 8000,
       });
@@ -125,14 +148,15 @@ export default function GuestManager() {
       return { ...appointment, guestId: guest.id, buildingNumber: next.buildingNumber, apartmentNumber: next.apartmentNumber };
     });
     if (moved) saveState("fox_appointments", updated, appointments);
-    toast.success(`حُفظ المبنى والشقة للضيف ${guest.name}`, { description: moved ? `وتحدّثا في ${moved} ${moved === 1 ? "موعد قادم" : "مواعيد قادمة"} لم يُطلب لها سيارة بعد.` : undefined });
+    toast.success(`حُفظ المبنى والشقة ${isNurse(guest) ? "للممرضة" : "للضيف"} ${guest.name}`, { description: moved ? `وتحدّثا في ${moved} ${moved === 1 ? "موعد قادم" : "مواعيد قادمة"} لم يُطلب لها سيارة بعد.` : undefined });
     setEditing(null);
   }
 
   function remove(guest: Guest) {
-    if (!window.confirm(`حذف الضيف ${guest.name} (مبنى ${guest.buildingNumber} شقة ${guest.apartmentNumber}) من القائمة؟\nلن يمكن إضافة مواعيد جديدة له، وتبقى مواعيده السابقة كما هي.`)) return;
+    const who = isNurse(guest) ? "الممرضة" : "الضيف";
+    if (!window.confirm(`حذف ${who} ${guest.name} (مبنى ${guest.buildingNumber} شقة ${guest.apartmentNumber}) من القائمة؟\nلن يمكن إضافة مواعيد جديدة، وتبقى المواعيد السابقة كما هي.`)) return;
     saveState("fox_guests", guests.filter((item) => item.id !== guest.id), guests);
-    toast.success(`حُذف الضيف ${guest.name} من القائمة`);
+    toast.success(`حُذف${isNurse(guest) ? "ت" : ""} ${who} ${guest.name} من القائمة`);
   }
 
   function add(guest: GuestRecord) {
@@ -142,7 +166,7 @@ export default function GuestManager() {
       return false;
     }
     saveState("fox_guests", [...guests, JSON.parse(JSON.stringify(guest))], guests);
-    toast.success(`أُضيف الضيف ${guest.name} إلى القائمة`);
+    toast.success(isNurse(guest) ? `أُضيفت الممرضة ${guest.name} إلى القائمة` : `أُضيف الضيف ${guest.name} إلى القائمة`);
     setAdding(false);
     return true;
   }
@@ -152,13 +176,17 @@ export default function GuestManager() {
   return (
     <>
       <PageHeader
-        title="ضيوف المجمع"
-        subtitle="تُضاف المواعيد لضيوف هذه القائمة فقط. العمر والرقم الصحي لا يظهران هنا ولا عند طلب الموعد، بل في الإحصائيات فقط."
+        title="ضيوف المجمع والممرضات"
+        subtitle="تُضاف المواعيد لضيوف هذه القائمة وممرضاتها فقط. العمر والرقم الصحي لا يظهران هنا ولا عند طلب الموعد، بل في الإحصائيات فقط."
         actions={(
           <>
-            <input ref={fileInput} type="file" accept=".xlsx,.xls" className="hidden" onChange={(event) => readFile(event.target.files?.[0])} />
+            <input ref={fileInput} type="file" accept=".xlsx,.xls" className="hidden" onChange={(event) => readFile(event.target.files?.[0], false)} />
+            <input ref={nurseInput} type="file" accept=".xlsx,.xls" className="hidden" onChange={(event) => readFile(event.target.files?.[0], true)} />
             <button type="button" disabled={reading} onClick={() => fileInput.current?.click()} className={btn("secondary")}>
               {reading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />} رفع ملف الضيوف (Excel)
+            </button>
+            <button type="button" disabled={reading} onClick={() => nurseInput.current?.click()} className={btn("secondary")}>
+              <BriefcaseMedical className="h-4 w-4" /> رفع قائمة الممرضات (Excel)
             </button>
             <button type="button" onClick={() => { setAdding(true); setPreview(null); }} className={btn("primary")}><UserPlus className="h-4 w-4" /> إضافة ضيف</button>
           </>
@@ -170,13 +198,13 @@ export default function GuestManager() {
 
       <Panel
         icon={UsersRound}
-        title="قائمة الضيوف"
+        title={nurseCount ? "قائمة الضيوف والممرضات" : "قائمة الضيوف"}
         count={filtering ? shown.length : guests.length}
-        description={guests.length ? `${guests.length.toLocaleString("en")} ضيف في ${buildings.length} مبنى${filtering ? ` · ${shown.length.toLocaleString("en")} مطابق` : ""}` : undefined}
-        actions={filtering && <button type="button" onClick={() => { setQuery(""); setBuilding("all"); setLimit(PAGE); }} className={btn("ghost", "sm")}><FilterX className="h-4 w-4" /> مسح الفلاتر</button>}
+        description={guests.length ? `${(guests.length - nurseCount).toLocaleString("en")} ضيف${nurseCount ? ` و${nurseCount.toLocaleString("en")} ممرضة` : ""} في ${buildings.length} مبنى${filtering ? ` · ${shown.length.toLocaleString("en")} مطابق` : ""}` : undefined}
+        actions={filtering && <button type="button" onClick={() => { setQuery(""); setBuilding("all"); setKind("all"); setLimit(PAGE); }} className={btn("ghost", "sm")}><FilterX className="h-4 w-4" /> مسح الفلاتر</button>}
       >
         {guests.length > 0 && (
-          <div className="grid gap-3 border-b border-slate-100 p-4 sm:grid-cols-[minmax(0,1fr)_200px] sm:px-5">
+          <div className="grid gap-3 border-b border-slate-100 p-4 sm:grid-cols-[minmax(0,1fr)_180px_200px] sm:px-5">
             <label className="relative block">
               <span className="sr-only">بحث في الضيوف</span>
               <Search className="pointer-events-none absolute start-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
@@ -185,6 +213,11 @@ export default function GuestManager() {
             <select aria-label="المبنى" value={building} onChange={(event) => { setBuilding(event.target.value); setLimit(PAGE); }} className={cx(inputClass, "h-10", building !== "all" && "border-brand-600 bg-brand-50 text-brand-700")}>
               <option value="all">كل المباني</option>
               {buildings.map((item) => <option key={item} value={item}>مبنى {item}</option>)}
+            </select>
+            <select aria-label="النوع" value={kind} onChange={(event) => { setKind(event.target.value as KindFilter); setLimit(PAGE); }} className={cx(inputClass, "h-10", kind !== "all" && "border-brand-600 bg-brand-50 text-brand-700")}>
+              <option value="all">الضيوف والممرضات</option>
+              <option value="guests">الضيوف فقط</option>
+              <option value="nurses">الممرضات فقط ({nurseCount})</option>
             </select>
           </div>
         )}
@@ -212,8 +245,11 @@ export default function GuestManager() {
                   return (
                     <tr key={guest.id} className={cx("transition-colors hover:bg-slate-50/70", edit && "bg-brand-50/40 hover:bg-brand-50/40")}>
                       <td className={cell}>
-                        <p className="font-medium text-ink">{guest.name}</p>
-                        {guest.nameEn && <p className="text-xs text-slate-500"><bdi>{guest.nameEn}</bdi></p>}
+                        <p className="flex flex-wrap items-center gap-1.5 font-medium text-ink">
+                          {guest.name}
+                          {isNurse(guest) && <Badge tone="violet" icon={BriefcaseMedical}>{NURSE_LABEL}</Badge>}
+                        </p>
+                        {(guest.nameEn || guest.organization) && <p className="text-xs text-slate-500">{guest.nameEn && <bdi>{guest.nameEn}</bdi>}{guest.nameEn && guest.organization ? " · " : ""}{guest.organization && <bdi>{guest.organization}</bdi>}</p>}
                       </td>
                       <td className={cx(cell, "text-slate-600")}>{guest.gender ?? <span className="text-slate-300">—</span>}</td>
                       {edit ? (
@@ -267,17 +303,19 @@ function ImportPreviewPanel({ preview, saving, onChange, onSave, onCancel }: {
   onSave: () => void;
   onCancel: () => void;
 }) {
-  const { plan, errors } = preview;
+  const { plan, errors, nurses } = preview;
   return (
-    <Panel tone="amber" icon={FileSpreadsheet} title="مراجعة ملف الضيوف قبل الحفظ" description={preview.fileName} className="mb-6" bodyClassName="space-y-4 p-4 sm:p-5">
+    <Panel tone="amber" icon={nurses ? BriefcaseMedical : FileSpreadsheet} title={nurses ? "مراجعة قائمة الممرضات قبل الحفظ" : "مراجعة ملف الضيوف قبل الحفظ"} description={preview.fileName} className="mb-6" bodyClassName="space-y-4 p-4 sm:p-5">
       <div className="flex flex-wrap gap-2">
-        <Badge tone="neutral">{plan.guests.length.toLocaleString("en")} ضيف في الملف</Badge>
-        <Badge tone="green">{plan.added.toLocaleString("en")} جديد</Badge>
-        <Badge tone="blue">{plan.updated.toLocaleString("en")} موجود في القائمة (تُحدَّث بياناته)</Badge>
+        <Badge tone="neutral">{plan.guests.length.toLocaleString("en")} {nurses ? "ممرضة" : "ضيف"} في الملف</Badge>
+        <Badge tone="green">{plan.added.toLocaleString("en")} {nurses ? "جديدة" : "جديد"}</Badge>
+        <Badge tone="blue">{plan.updated.toLocaleString("en")} {nurses ? "موجودة في القائمة (تُحدَّث بياناتها)" : "موجود في القائمة (تُحدَّث بياناته)"}</Badge>
         {errors.length > 0 && <Badge tone="red">{errors.length.toLocaleString("en")} صف لم يُقرأ</Badge>}
       </div>
       <p className="text-sm leading-6 text-slate-600">
-        الضيف الموجود بنفس الاسم تُحدَّث بياناته من الملف (ومنها المبنى والشقة)، وتبقى مواعيده مرتبطة به. العمر والرقم الصحي يُحفظان للإحصائيات فقط.
+        {nurses
+          ? `كل الممرضات في مبنى ${NURSE_BUILDING} شقة ${NURSE_APARTMENT}، ويُطلب لهن سيارة مثل الضيوف. الممرضة الموجودة بنفس الاسم تُحدَّث بياناتها وتبقى مواعيدها مرتبطة بها. الرقم الشخصي والجنسية لا يُحفظان، وقائمة الضيوف لا تتغير.`
+          : "الضيف الموجود بنفس الاسم تُحدَّث بياناته من الملف (ومنها المبنى والشقة)، وتبقى مواعيده مرتبطة به. العمر والرقم الصحي يُحفظان للإحصائيات فقط. قائمة الممرضات لا تتغير."}
       </p>
       {errors.length > 0 && (
         <ul className="max-h-40 space-y-1 overflow-y-auto rounded-xl bg-red-50 p-3 text-xs leading-5 text-red-800 ring-1 ring-inset ring-red-200">
@@ -289,8 +327,8 @@ function ImportPreviewPanel({ preview, saving, onChange, onSave, onCancel }: {
         <label className="flex cursor-pointer items-start gap-2.5 rounded-xl bg-slate-50 p-3 text-sm text-slate-700 ring-1 ring-inset ring-slate-200">
           <input type="checkbox" checked={preview.removeMissing} onChange={(event) => onChange({ ...preview, removeMissing: event.target.checked })} className="mt-0.5 h-4 w-4 accent-brand-600" />
           <span>
-            حذف {plan.missing.length.toLocaleString("en")} {plan.missing.length === 1 ? "ضيف موجود" : "ضيوف موجودين"} في القائمة وغير موجودين في الملف
-            <span className="block text-xs text-slate-500">مثل من غادر المجمع. تبقى مواعيدهم السابقة، ولا تُضاف لهم مواعيد جديدة.</span>
+            حذف {plan.missing.length.toLocaleString("en")} {nurses ? (plan.missing.length === 1 ? "ممرضة موجودة" : "ممرضات موجودات") : plan.missing.length === 1 ? "ضيف موجود" : "ضيوف موجودين"} في القائمة وغير {nurses ? "موجودات" : "موجودين"} في الملف
+            <span className="block text-xs text-slate-500">{nurses ? "مثل من انتهى عملها. تبقى المواعيد السابقة، ولا تُضاف مواعيد جديدة." : "مثل من غادر المجمع. تبقى مواعيدهم السابقة، ولا تُضاف لهم مواعيد جديدة."}</span>
           </span>
         </label>
       )}
@@ -305,7 +343,7 @@ function ImportPreviewPanel({ preview, saving, onChange, onSave, onCancel }: {
 }
 
 function NewGuestForm({ buildings, onAdd, onCancel }: { buildings: string[]; onAdd: (guest: GuestRecord) => boolean; onCancel: () => void }) {
-  const [form, setForm] = useState({ name: "", nameEn: "", gender: "" as Gender | "", age: "", healthNumber: "", mobile: "", buildingNumber: "", apartmentNumber: "" });
+  const [form, setForm] = useState({ name: "", nameEn: "", gender: "" as Gender | "", age: "", healthNumber: "", mobile: "", buildingNumber: "", apartmentNumber: "", nurse: false });
   const set = (patch: Partial<typeof form>) => setForm((current) => ({ ...current, ...patch }));
 
   function submit(event: React.FormEvent) {
@@ -331,10 +369,11 @@ function NewGuestForm({ buildings, onAdd, onCancel }: { buildings: string[]; onA
       apartmentNumber: normalizeUnit(form.apartmentNumber),
       ...(age !== undefined ? { age } : {}),
       ...(healthNumber ? { healthNumber } : {}),
+      ...(form.nurse ? { nurse: true as const } : {}),
     });
   }
 
-  const field = (label: string, key: keyof typeof form, extra: React.InputHTMLAttributes<HTMLInputElement> = {}) => (
+  const field = (label: string, key: Exclude<keyof typeof form, "nurse">, extra: React.InputHTMLAttributes<HTMLInputElement> = {}) => (
     <label className="block">
       <span className={labelClass}>{label}</span>
       <input value={form[key]} onChange={(event) => set({ [key]: event.target.value })} className={inputClass} {...extra} />
@@ -345,6 +384,17 @@ function NewGuestForm({ buildings, onAdd, onCancel }: { buildings: string[]; onA
       <form onSubmit={submit} className="grid gap-4 p-5 sm:grid-cols-2 lg:grid-cols-4">
         <div className="sm:col-span-2">{field("الاسم بالعربية", "name", { required: true, autoFocus: true })}</div>
         <div className="sm:col-span-2">{field("الاسم بالإنجليزية", "nameEn", { dir: "ltr" })}</div>
+        <label className="flex cursor-pointer items-center gap-2.5 rounded-xl bg-violet-50/60 px-3 py-2.5 text-sm text-ink ring-1 ring-inset ring-violet-200 sm:col-span-2 lg:col-span-4">
+          <input
+            type="checkbox"
+            checked={form.nurse}
+            // الممرضات في مبنى 03 شقة 001
+            onChange={(event) => set({ nurse: event.target.checked, ...(event.target.checked && !form.buildingNumber && !form.apartmentNumber ? { buildingNumber: NURSE_BUILDING, apartmentNumber: NURSE_APARTMENT } : {}) })}
+            className="h-4 w-4 accent-brand-600"
+          />
+          <BriefcaseMedical className="h-4 w-4 text-violet-700" /> ممرضة
+          <span className="text-xs text-slate-500">· مبنى {NURSE_BUILDING} شقة {NURSE_APARTMENT}، ويُطلب لها سيارة مثل الضيف</span>
+        </label>
         <label className="block">
           <span className={labelClass}>الجنس</span>
           <select value={form.gender} onChange={(event) => set({ gender: event.target.value as Gender | "" })} className={inputClass}>

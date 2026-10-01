@@ -15,7 +15,7 @@ export function toWesternDigits(value: string) {
     .replace(/[۰-۹]/g, (digit) => String(persian.indexOf(digit)));
 }
 
-function normalizeHeader(value: string) {
+export function normalizeHeader(value: string) {
   return value
     .trim()
     .toLowerCase()

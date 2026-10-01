@@ -3,6 +3,7 @@ import { toast } from "sonner";
 import {
   AlertTriangle,
   Bell,
+  BriefcaseMedical,
   BellRing,
   CarFront,
   CheckCircle2,
@@ -118,7 +119,8 @@ type Trip = { request: VehicleRequest; appointment: ClinicAppointment; from?: Cl
 const sumPersons = (trips: Pick<Trip, "persons">[]) => trips.reduce((total, trip) => total + trip.persons, 0);
 
 /** من يركب: الضيف، أو الـ Nurse وحدها في «عودة الـ Nurse فقط» */
-const riderName = (trip: Pick<Trip, "request" | "appointment">) => (trip.request.nurseOnly ? `الـ Nurse · ${trip.appointment.patientName}` : trip.appointment.patientName);
+const riderName = (trip: Pick<Trip, "request" | "appointment">) => (trip.request.nurseOnly ? `الـ Nurse · ${trip.appointment.patientName}`
+  : trip.appointment.nurse ? `${trip.appointment.patientName} (ممرضة)` : trip.appointment.patientName);
 
 /** نوع الرحلة والجنس والاحتياجات وعدد الأشخاص (مع المرافق والـ Nurse) */
 function riderDetails(trip: Trip) {
@@ -601,6 +603,7 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
                             <p className="font-semibold text-ink">{trip.appointment.patientName}</p>
                             {trip.from ? <Badge tone="cyan">نقل بين موعدين</Badge> : trip.request.nurseOnly ? <Badge tone="amber">عودة الـ Nurse فقط</Badge> : <Badge tone={trip.request.direction === "عودة" ? "amber" : "neutral"}>{trip.request.direction}</Badge>}
                             {isNonMedical(trip.appointment) && <Badge tone="violet">غير طبية</Badge>}
+                            {trip.appointment.nurse && <Badge tone="violet" icon={BriefcaseMedical}>ممرضة</Badge>}
                             {isPriority(trip.appointment) && <PriorityBadge />}
                             {pendingLate(trip) && <Badge tone="red" icon={AlertTriangle}>متأخر</Badge>}
                             {groupedIds.has(trip.appointment.id) && <Badge tone="violet" icon={Sparkles}>قابلة للجمع</Badge>}
@@ -1375,6 +1378,7 @@ function GroupEditor({ initial, pending, hospitals, load, choicesFor, suggestFor
         {trip.persons > 1 && <Badge>{personsText(trip.persons)}</Badge>}
         {trip.appointment.kind === "احتياجات خاصة" && <Badge tone="amber">احتياجات خاصة</Badge>}
         {isNonMedical(trip.appointment) && <Badge tone="violet">غير طبية</Badge>}
+        {trip.appointment.nurse && <Badge tone="violet">ممرضة</Badge>}
         {isPriority(trip.appointment) && <span className="text-xs font-medium text-red-700">أولوية</span>}
       </span>
       <span className="block truncate text-xs text-slate-500">{routeLabel(trip.appointment, trip.from)}{trip.request.createdAt ? ` · ${requestTimes(trip)}` : ""}</span>

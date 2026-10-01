@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
-import { Accessibility, AlertTriangle, ArrowLeftRight, Ban, BellRing, Building2, Check, CheckCircle2, ChevronDown, Clock3, Footprints, Hospital, House, Link2, MapPin, Ribbon, RotateCcw, ShieldCheck, Smartphone, Stethoscope, Timer, Truck, Users, XCircle } from "lucide-react";
+import { Accessibility, AlertTriangle, ArrowLeftRight, Ban, BellRing, BriefcaseMedical, Building2, Check, CheckCircle2, ChevronDown, Clock3, Footprints, Hospital, House, Link2, MapPin, Ribbon, RotateCcw, ShieldCheck, Smartphone, Stethoscope, Timer, Truck, Users, XCircle } from "lucide-react";
 import {
   CANCEL_REASONS,
   appointmentPickupLabel,
@@ -715,6 +715,7 @@ function GuestSummary({ appointment, request, from, day, timeTone, status }: {
               ? <Badge tone="cyan" icon={ArrowLeftRight}>نقل بين موعدين</Badge>
               : request.nurseOnly ? <Badge tone="amber" icon={Stethoscope}>عودة الـ Nurse فقط</Badge> : <Badge tone={returning ? "amber" : "neutral"}>{request.direction}</Badge>)}
           {isNonMedical(appointment) && <Badge tone="violet">غير طبية</Badge>}
+          {appointment.nurse && <Badge tone="violet" icon={BriefcaseMedical}>ممرضة</Badge>}
           {appointment.kind === "احتياجات خاصة" && <Badge icon={Accessibility}>احتياجات خاصة</Badge>}
           {appointment.cancer && <Badge tone="red" icon={Ribbon}>أولوية · حالة سرطان</Badge>}
         </span>

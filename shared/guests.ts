@@ -1,4 +1,4 @@
-import { normalizeGender, normalizeMobile, readAliased, toText, toWesternDigits } from "./text";
+import { normalizeGender, normalizeHeader, normalizeMobile, readAliased, toText, toWesternDigits } from "./text";
 import type { ClinicAppointment, Gender, VehicleRequest } from "./transport";
 
 /**
@@ -15,7 +15,17 @@ export type Guest = {
   mobile?: string;
   buildingNumber: string;
   apartmentNumber: string;
+  /** ممرضة من قائمة الممرضات (يرفعها المدير منفصلة): يُطلب لها سيارة مثل الضيف تمامًا */
+  nurse?: true;
+  /** جهة عمل الممرضة (الشركة) */
+  organization?: string;
 };
+
+/** سكن الممرضات: كلهن في مبنى 03 شقة 001 (إلا إن ذكر الملف غير ذلك) */
+export const NURSE_BUILDING = "03";
+export const NURSE_APARTMENT = "001";
+export const NURSE_LABEL = "ممرضة";
+export const isNurse = (guest?: Pick<Guest, "nurse"> | null) => guest?.nurse === true;
 
 /** بيانات لا تظهر عند طلب الموعد: في الإحصائيات فقط */
 export type GuestPrivate = { age?: number; healthNumber?: string };
@@ -49,6 +59,72 @@ const COLUMNS = {
   building: ["رقم المبنى", "المبنى", "building number", "building"],
   apartment: ["رقم الشقة", "الشقة", "apartment number", "apartment"],
 };
+
+/** أعمدة ملف الممرضات (نموذج إضافة البيانات): الاسم كامل عربي، الاسم انجليزي، رقم الجوال، الجهة/المؤسسة */
+const NURSE_COLUMNS = {
+  name: ["الاسم كامل عربي", "الاسم الكامل عربي", "الاسم كامل بالعربي", "الاسم الكامل بالعربية", ...COLUMNS.name],
+  nameEn: ["الاسم انجليزي", "الاسم كامل انجليزي", "الاسم الكامل بالإنجليزية", ...COLUMNS.nameEn],
+  organization: ["الجهة/المؤسسة", "الجهة", "المؤسسة", "الشركة", "جهة العمل", "organization", "company"],
+};
+
+/** عمود رقم التسلسل في النموذج */
+const SERIAL_HEADERS = new Set(["الرقم", "م", "#", "no", "no.", "رقم التسلسل", "التسلسل"].map(normalizeHeader));
+
+/**
+ * صفوف جدول من ورقة Excel (مصفوفة خلايا): سطر العناوين أول سطر فيه أحد أسماء عمود الاسم، وقد يسبقه عنوان
+ * النموذج وأسطر فارغة. firstRow رقم أول صف بيانات في Excel (لرسائل الأخطاء).
+ */
+export function tableRows(matrix: unknown[][], nameHeaders: string[] = NURSE_COLUMNS.name) {
+  const known = new Set(nameHeaders.map(normalizeHeader));
+  const headerIndex = matrix.findIndex((row) => row.some((cell) => known.has(normalizeHeader(toText(cell)))));
+  if (headerIndex < 0) return { rows: [] as Record<string, unknown>[], firstRow: 2 };
+  const headers = matrix[headerIndex].map((cell) => toText(cell));
+  const rows = matrix.slice(headerIndex + 1).map((row) => Object.fromEntries(headers.flatMap((header, index) => (header ? [[header, row[index] ?? ""]] : []))));
+  return { rows, firstRow: headerIndex + 2 };
+}
+
+/**
+ * يقرأ ملف الممرضات: الاسم بالعربية إلزامي ولا يتكرر، والمبنى والشقة 03 و001 إن لم يذكرهما الملف.
+ * الرقم الشخصي والجنسية لا يُحفظان (لا يحتاجهما طلب السيارة).
+ */
+export function parseNurseRows(rows: Record<string, unknown>[], firstRow = 2): { guests: GuestRecord[]; errors: string[] } {
+  const guests: GuestRecord[] = [];
+  const errors: string[] = [];
+  const seen = new Map<string, number>();
+  rows.forEach((row, index) => {
+    const excelRow = firstRow + index;
+    const name = spaced(readAliased(row, NURSE_COLUMNS.name)).slice(0, GUEST_NAME_MAX);
+    if (!name) {
+      // صف النموذج الفارغ (فيه رقم التسلسل فقط) لا يُعدّ خطأ
+      const filled = Object.entries(row).filter(([header, value]) => toText(value) && !SERIAL_HEADERS.has(normalizeHeader(header)));
+      if (filled.length) errors.push(`الصف ${excelRow}: الاسم بالعربية ناقص`);
+      return;
+    }
+    const key = normalizeGuestName(name);
+    if (seen.has(key)) {
+      errors.push(`الصف ${excelRow}: الاسم مكرر (كما في الصف ${seen.get(key)})`);
+      return;
+    }
+    seen.set(key, excelRow);
+    const englishName = spaced(readAliased(row, NURSE_COLUMNS.nameEn)).slice(0, GUEST_NAME_MAX);
+    const nameEn = NOT_AVAILABLE.test(englishName) ? "" : englishName;
+    const gender = normalizeGender(readAliased(row, COLUMNS.gender));
+    const mobile = normalizeGuestMobile(readAliased(row, COLUMNS.mobile));
+    const organization = spaced(readAliased(row, NURSE_COLUMNS.organization)).slice(0, GUEST_NAME_MAX);
+    guests.push({
+      id: "",
+      name,
+      ...(nameEn ? { nameEn } : {}),
+      ...(gender ? { gender } : {}),
+      ...(mobile ? { mobile } : {}),
+      buildingNumber: normalizeUnit(readAliased(row, COLUMNS.building)) || NURSE_BUILDING,
+      apartmentNumber: normalizeUnit(readAliased(row, COLUMNS.apartment)) || NURSE_APARTMENT,
+      nurse: true,
+      ...(organization && !NOT_AVAILABLE.test(organization) ? { organization } : {}),
+    });
+  });
+  return { guests, errors };
+}
 
 /** رقم المبنى أو الشقة كما يُكتب في المواعيد (R1 بأحرف كبيرة) */
 export const normalizeUnit = (value: unknown) => cellText(value).toUpperCase();
@@ -122,15 +198,18 @@ export function parseGuestRows(rows: Record<string, unknown>[]): { guests: Guest
 /**
  * رفع ملف ضيوف جديد: الضيف الموجود بنفس الاسم يُحدَّث (ويبقى رقمه في النظام فتبقى مواعيده مرتبطة به)،
  * والجديد يُضاف برقم جديد. «غير موجودين في الملف» يمكن حذفهم إن اختار المدير ذلك.
+ * ملف الضيوف يُقارن بالضيوف فقط، وملف الممرضات بالممرضات فقط، فلا يحذف أحدهما الآخر.
  */
-export function planGuestImport(incoming: GuestRecord[], existing: Guest[], idSeed = Date.now()) {
+export function planGuestImport(incoming: GuestRecord[], allExisting: Guest[], idSeed = Date.now()) {
+  const nurses = incoming.some(isNurse);
+  const existing = allExisting.filter((guest) => isNurse(guest) === nurses);
   const byName = new Map(existing.map((guest) => [normalizeGuestName(guest.name), guest]));
   const matched = new Set<string>();
   const stamp = idSeed.toString(36);
   const guests = incoming.map((guest, index) => {
     const found = byName.get(normalizeGuestName(guest.name));
     if (found) matched.add(found.id);
-    return { ...guest, id: found?.id ?? `G-${stamp}-${index + 1}` };
+    return { ...guest, id: found?.id ?? `${nurses ? "N" : "G"}-${stamp}-${index + 1}` };
   });
   return {
     guests,
