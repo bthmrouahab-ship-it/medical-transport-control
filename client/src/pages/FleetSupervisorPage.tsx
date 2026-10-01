@@ -47,6 +47,7 @@ import {
   isNonMedical,
   isPriority,
   isReturnOnly,
+  regularForSpecialWarning,
   isRushHour,
   isTransfer,
   localDateString,
@@ -168,7 +169,8 @@ type DriverMessage = { vehicle: Vehicle; count: number; message: string };
 const roleOf = (vehicle: Vehicle) => (busRoleOf(vehicle) ? BUS_ROLE_LABELS[busRoleOf(vehicle)!] : undefined);
 
 /** خيار سيارة لرحلة: متاحة لها الآن، أو غير متاحة مع السبب (مشغولة، أو قاعدة الباصات والمقاعد) */
-type VehicleChoice = { vehicle: Vehicle; why: string | null };
+/** why: لا تناسب الرحلة (معطّلة)، warning: تناسبها بعد موافقة المشرف (سيارة عادية لضيف احتياجات خاصة) */
+type VehicleChoice = { vehicle: Vehicle; why: string | null; warning?: string | null };
 
 export function FleetSupervisorPage({ vehicles, appointments, requests, date, onDateChange, onManager, onUpdate, onDispatch, onDispatchMany, onArrived, onEndTrip, onExport, onAddTrip }: {
   vehicles: Vehicle[];
@@ -265,20 +267,26 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
     { ...rules, transfer: trips.some((trip) => isTransfer(trip.request)), persons: sumPersons(trips) });
   /**
    * كل السيارات في الخدمة لرحلة: المتاحة لها الآن أولًا (السيارة المجهزة آخرًا للرحلة العادية)، ثم غير المتاحة مع السبب.
-   * السيارات العادية لا تظهر لرحلة احتياجات خاصة، ولا يظهر باص العيادة.
+   * لرحلة احتياجات خاصة: السيارات المجهزة أولًا، ثم العادية بتنبيه (يرسلها المشرف بعد الموافقة عليه). لا يظهر باص العيادة.
    */
   const choicesFor = (trips: Trip[]): VehicleChoice[] => {
     const riders = { appointments: trips.map((trip) => trip.appointment), transfer: trips.some((trip) => isTransfer(trip.request)), persons: sumPersons(trips) };
     const accessible = needsAccessibleVehicle(riders.appointments);
     return vehicles
-      .filter((vehicle) => vehicle.available && !forClinic(vehicle) && (!accessible || vehicle.kind === "احتياجات خاصة"))
+      .filter((vehicle) => vehicle.available && !forClinic(vehicle))
       .map((vehicle) => {
         const until = availability.get(vehicle.plate)?.until;
-        const why = isBusy(vehicle.plate) ? `مشغولة${until ? ` حتى ${timeLabel(until)}` : ""}` : vehicleRestriction(vehicle, riders, rules);
-        return { vehicle, why };
+        const why = isBusy(vehicle.plate) ? `مشغولة${until ? ` حتى ${timeLabel(until)}` : ""}` : vehicleRestriction(vehicle, riders, { ...rules, regularForSpecial: true });
+        return { vehicle, why, warning: why ? null : regularForSpecialWarning(vehicle, riders.appointments) };
       })
-      .sort((a, b) => Number(Boolean(a.why)) - Number(Boolean(b.why)) || Number(a.vehicle.kind === "احتياجات خاصة") - Number(b.vehicle.kind === "احتياجات خاصة"));
+      .sort((a, b) => Number(Boolean(a.why)) - Number(Boolean(b.why)) || Number(Boolean(a.warning)) - Number(Boolean(b.warning))
+        || (accessible ? 0 : Number(a.vehicle.kind === "احتياجات خاصة") - Number(b.vehicle.kind === "احتياجات خاصة")));
   };
+  /** سيارة عادية لضيف احتياجات خاصة: تُرسل بعد موافقة المشرف على التنبيه */
+  const confirmRegular = (choice: VehicleChoice, trips: Trip[]) => !choice.warning || window.confirm(
+    `${trips.filter((trip) => trip.appointment.kind === "احتياجات خاصة").map((trip) => trip.appointment.patientName).join("، ")} يحتاج سيارة احتياجات خاصة.\n`
+    + `إرسال السيارة ${choice.vehicle.plate} (${choice.vehicle.kind}) رغم ذلك؟`,
+  );
   const locationRank = (direction: VehicleRequest["direction"], requestIds: string[]) => (vehicle: Vehicle) => {
     // العودة والنقل بين موعدين يبدآن من مستشفى: السيارة الموجَّهة إليهما أولًا
     if (direction === "عودة" || requestIds.some((id) => transferIds.has(id))) return requestIds.some((id) => redirectFor.get(id)?.vehicle.plate === vehicle.plate) ? 0 : 1;
@@ -359,6 +367,7 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
       toast.error("اختر سيارة متاحة ومناسبة للرحلة");
       return;
     }
+    if (!confirmRegular(choice, [trip])) return;
     onDispatch([trip.request.id], choice.vehicle);
   }
 
@@ -380,6 +389,7 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
       toast.error("تغيّرت الطلبات أو السيارة، راجع الرحلة");
       return;
     }
+    if (!confirmRegular(choice, members)) return;
     onDispatch(requestIds, choice.vehicle);
     setEditing(null);
   }
@@ -612,7 +622,7 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
                           options={choices}
                           value={ready.some((vehicle) => vehicle.plate === selectedPlate) ? selectedPlate : ""}
                           onChange={(plate) => setSelectedVehicles((current) => ({ ...current, [trip.request.id]: plate }))}
-                          placeholder={ready.length ? "اختر سيارة" : "لا توجد سيارة متاحة"}
+                          placeholder={!ready.length ? "لا توجد سيارة متاحة" : choices.some((choice) => !choice.why && !choice.warning) ? "اختر سيارة" : "لا سيارة احتياجات خاصة متاحة · اختر سيارة عادية"}
                           driverOf={(vehicle) => driverOf(vehicle.plate)}
                           details={(vehicle) => `${placeText(vehicle.plate)} · ${tripsText(load.get(vehicle.plate) ?? 0)}`}
                           roleOf={roleOf}

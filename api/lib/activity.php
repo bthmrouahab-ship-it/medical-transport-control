@@ -232,7 +232,13 @@ function describe_write(PDO $pdo, string $col, string $id, ?array $before, ?arra
             if (in_array('status', $changed, true)) {
                 if ($status === 'تم إرسال السيارة') {
                     $group = !empty($after['groupId']) ? ' ضمن رحلة مجمّعة' : '';
-                    return ['request', 'request.dispatch', "إرسال السيارة $plate (" . ($after['driver'] ?? '') . ") لـ $who ($direction)$group", $details];
+                    // سيارة عادية لضيف احتياجات خاصة: يرسلها مشرف السيارات بعد موافقته على التنبيه
+                    $stmt = $pdo->prepare("SELECT data FROM docs WHERE col = 'fleet' AND id = ?");
+                    $stmt->execute([(string)$plate]);
+                    $vehicle = decode_doc($stmt->fetchColumn() ?: null);
+                    $regular = (appointment_doc($pdo, (string)($request['appointmentId'] ?? ''))['kind'] ?? '') === 'احتياجات خاصة' && $vehicle !== null && ($vehicle['kind'] ?? '') !== 'احتياجات خاصة'
+                        ? ' · سيارة عادية لضيف احتياجات خاصة (بموافقة مشرف السيارات)' : '';
+                    return ['request', 'request.dispatch', "إرسال السيارة $plate (" . ($after['driver'] ?? '') . ") لـ $who ($direction)$group$regular", $details];
                 }
                 if ($status === 'وصلت السيارة') return ['request', 'request.car_arrived', "وصول السيارة $plate لاستلام $who ($direction)" . $byDriver('driverArrivedAt'), $details];
                 if ($status === 'تم استلام المريض') {

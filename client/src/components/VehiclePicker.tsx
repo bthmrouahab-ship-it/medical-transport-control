@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { Accessibility, Bus, CarFront, Check, ChevronDown } from "lucide-react";
+import { Accessibility, AlertTriangle, Bus, CarFront, Check, ChevronDown } from "lucide-react";
 import type { Vehicle, VehicleKind } from "@shared/transport";
 import { cx, inputClass } from "./ui-kit";
 
@@ -32,7 +32,8 @@ export function KindLabel({ vehicle, extra }: { vehicle: Pick<Vehicle, "kind">; 
   return <span className={cx("font-semibold", styleOf(vehicle).text)}>{styleOf(vehicle).label}{extra ? ` · ${extra}` : ""}</span>;
 }
 
-export type VehicleOption = { vehicle: Vehicle; why: string | null };
+/** why: معطّلة مع السبب، warning: يمكن اختيارها مع تنبيه (مثل سيارة عادية لضيف احتياجات خاصة) */
+export type VehicleOption = { vehicle: Vehicle; why: string | null; warning?: string | null };
 
 /**
  * اختيار السيارة لرحلة بدل القائمة المنسدلة العادية: كل سيارة بعلامة نوعها ولونه، ورقمها وسائقها،
@@ -57,7 +58,8 @@ export function VehiclePicker({ label, options, value, onChange, disabled, inval
   const button = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
-  const selected = options.find((option) => option.vehicle.plate === value && !option.why)?.vehicle;
+  const selectedOption = options.find((option) => option.vehicle.plate === value && !option.why);
+  const selected = selectedOption?.vehicle;
   const enabled = options.map((option, index) => (option.why ? -1 : index)).filter((index) => index >= 0);
 
   function show() {
@@ -132,6 +134,7 @@ export function VehiclePicker({ label, options, value, onChange, disabled, inval
               <span className="text-slate-400"> · </span>
               <KindLabel vehicle={selected} extra={roleText(selected)} />
             </span>
+            {selectedOption?.warning && <span title={selectedOption.warning} className="flex shrink-0 items-center text-amber-600"><AlertTriangle className="h-4 w-4" /><span className="sr-only">{selectedOption.warning}</span></span>}
           </>
         ) : <span className="min-w-0 flex-1 truncate text-sm text-slate-400">{placeholder}</span>}
         <ChevronDown className={cx("h-4 w-4 shrink-0 text-slate-400 transition", open && "rotate-180")} />
@@ -148,7 +151,7 @@ export function VehiclePicker({ label, options, value, onChange, disabled, inval
           onChoose={choose}
           onClose={() => setOpen(false)}
           onKeyDown={onKeyDown}
-          render={(vehicle, why) => (
+          render={(vehicle, why, warning) => (
             <>
               <KindIcon vehicle={vehicle} />
               <span className="min-w-0 flex-1">
@@ -160,7 +163,7 @@ export function VehiclePicker({ label, options, value, onChange, disabled, inval
                 <span className="block truncate text-xs">
                   <span className={why ? "font-semibold text-slate-400" : undefined}>{why ? `${styleOf(vehicle).label}${roleText(vehicle) ? ` · ${roleText(vehicle)}` : ""}` : <KindLabel vehicle={vehicle} extra={roleText(vehicle)} />}</span>
                   <span className="text-slate-400"> · </span>
-                  <span className={why ? "text-red-700/80" : "text-slate-500"}>{why ?? details(vehicle)}</span>
+                  <span className={why ? "text-red-700/80" : warning ? "font-medium text-amber-700" : "text-slate-500"}>{why ?? warning ?? details(vehicle)}</span>
                 </span>
               </span>
             </>
@@ -182,7 +185,7 @@ function VehicleList({ anchor, id, label, options, value, active, onActive, onCh
   onChoose: (index: number) => void;
   onClose: () => void;
   onKeyDown: (event: React.KeyboardEvent) => void;
-  render: (vehicle: Vehicle, why: string | null) => ReactNode;
+  render: (vehicle: Vehicle, why: string | null, warning?: string | null) => ReactNode;
 }) {
   const list = useRef<HTMLUListElement>(null);
   const [place, setPlace] = useState({ top: -9999, left: 0, width: 320, maxHeight: 360 });
@@ -240,7 +243,7 @@ function VehicleList({ anchor, id, label, options, value, active, onActive, onCh
       style={{ top: place.top, left: place.left, width: place.width, maxHeight: place.maxHeight, visibility: place.top < -1000 ? "hidden" : undefined }}
       className="animate-rise fixed z-[2000] overflow-y-auto rounded-xl bg-white p-1.5 text-ink shadow-raised outline-none ring-1 ring-slate-900/10"
     >
-      {options.map(({ vehicle, why }, index) => (
+      {options.map(({ vehicle, why, warning }, index) => (
         <li
           key={vehicle.plate}
           id={`${id}-${index}`}
@@ -257,7 +260,7 @@ function VehicleList({ anchor, id, label, options, value, active, onActive, onCh
             !why && index === active && "bg-slate-100",
           )}
         >
-          {render(vehicle, why)}
+          {render(vehicle, why, warning)}
           {vehicle.plate === value && !why && <Check className="h-4 w-4 shrink-0 text-brand-600" />}
         </li>
       ))}
