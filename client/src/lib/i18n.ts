@@ -35,6 +35,13 @@ const STATUS_EN: Record<AppointmentStatus, string> = {
   "مكتملة": "Completed",
   "ملغي": "Cancelled",
 };
+const REQUEST_STATUS_EN: Record<string, string> = {
+  "بانتظار التوزيع": "Awaiting a car",
+  "تم إرسال السيارة": "Car sent",
+  "وصلت السيارة": "Car arrived",
+  "تم استلام المريض": "Guest picked up",
+  "وصلت الوجهة": "Arrived",
+};
 const KIND_EN: Record<AppointmentKind, string> = { "عادي": "Regular", "احتياجات خاصة": "Special needs" };
 const NEED_EN: Record<AssistanceNeed, string> = { "يحتاج مرافق": "Needs escort", "يحتاج Nurse": "Needs nurse", "كرسي متحرك": "Wheelchair" };
 
@@ -113,12 +120,15 @@ const ar = {
   addReturn: "طلب عودة من المستشفى",
   newReturnTitle: "طلب عودة من المستشفى",
   editReturnTitle: "تعديل طلب العودة",
-  returnHint: "للضيف الموجود في المستشفى (ذهب بنفسه أو بالإسعاف) ويحتاج سيارة تعيده إلى المجمع فقط. بعد موافقة مسؤول العيادة يطلب مشرف المبنى سيارة العودة.",
+  returnHint: "للضيف الموجود في المستشفى (ذهب بنفسه أو بالإسعاف) ويحتاج سيارة تعيده إلى المجمع فقط. يصل الطلب مباشرة إلى مشرف السيارات بلا موافقة.",
   returnHospital: "المستشفى (مكان استلام الضيف)",
   returnTime: "وقت العودة (متى يكون الضيف جاهزًا)",
   returnDate: "تاريخ العودة",
   returnOnly: "عودة فقط",
   savedReturn: "تم تسجيل طلب العودة",
+  sentToFleet: "وصل مباشرة إلى مشرف السيارات",
+  noApproval: "مباشرة إلى مشرف السيارات",
+  requestStatus: (status: string): string => status.replace("المريض", "الضيف"),
   saveReturn: "حفظ طلب العودة",
   updatedReturn: "تم تحديث طلب العودة",
   errPastDay: "تاريخ طلب العودة مضى. اختر اليوم أو تاريخًا قادمًا.",
@@ -293,12 +303,15 @@ const en: ClinicText = {
   addReturn: "Return from hospital",
   newReturnTitle: "Return from hospital",
   editReturnTitle: "Edit return request",
-  returnHint: "For a guest already at the hospital (went on their own or by ambulance) who only needs a car back to the complex. After the clinic supervisor approves it, the building supervisor requests the return car.",
+  returnHint: "For a guest already at the hospital (went on their own or by ambulance) who only needs a car back to the complex. The request goes straight to the fleet supervisor, with no approval needed.",
   returnHospital: "Hospital (pickup point)",
   returnTime: "Return time (when the guest is ready)",
   returnDate: "Return date",
   returnOnly: "Return only",
   savedReturn: "Return request saved",
+  sentToFleet: "Sent straight to the fleet supervisor",
+  noApproval: "Straight to fleet supervisor",
+  requestStatus: (status) => REQUEST_STATUS_EN[status] ?? status,
   saveReturn: "Save return request",
   updatedReturn: "Return request updated",
   errPastDay: "The return date has passed. Choose today or a later date.",

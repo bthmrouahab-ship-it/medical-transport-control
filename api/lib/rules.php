@@ -261,6 +261,10 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
                 if ($role === 'admin') return null;
                 // موعد العيادة لضيف من قائمة المجمع ولمستشفى من الدليل
                 if (has_role($user, CLINIC_ROLES) && $docOf && ($error = registry_error($after, $docOf))) return $error;
+                // طلب العودة فقط من المستشفى يذهب مباشرة إلى مشرف السيارات: بلا موافقة، ومعه طلب سيارة العودة
+                if (has_role($user, CLINIC_ROLES) && ($after['returnOnly'] ?? null) === true) {
+                    return !array_intersect(array_keys($after), APPROVAL_FIELDS) && ($after['status'] ?? null) === 'طلب عودة' ? null : $denied;
+                }
                 // موعد العيادة ينتظر موافقة مسؤولها، وما يضيفه المسؤول بنفسه موافق عليه باسمه
                 if ($role === 'clinic') return ($after['approval'] ?? null) === 'pending' ? null : $denied;
                 if ($role === 'clinicLead') {
@@ -281,6 +285,11 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
                 // تغيير الضيف أو الوجهة: من قائمة المجمع ودليل المستشفيات
                 if ($docOf && ($error = registry_error($after, $docOf, $changed))) return $error;
                 $approvalChanged = (bool)array_intersect($changed, APPROVAL_FIELDS);
+                // الموعد لا يصير طلب عودة ولا العكس، وطلب العودة بلا موافقة: تُعدَّل بياناته فقط
+                if (in_array('returnOnly', $changed, true)) return $denied;
+                if (($before['returnOnly'] ?? null) === true) {
+                    return !array_intersect(array_keys($after), APPROVAL_FIELDS) && !in_array('status', $changed, true) ? null : $denied;
+                }
                 if ($role === 'clinic') {
                     // العيادة لا توافق ولا تستبعد. الموعد المستبعد يبقى مستبعدًا، وتعديل غيره يعيده إلى انتظار الموافقة
                     if (approval_of($before) === 'excluded') return $approvalChanged ? $denied : null;
@@ -330,11 +339,23 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
         case 'requests':
             if ($after === null) {
                 if ($role === 'admin') return null;
+                // العيادة تحذف طلب سيارة العودة مع طلب العودة الذي أضافته، قبل إرسال السيارة فقط
+                if (has_role($user, CLINIC_ROLES)) {
+                    $linked = $docOf ? $docOf('appointments', (string)($before['appointmentId'] ?? '')) : null;
+                    return $linked !== null && ($linked['returnOnly'] ?? null) === true && ($before['status'] ?? null) === 'بانتظار التوزيع' ? null : $denied;
+                }
                 return has_role($user, BUILDING_ROLES) && follows_request($user, $before) ? null : $denied;
             }
             if ($before === null) {
                 // الطلب الجديد يبدأ دائمًا بانتظار التوزيع، والسيارة يحددها مشرف السيارات لاحقًا
-                if (!has_role($user, ['admin', ...BUILDING_ROLES, 'fleetSupervisor'])) return $denied;
+                if (!has_role($user, ['admin', ...BUILDING_ROLES, 'fleetSupervisor', ...CLINIC_ROLES])) return $denied;
+                // العيادة ومسؤولها: سيارة العودة لطلب العودة من المستشفى الذي تضيفه (محفوظ قبله في نفس الدفعة)،
+                // بلا مالك فيتابعه كل مشرفي المباني، ويصل مباشرة إلى مشرف السيارات
+                if (has_role($user, CLINIC_ROLES)) {
+                    $linked = $docOf ? $docOf('appointments', (string)($after['appointmentId'] ?? '')) : null;
+                    if ($linked === null || ($linked['returnOnly'] ?? null) !== true || ($after['direction'] ?? null) !== 'عودة'
+                        || array_intersect(array_keys($after), ['requestedBy', 'nurseOnly', 'fromAppointmentId'])) return $denied;
+                }
                 // طلب مشرف المبنى يُسجَّل باسمه (حتى يتابعه وحده)، والرحلة غير الطبية من مشرف السيارات بلا مالك
                 $owner = $after['requestedBy'] ?? null;
                 if (has_role($user, BUILDING_ROLES) && $owner !== (string)$user['id']) return 'بيانات الطلب غير صالحة';

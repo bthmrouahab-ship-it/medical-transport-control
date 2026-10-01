@@ -165,6 +165,24 @@ export function createApiBackend(): SharedBackend {
       }
     },
 
+    async writeMany(entries) {
+      const ops = entries.flatMap(({ key, next, previous }) => opsFor(key, next, previous));
+      if (!ops.length) return;
+      const keys = entries.map(({ key }) => key);
+      keys.forEach((key) => pending.set(key, (pending.get(key) ?? 0) + 1));
+      try {
+        await api("write", { ops });
+      } finally {
+        await syncing?.catch(() => {});
+        await sync().catch(() => {});
+        keys.forEach((key) => {
+          const left = (pending.get(key) ?? 1) - 1;
+          pending.set(key, left);
+          if (left === 0) emit(key, valueOf(key));
+        });
+      }
+    },
+
     watch(onChange) {
       emit = onChange;
       let timer = 0;

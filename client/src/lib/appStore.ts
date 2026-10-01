@@ -23,6 +23,8 @@ export interface SharedBackend {
   init(): Promise<Partial<Record<SharedKey, unknown>>>;
   /** يحفظ القيمة الجديدة لمفتاح مشترك. */
   write(key: SharedKey, next: unknown, previous: unknown): Promise<void>;
+  /** يحفظ أكثر من مفتاح في دفعة واحدة بالترتيب (كلها أو لا شيء)، مثل طلب العودة وطلب سيارته معًا. */
+  writeMany?(entries: { key: SharedKey; next: unknown; previous: unknown }[]): Promise<void>;
   /** يستدعي onChange عند وصول تغيير من مستخدم آخر. يعيد دالة لإلغاء الاشتراك. */
   watch(onChange: (key: SharedKey, value: unknown) => void): () => void;
 }
@@ -115,6 +117,30 @@ export function saveState<T>(key: string, value: T, baseline?: T) {
     return;
   }
   writeLocal(key, value);
+}
+
+/**
+ * يحفظ أكثر من قيمة في دفعة واحدة بالترتيب المعطى (مثل الموعد ثم طلب سيارته)، حتى يجد الخادم الموعد
+ * محفوظًا قبل الطلب، ولا يُحفظ أحدهما دون الآخر.
+ */
+export function saveStates(entries: { key: SharedKey; value: unknown; baseline?: unknown }[]) {
+  if (backend) {
+    const writes = entries.map(({ key, value, baseline }) => {
+      const previous = baseline !== undefined ? baseline : cache.get(key);
+      cache.set(key, value);
+      return { key, next: value, previous };
+    });
+    const saving = backend.writeMany
+      ? backend.writeMany(writes)
+      : writes.reduce((chain, { key, next, previous }) => chain.then(() => backend!.write(key, next, previous)), Promise.resolve());
+    saving.catch((error) => {
+      console.error("[appStore] فشل الحفظ", error);
+      onError?.(error);
+    });
+    queueMicrotask(() => entries.forEach(({ key }) => listeners.forEach((listener) => listener(key))));
+    return;
+  }
+  entries.forEach(({ key, value }) => writeLocal(key, value));
 }
 
 export function removeState(key: string) {

@@ -9,6 +9,7 @@ import {
   type ClinicAppointment,
   type VehicleRequest,
 } from "../shared/transport";
+import { neededAt } from "../shared/trips";
 
 const appt = (id: string, time: string, extra: Partial<ClinicAppointment> = {}): ClinicAppointment => ({
   id, patientName: "ضيف 1", clinic: "مستشفى الوكرة", hospitalId: "wakra", buildingNumber: "17", apartmentNumber: "4", mobile: "55500000",
@@ -47,6 +48,13 @@ describe("return-only request from the hospital", () => {
     expect(nextAppointmentOf(first, [first, laterReturn], at("2026-10-01", "09:00"))).toBeNull();
     const laterVisit = appt("F", "11:30");
     expect(nextAppointmentOf(first, [first, laterReturn, laterVisit], at("2026-10-01", "09:00"))?.id).toBe("F");
+  });
+
+  it("is needed from its return time, even when the clinic added it earlier", () => {
+    const request: VehicleRequest = { id: "R1", appointmentId: "A", direction: "عودة", status: "بانتظار التوزيع", notificationMethod: "whatsapp", createdAt: "08:15" };
+    expect(neededAt(request, appt("A", "14:00", { returnOnly: true }))).toEqual(at("2026-10-01", "14:00"));
+    // عودة بعد موعد: من وقت طلبها
+    expect(neededAt(request, appt("A", "07:00"))).toEqual(at("2026-10-01", "08:15"));
   });
 
   it("imports and exports the «عودة فقط» column", () => {

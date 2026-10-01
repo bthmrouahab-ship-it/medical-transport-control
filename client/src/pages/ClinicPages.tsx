@@ -48,6 +48,7 @@ import {
   type AssistanceNeed,
   type ClinicAppointment,
   type Gender,
+  type VehicleRequest,
 } from "@shared/transport";
 import { matchHospital, normalizePlaceName, type Hospital } from "@shared/hospitals";
 import { guestIndex, guestOfAppointment, searchGuests, type Guest } from "@shared/guests";
@@ -59,7 +60,7 @@ import { useGuests, useHospitals, useNow } from "@/lib/useShared";
 
 const WAITING = "بانتظار طلب السيارة";
 
-export function ClinicHome({ t, lang, appointments, date, onDateChange, onNew, onEdit, onDelete, onImport, lead = false, onApproval }: {
+export function ClinicHome({ t, lang, appointments, date, onDateChange, onNew, onEdit, onDelete, onImport, lead = false, onApproval, canChange, requestOf }: {
   t: ClinicText;
   lang: Lang;
   appointments: ClinicAppointment[];
@@ -74,6 +75,10 @@ export function ClinicHome({ t, lang, appointments, date, onDateChange, onNew, o
   lead?: boolean;
   /** الحالة الجديدة لكل موعد (رقم الموعد ← الحالة)، في حفظ واحد */
   onApproval?: (changes: Record<string, Approval>) => void;
+  /** يمكن تعديله أو حذفه: لم يُطلب له سيارة، أو طلب عودة لم تُرسل سيارته بعد */
+  canChange?: (appointment: ClinicAppointment) => boolean;
+  /** طلب سيارة الموعد (لطلب العودة: حالة سيارته) */
+  requestOf?: (appointment: ClinicAppointment) => VehicleRequest | undefined;
 }) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [importing, setImporting] = useState(false);
@@ -171,8 +176,10 @@ export function ClinicHome({ t, lang, appointments, date, onDateChange, onNew, o
   const approvalColumn: FilterColumn<ClinicAppointment> = {
     key: "approval",
     label: t.cols.approval,
-    value: (a) => t.approvalStates[approvalOf(a)],
+    value: (a) => (isReturnOnly(a) ? t.noApproval : t.approvalStates[approvalOf(a)]),
     cell: (a) => {
+      // طلب العودة من المستشفى لا يمر بالموافقة
+      if (isReturnOnly(a)) return <Badge tone="cyan" icon={Truck}>{t.noApproval}</Badge>;
       const state = approvalOf(a);
       const by = state === "approved" ? a.approvedBy && t.approvedByText(a.approvedBy) : state === "excluded" ? a.excludedBy && t.excludedByText(a.excludedBy) : "";
       return (
@@ -181,7 +188,7 @@ export function ClinicHome({ t, lang, appointments, date, onDateChange, onNew, o
             <Badge tone={approvalTone[state]} icon={state === "approved" ? CheckCircle2 : state === "excluded" ? EyeOff : Clock3}>{t.approvalStates[state]}</Badge>
           </span>
           {by && <span className="text-[11px] text-slate-400">{by}</span>}
-          {lead && a.status === WAITING && (
+          {lead && a.status === WAITING && !isReturnOnly(a) && (
             <span className="flex flex-wrap gap-1.5">
               {state === "pending" && <button type="button" onClick={() => setApproval(a, "approved")} className={btn("success", "sm")}><Check className="h-3.5 w-3.5" /> {t.approve}</button>}
               {state !== "excluded" && <button type="button" onClick={() => setApproval(a, "excluded")} className={cx(btn("ghost", "sm"), "text-slate-600")}><EyeOff className="h-3.5 w-3.5" /> {t.exclude}</button>}
@@ -268,7 +275,13 @@ export function ClinicHome({ t, lang, appointments, date, onDateChange, onNew, o
       key: "status",
       label: t.cols.status,
       value: (a) => (expiredOf(a) ? t.expiredShort : t.status(a.status)),
-      cell: (a) => (expiredOf(a) ? <Badge tone="red">{t.expiredShort}</Badge> : <StatusBadge status={a.status} label={t.status(a.status)} />),
+      cell: (a) => {
+        if (expiredOf(a)) return <Badge tone="red">{t.expiredShort}</Badge>;
+        // طلب العودة: حالة سيارته (بانتظار سيارة، أُرسلت، استُلم الضيف...)
+        const request = isReturnOnly(a) && a.status === "طلب عودة" ? requestOf?.(a) : undefined;
+        if (request) return <span className="flex flex-col gap-1"><StatusBadge status={request.status} label={t.requestStatus(request.status)} />{request.vehiclePlate && <span dir="ltr" className="text-[11px] text-slate-500 tabular">{request.vehiclePlate}</span>}</span>;
+        return <StatusBadge status={a.status} label={t.status(a.status)} />;
+      },
     },
     {
       key: "reason",
@@ -282,7 +295,7 @@ export function ClinicHome({ t, lang, appointments, date, onDateChange, onNew, o
       label: t.cols.actions,
       filterable: false,
       cell: (a) => {
-        const editable = a.status === WAITING;
+        const editable = canChange ? canChange(a) : a.status === WAITING;
         return (
           <div className="flex gap-1.5">
             <button disabled={!editable} title={editable ? t.edit : t.lockedHint} aria-label={`${t.edit} ${a.patientName}`} onClick={() => onEdit(a)} className={cx(btn(expiredOf(a) ? "primary" : "secondary", "sm"), "w-9 px-0")}><Pencil className="h-3.5 w-3.5" /></button>
@@ -340,7 +353,7 @@ export function ClinicHome({ t, lang, appointments, date, onDateChange, onNew, o
   const waiting = dayAppointments.filter((appointment) => appointment.status === WAITING).length;
   const cancelled = dayAppointments.filter((appointment) => appointment.status === "ملغي").length;
   // مسؤول العيادة: عدادات الموافقة لليوم المختار، والضغط يفلتر الجدول
-  const active = dayAppointments.filter((appointment) => appointment.status !== "ملغي");
+  const active = dayAppointments.filter((appointment) => appointment.status !== "ملغي" && !isReturnOnly(appointment));
   const countOf = (approval: Approval) => active.filter((appointment) => approvalOf(appointment) === approval).length;
   const dayAlerts = active.filter((appointment) => guestAlerts(appointment, appointments).length > 0).length;
   const showOnly = (key: string, values: string[]) => {
@@ -351,7 +364,7 @@ export function ClinicHome({ t, lang, appointments, date, onDateChange, onNew, o
 
   // التحديد (لمسؤول العيادة): مواعيد لم يُطلب لها سيارة بعد، ومن المعروض فقط؛ ما تخفيه الفلاتر أو تغيّرت حالته يخرج من التحديد
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
-  const canSelect = (appointment: ClinicAppointment) => appointment.status === WAITING;
+  const canSelect = (appointment: ClinicAppointment) => appointment.status === WAITING && !isReturnOnly(appointment);
   useEffect(() => {
     setSelected((current) => {
       if (!current.size) return current;
