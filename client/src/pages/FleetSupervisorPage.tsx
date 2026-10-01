@@ -1129,6 +1129,13 @@ function VehicleDetailsDialog({ vehicle, driver, state, place, current, dayTrips
               <li key={trip.request.id} className="rounded-lg bg-slate-50 px-3 py-2 text-sm">
                 <p className="font-medium text-ink">{riderName(trip)} <span className="font-normal text-slate-500">· {personsText(trip.persons)}</span></p>
                 <p className="text-xs leading-5 text-slate-500">{directionText(trip)} · {tripRoute(trip, hospitals)} · الموعد <span dir="ltr" className="tabular">{trip.appointment.appointmentAt}</span></p>
+                {/* رقم الضيف الذي يركب السيارة، للاتصال به أو مراسلته */}
+                {trip.appointment.mobile && trip.appointment.mobile !== "-" && (
+                  <p className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-700">
+                    <span className="font-medium text-slate-500">{trip.request.nurseOnly ? "هاتف الضيف (مرافقة الـ Nurse)" : "هاتف الضيف"}</span>
+                    <GuestContact mobile={trip.appointment.mobile} />
+                  </p>
+                )}
               </li>
             ))}
           </ul>
