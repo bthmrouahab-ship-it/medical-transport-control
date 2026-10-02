@@ -174,6 +174,10 @@ export type VehicleRequest = {
   previousPlate?: string;
   changeReason?: string;
   changedAt?: string;
+  /** أُزيل الضيف من رحلة جارية (لم يركب، أو سجّله السائق خطأً): السيارة التي أُزيل منها، والسبب، والوقت (ISO) */
+  removedFrom?: string;
+  removeReason?: string;
+  removedAt?: string;
 };
 
 export type GpsPoint = { lat: number; lng: number; accuracy?: number | null };
@@ -546,6 +550,9 @@ export function migrateRequest(value: unknown): VehicleRequest | null {
     previousPlate: toText(raw.previousPlate) || undefined,
     changeReason: toText(raw.changeReason) || undefined,
     changedAt: isoTime(raw.changedAt),
+    removedFrom: toText(raw.removedFrom) || undefined,
+    removeReason: toText(raw.removeReason) || undefined,
+    removedAt: isoTime(raw.removedAt),
     // الخانات الفارغة لا تُضاف، حتى لا تظهر تغييرات وهمية عند المقارنة قبل الحفظ
     ...Object.fromEntries(Object.entries(check).filter(([, value]) => value !== undefined)),
   };
@@ -579,6 +586,49 @@ export function changeRequestVehicle(request: VehicleRequest, vehicle: Pick<Vehi
     changeReason: reason.trim(),
     changedAt: now.toISOString(),
   };
+}
+
+/** أسباب إزالة ضيف من رحلة جارية (ومعها «أخرى» مكتوب) */
+export const REMOVE_FROM_TRIP_REASONS = ["لم يركب السيارة", "الضيف غير جاهز", "سجّله السائق خطأً"] as const;
+
+/**
+ * إزالة ضيف من رحلة جارية (لم يركب السيارة، أو سجّل السائق استلامه خطأً): يعود طلبه إلى «بانتظار التوزيع» بلا سيارة
+ * ولا شيء من مراحل الرحلة، لترسل له سيارة أخرى، ومعه السيارة التي أُزيل منها والسبب. تبقى الرحلة لباقي الركاب.
+ */
+export function removeRequestFromTrip(request: VehicleRequest, reason: string, now = new Date()): VehicleRequest {
+  return {
+    id: request.id,
+    appointmentId: request.appointmentId,
+    direction: request.direction,
+    status: "بانتظار التوزيع",
+    notificationMethod: request.notificationMethod,
+    createdAt: request.createdAt,
+    ...(request.requestedBy ? { requestedBy: request.requestedBy } : {}),
+    ...(request.fromAppointmentId ? { fromAppointmentId: request.fromAppointmentId } : {}),
+    ...(request.nurseOnly ? { nurseOnly: true } : {}),
+    removedFrom: request.vehiclePlate,
+    removeReason: reason.trim(),
+    removedAt: now.toISOString(),
+  };
+}
+
+/**
+ * حالة الموعد قبل استلام الضيف (عند إزالة ضيف سُجّل استلامه، أو نفي الاستلام): موعده «تم طلب السيارة» (والعودة
+ * «طلب عودة»)، والموعد الأول في النقل «تم استلام المريض». عودة الـ Nurse فقط لا تغيّر موعد الضيف.
+ */
+export function appointmentsBeforePickup(appointments: ClinicAppointment[], request: VehicleRequest): ClinicAppointment[] {
+  if (request.nurseOnly) return appointments;
+  return appointments.map((appointment) => appointment.id === request.appointmentId
+    ? { ...appointment, status: request.direction === "عودة" ? "طلب عودة" : "تم طلب السيارة" }
+    : appointment.id === request.fromAppointmentId ? { ...appointment, status: "تم استلام المريض" } : appointment);
+}
+
+/** حالة الموعد بعد استلام الضيف: الذهاب «تم استلام المريض»، والعودة والموعد الأول في النقل «مكتملة». */
+export function appointmentsAfterPickup(appointments: ClinicAppointment[], request: VehicleRequest): ClinicAppointment[] {
+  if (request.nurseOnly) return appointments;
+  return appointments.map((appointment) => appointment.id === request.appointmentId
+    ? { ...appointment, status: request.direction === "عودة" ? "مكتملة" : "تم استلام المريض" }
+    : appointment.id === request.fromAppointmentId ? { ...appointment, status: "مكتملة" } : appointment);
 }
 
 /** طلب نقل بين موعدين (من مستشفى الموعد الأول إلى الثاني). */
