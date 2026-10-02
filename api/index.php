@@ -452,8 +452,10 @@ function route_guests_import(PDO $pdo, array $body): array
             save_doc($pdo, 'guests', $id, null, $rev);
             $removed += 1;
         }
-        $summary = "رفع قائمة الضيوف: $added جديد، $updated تحديث، $unchanged بلا تغيير" . ($removed ? "، وحذف $removed غير موجودين في الملف" : '');
-        log_activity($pdo, $user, 'guest', 'guest.import', $summary, '', ['changes' => (string)count($guests) . ' ضيف في الملف']);
+        // ملف الضيوف أو قائمة الممرضات (kind: nurses)
+        $nurses = ($body['kind'] ?? '') === 'nurses';
+        $summary = ($nurses ? 'رفع قائمة الممرضات' : 'رفع قائمة الضيوف') . ": $added جديد، $updated تحديث، $unchanged بلا تغيير" . ($removed ? "، وحذف $removed غير موجودين في الملف" : '');
+        log_activity($pdo, $user, 'guest', 'guest.import', $summary, '', ['changes' => (string)count($guests) . ($nurses ? ' ممرضة في الملف' : ' ضيف في الملف')]);
         $pdo->commit();
     } catch (Throwable $error) {
         $pdo->rollBack();

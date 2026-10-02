@@ -62,6 +62,8 @@ export type ClinicAppointment = {
    * تعيده إلى المجمع. appointmentAt وقت العودة المتوقع، ومشرف المبنى يطلب له سيارة عودة فقط (لا ذهاب) طوال يومه.
    */
   returnOnly?: boolean;
+  /** الراكبة ممرضة من قائمة الممرضات (مبنى 03 شقة 001)، يُطلب لها سيارة مثل الضيف */
+  nurse?: boolean;
 };
 
 /** طلب عودة فقط من المستشفى (بلا ذهاب) */
@@ -323,6 +325,7 @@ export function migrateAppointment(value: unknown, index = 0): ClinicAppointment
     ...(raw.approval === "approved" ? { approval: "approved" as const, approvedBy: toText(raw.approvedBy) || undefined, approvedAt: toText(raw.approvedAt) || undefined } : {}),
     ...(raw.approval === "excluded" ? { approval: "excluded" as const, excludedBy: toText(raw.excludedBy) || undefined, excludedAt: toText(raw.excludedAt) || undefined } : {}),
     ...(raw.returnOnly === true ? { returnOnly: true } : {}),
+    ...(raw.nurse === true ? { nurse: true } : {}),
   };
 }
 
@@ -370,6 +373,7 @@ export function parseImportedAppointments(
 
     // مع قائمة الضيوف: الضيف منها (والمبنى والشقة والجنس منها، والهاتف إن لم يُكتب)، والوجهة من دليل المستشفيات
     let guestId: string | undefined;
+    let nurse = false;
     let destination = clinic;
     if (index && patientName) {
       const guest = findGuestByName(index, patientName, buildingNumber, apartmentNumber);
@@ -378,6 +382,7 @@ export function parseImportedAppointments(
         return;
       }
       guestId = guest.id;
+      nurse = guest.nurse === true;
       patientName = guest.name;
       buildingNumber = guest.buildingNumber;
       apartmentNumber = guest.apartmentNumber;
@@ -433,6 +438,7 @@ export function parseImportedAppointments(
       ...(gender ? { gender } : {}),
       ...(cancer ? { cancer: true } : {}),
       ...(returnOnly ? { returnOnly: true } : {}),
+      ...(nurse ? { nurse: true } : {}),
     });
   });
 
@@ -1332,7 +1338,8 @@ export function buildDriverMessage(
   sorted.forEach(({ appointment, request, from, persons }, index) => {
     const destination = destinationLabels(appointment, hospitals);
     const prefix = sorted.length > 1 ? `${index + 1}) ` : "";
-    const rider = isNonMedical(appointment) ? { ar: "الراكب", en: "Passenger" } : { ar: "الضيف", en: "Guest" };
+    // الممرضة من قائمة الممرضات تُذكر باسم وظيفتها
+    const rider = isNonMedical(appointment) ? { ar: "الراكب", en: "Passenger" } : appointment.nurse ? { ar: "الممرضة", en: "Nurse" } : { ar: "الضيف", en: "Guest" };
     // عودة الـ Nurse فقط: الراكب هو الـ Nurse ويبقى الضيف في موعده
     const nurse = Boolean(request.nurseOnly);
     const people = persons ?? tripPersons(appointment, request);

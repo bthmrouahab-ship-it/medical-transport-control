@@ -30,6 +30,7 @@ import {
   UserRoundSearch,
   UsersRound,
   Search,
+  BriefcaseMedical,
 } from "lucide-react";
 import {
   ASSISTANCE_NEEDS,
@@ -51,7 +52,7 @@ import {
   type VehicleRequest,
 } from "@shared/transport";
 import { matchHospital, normalizePlaceName, type Hospital } from "@shared/hospitals";
-import { guestIndex, guestOfAppointment, searchGuests, type Guest } from "@shared/guests";
+import { guestIndex, guestOfAppointment, isNurse, searchGuests, type Guest } from "@shared/guests";
 import { Badge, DateChooser, EmptyState, Field, Panel, PageHeader, Segmented, Stat, StatusBadge, StatusBar, btn, choiceClass, cx, formatDay, inputClass, labelClass, longDate } from "@/components/ui-kit";
 import { FILTER_LABELS_AR, FILTER_LABELS_EN, FilterTable, useColumnFilters, type FilterColumn } from "@/components/ExcelFilter";
 import { cancelReasonText, enableTranslation, hasArabic, useCancelReason } from "@/lib/translate";
@@ -241,6 +242,7 @@ export function ClinicHome({ t, lang, appointments, date, onDateChange, onNew, o
         <div className="min-w-[160px] max-w-[260px] whitespace-normal">
           <p className="flex flex-wrap items-center gap-1.5 font-semibold text-ink">
             {a.patientName}
+            {a.nurse && <Badge tone="violet" icon={BriefcaseMedical}>{t.nurse}</Badge>}
             {a.cancer && <Badge tone="red" icon={Ribbon}>{t.priority}</Badge>}
           </p>
           {sameDayAppointments(a, appointments)
@@ -617,6 +619,8 @@ export function ClinicForm({ t, lang, initial, defaultDate, returnOnly = false, 
       gender: form.gender,
       ...(form.cancer ? { cancer: true } : {}),
       ...(returnOnly ? { returnOnly: true } : {}),
+      // ممرضة من قائمة الممرضات: تُعرف بها عند المشرفين والسائق
+      ...(isNurse(guest) ? { nurse: true } : {}),
       status: initial?.status ?? WAITING,
     };
     if (!second.enabled || initial || returnOnly || !secondHospital) {
@@ -761,6 +765,7 @@ function GuestPicker({ t, guests, guest, onSelect, notListed }: {
             <p className="mt-0.5 font-semibold text-ink">{guest.name}</p>
             {guest.nameEn && <p className="text-xs text-slate-500"><bdi>{guest.nameEn}</bdi></p>}
             <div className="mt-2 flex flex-wrap gap-1.5">
+              {isNurse(guest) && <Badge tone="violet" icon={BriefcaseMedical}>{t.nurse}{guest.organization ? ` · ${guest.organization}` : ""}</Badge>}
               <Badge tone="neutral" icon={Building2}>{t.guestUnit(guest.buildingNumber, guest.apartmentNumber)}</Badge>
               {guest.gender && <Badge tone="neutral">{t.genderLabel(guest.gender)}</Badge>}
             </div>
@@ -847,7 +852,10 @@ function GuestPicker({ t, guests, guest, onSelect, notListed }: {
                 className={cx("flex cursor-pointer items-center justify-between gap-3 rounded-lg px-3 py-2", position === active ? "bg-brand-50" : "hover:bg-slate-50")}
               >
                 <span className="min-w-0">
-                  <span className="block truncate text-sm font-medium text-ink">{item.name}</span>
+                  <span className="flex min-w-0 items-center gap-1.5 text-sm font-medium text-ink">
+                    <span className="truncate">{item.name}</span>
+                    {isNurse(item) && <Badge tone="violet" icon={BriefcaseMedical} className="shrink-0">{t.nurse}</Badge>}
+                  </span>
                   {item.nameEn && <span className="block truncate text-xs text-slate-500"><bdi>{item.nameEn}</bdi></span>}
                 </span>
                 <span className="shrink-0 text-xs text-slate-500 tabular">{t.guestUnit(item.buildingNumber, item.apartmentNumber)}</span>

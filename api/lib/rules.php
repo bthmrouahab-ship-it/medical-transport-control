@@ -10,12 +10,12 @@ const APPOINTMENT_STATUSES = ['بانتظار طلب السيارة', 'تم طل
 const APPOINTMENT_FIELDS = ['id', 'guestId', 'patientName', 'clinic', 'buildingNumber', 'apartmentNumber', 'mobile', 'appointmentDate',
     'appointmentAt', 'hospitalId', 'category', 'kind', 'assistance', 'status', 'cancelReason', 'cancelledBy', 'cancelledAt',
     'gender', 'cancer', 'returnedSelf', 'returnedSelfBy', 'returnedSelfAt', 'approval', 'approvedBy', 'approvedAt', 'excludedBy', 'excludedAt',
-    'returnOnly', '_o'];
+    'returnOnly', 'nurse', '_o'];
 /** موافقة مسؤول العيادة: بانتظار الموافقة، أو موافق عليه (باسمه ووقته)، أو مستبعد بلا حذف (باسمه ووقته) */
 const APPROVAL_FIELDS = ['approval', 'approvedBy', 'approvedAt', 'excludedBy', 'excludedAt'];
 /** بيانات الموعد نفسه: تعديل العيادة لها يعيد الموعد إلى انتظار موافقة مسؤولها */
 const APPOINTMENT_CONTENT_FIELDS = ['guestId', 'patientName', 'clinic', 'buildingNumber', 'apartmentNumber', 'mobile', 'appointmentDate', 'appointmentAt',
-    'hospitalId', 'category', 'kind', 'assistance', 'gender', 'cancer', 'returnOnly'];
+    'hospitalId', 'category', 'kind', 'assistance', 'gender', 'cancer', 'returnOnly', 'nurse'];
 /** الضيف عاد إلى المجمع بنفسه بلا سيارة عودة (يسجّله مشرف المبنى باسمه ووقته) */
 const SELF_RETURN_FIELDS = ['returnedSelf', 'returnedSelfBy', 'returnedSelfAt'];
 /** خانات إلغاء الموعد (السبب إلزامي، ومن ألغاه، ومتى) */
@@ -42,13 +42,14 @@ const HOSPITAL_FIELDS = ['id', 'name', 'nameEn', 'zone', 'lat', 'lng', 'aliases'
  * قائمة ضيوف المجمع (يرفعها المدير). العمر والرقم الصحي لا يُرسلان مع القائمة (يظهران في الإحصائيات فقط عبر guests-stats).
  * المزامنة للمدير والعيادة ومسؤولها فقط.
  */
-const GUEST_FIELDS = ['id', 'name', 'nameEn', 'gender', 'mobile', 'buildingNumber', 'apartmentNumber', 'age', 'healthNumber', '_o'];
+/** nurse: ممرضة من قائمة الممرضات (يُطلب لها سيارة مثل الضيف)، organization: جهة عملها */
+const GUEST_FIELDS = ['id', 'name', 'nameEn', 'gender', 'mobile', 'buildingNumber', 'apartmentNumber', 'age', 'healthNumber', 'nurse', 'organization', '_o'];
 const GUEST_PRIVATE_FIELDS = ['age', 'healthNumber'];
 const GUEST_LIST_ROLES = ['admin', 'clinic', 'clinicLead'];
 /** من يرى العمر والرقم الصحي (من يرى الإحصائيات) */
 const GUEST_STATS_ROLES = ['admin', 'fleetSupervisor'];
 /** بيانات الضيف في الموعد: يجب أن تطابق القائمة */
-const APPOINTMENT_GUEST_FIELDS = ['guestId', 'patientName', 'buildingNumber', 'apartmentNumber'];
+const APPOINTMENT_GUEST_FIELDS = ['guestId', 'patientName', 'buildingNumber', 'apartmentNumber', 'nurse'];
 /** المجموعات التي تُزامن مع موظفي المكتب */
 const SYNC_COLLECTIONS = ['appointments', 'requests', 'fleet', 'hospitals', 'vehicleLocations', 'meta', 'guests'];
 
@@ -77,7 +78,9 @@ function valid_guest(array $data, string $id): bool
         && (!array_key_exists('mobile', $data) || (is_string($data['mobile']) && preg_match('/^\+?\d{7,15}$/', $data['mobile'])))
         && $unit($data['buildingNumber'] ?? null) && $unit($data['apartmentNumber'] ?? null)
         && (!array_key_exists('age', $data) || (is_int($data['age']) && $data['age'] >= 0 && $data['age'] <= 130))
-        && (!array_key_exists('healthNumber', $data) || is_text($data['healthNumber'], 30));
+        && (!array_key_exists('healthNumber', $data) || is_text($data['healthNumber'], 30))
+        && ($data['nurse'] ?? true) === true
+        && (!array_key_exists('organization', $data) || is_text($data['organization'], 120));
 }
 
 /**
@@ -94,6 +97,8 @@ function registry_error(array $appointment, callable $docOf, ?array $changed = n
         foreach (['patientName' => 'name', 'buildingNumber' => 'buildingNumber', 'apartmentNumber' => 'apartmentNumber'] as $field => $source) {
             if (($appointment[$field] ?? null) !== ($guest[$source] ?? null)) return 'بيانات الضيف لا تطابق قائمة ضيوف المجمع';
         }
+        // موعد الممرضة يحمل علامتها كما في القائمة
+        if ((($appointment['nurse'] ?? null) === true) !== (($guest['nurse'] ?? null) === true)) return 'بيانات الضيف لا تطابق قائمة ضيوف المجمع';
     }
     if ($changed === null || array_intersect($changed, ['hospitalId', 'clinic'])) {
         $hospitalId = $appointment['hospitalId'] ?? null;
@@ -238,6 +243,8 @@ function valid_appointment(array $data, string $id): bool
         && is_bool($data['returnedSelf'] ?? false)
         // طلب عودة فقط من المستشفى: true أو بلا الخانة
         && ($data['returnOnly'] ?? true) === true
+        // موعد ممرضة من قائمة الممرضات: true أو بلا الخانة
+        && ($data['nurse'] ?? true) === true
         && valid_approval($data);
 }
 
@@ -279,7 +286,7 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
                 $valid = only($changed, APPOINTMENT_FIELDS) && !in_array('id', $changed, true)
                     && in_array($after['status'] ?? null, APPOINTMENT_STATUSES, true)
                     && in_array($after['gender'] ?? 'ذكر', ['ذكر', 'أنثى'], true) && is_bool($after['cancer'] ?? false)
-                    && ($after['returnOnly'] ?? true) === true;
+                    && ($after['returnOnly'] ?? true) === true && ($after['nurse'] ?? true) === true;
                 if (!$valid) return $denied;
                 if ($role === 'admin') return null;
                 // تغيير الضيف أو الوجهة: من قائمة المجمع ودليل المستشفيات

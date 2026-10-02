@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Accessibility, ArrowLeftRight, Ban, CalendarDays, Clock3, Eye, EyeOff, Filter, Footprints, House, Ribbon, Stethoscope, Truck, UsersRound, X } from "lucide-react";
+import { Accessibility, ArrowLeftRight, Ban, BriefcaseMedical, CalendarDays, Clock3, Eye, EyeOff, Filter, Footprints, House, Ribbon, Stethoscope, Truck, UsersRound, X } from "lucide-react";
 import {
   approvalOf,
   isApproved,
@@ -80,6 +80,7 @@ export function AppointmentsOverview({ appointments, requests, date, now }: {
           <p className="mt-1 flex flex-wrap gap-1">
             {a.kind === "احتياجات خاصة" && <Badge tone="amber" icon={Accessibility}>احتياجات خاصة</Badge>}
             {isPriority(a) && <Badge tone="red" icon={Ribbon}>أولوية</Badge>}
+            {a.nurse && <Badge tone="violet" icon={BriefcaseMedical}>ممرضة</Badge>}
           </p>
         </div>
       ),

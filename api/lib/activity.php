@@ -307,11 +307,13 @@ function describe_write(PDO $pdo, string $col, string $id, ?array $before, ?arra
             $name = $guest['name'] ?? $id;
             $place = 'مبنى ' . ($guest['buildingNumber'] ?? '') . ' شقة ' . ($guest['apartmentNumber'] ?? '');
             $details = ['patient' => $name, 'building' => $guest['buildingNumber'] ?? '', 'apartment' => $guest['apartmentNumber'] ?? ''];
-            if ($before === null) return ['guest', 'guest.create', "إضافة الضيف $name إلى قائمة الضيوف ($place)", $details];
-            if ($after === null) return ['guest', 'guest.delete', "حذف الضيف $name من قائمة الضيوف ($place)", $details];
+            // الممرضة في نفس القائمة بعلامتها
+            $who = ($guest['nurse'] ?? null) === true ? 'الممرضة' : 'الضيف';
+            if ($before === null) return ['guest', 'guest.create', "إضافة $who $name إلى قائمة الضيوف ($place)", $details];
+            if ($after === null) return ['guest', 'guest.delete', "حذف $who $name من قائمة الضيوف ($place)", $details];
             $changes = changes_text(field_changes($before, $after, GUEST_FIELD_LABELS));
             $details['changes'] = $changes;
-            return ['guest', 'guest.update', "تعديل بيانات الضيف $name: " . ($changes ?: 'العمر أو الرقم الصحي'), $details];
+            return ['guest', 'guest.update', "تعديل بيانات $who $name: " . ($changes ?: 'العمر أو الرقم الصحي'), $details];
 
         case 'vehicleLocations':
             return ['location', 'location.delete', "حذف آخر موقع للسيارة $id", ['plate' => $id]];
