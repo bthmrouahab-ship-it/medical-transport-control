@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Accessibility, CheckCircle2, MapPin, Truck, X } from "lucide-react";
 import {
@@ -8,25 +8,35 @@ import {
   type AppointmentKind,
   ASSISTANCE_NEEDS,
   type AssistanceNeed,
+  GENDERS,
   type ClinicAppointment,
+  type Gender,
   type VehicleRequest,
 } from "@shared/transport";
+import { guestIndex, isNurse, type Guest } from "@shared/guests";
+import { CLINIC_TEXT } from "@/lib/i18n";
+import { useGuests } from "@/lib/useShared";
 import { DateChooser, Field, Panel, btn, choiceClass, cx, inputClass, labelClass, timeLabel } from "@/components/ui-kit";
+import { GuestPicker } from "./ClinicPages";
 
 const OTHER = "أخرى";
 
-/** رحلة غير طبية يضيفها مشرف السيارات: تُنشأ مباشرة كطلب بانتظار التوزيع. */
+/**
+ * رحلة غير طبية يضيفها مشرف السيارات: تُنشأ مباشرة كطلب بانتظار التوزيع. الضيف من قائمة ضيوف المجمع
+ * (بنفس طريقة موعد العيادة): المبنى والشقة والجنس من القائمة، والهاتف منها ويمكن تغييره.
+ */
 export default function NonMedicalTripForm({ defaultDate, onSave, onCancel }: {
   defaultDate: string;
   onSave: (appointment: ClinicAppointment, request: VehicleRequest) => void;
   onCancel: () => void;
 }) {
+  const guests = useGuests();
+  const index = useMemo(() => guestIndex(guests), [guests]);
   const [form, setForm] = useState({
-    patientName: "",
+    guestId: "",
+    gender: undefined as Gender | undefined,
     destination: NON_MEDICAL_DESTINATIONS[0].ar,
     otherDestination: "",
-    buildingNumber: "",
-    apartmentNumber: "",
     mobile: "",
     appointmentDate: defaultDate,
     appointmentAt: timeLabel(new Date(Date.now() + 30 * 60000)),
@@ -34,11 +44,30 @@ export default function NonMedicalTripForm({ defaultDate, onSave, onCancel }: {
     assistance: [] as AssistanceNeed[],
   });
 
+  const guest = form.guestId ? index.byId.get(form.guestId) : undefined;
+
+  function selectGuest(next: Guest | undefined) {
+    setForm((current) => {
+      const previous = current.guestId ? index.byId.get(current.guestId) : undefined;
+      // هاتف الضيف من القائمة، إلا إذا كتب المشرف رقمًا آخر
+      const mobile = !current.mobile || current.mobile === previous?.mobile ? next?.mobile ?? "" : current.mobile;
+      return { ...current, guestId: next?.id ?? "", mobile, gender: next?.gender ?? (next ? current.gender : undefined) };
+    });
+  }
+
   function submit(event: React.FormEvent) {
     event.preventDefault();
+    if (!guest) {
+      toast.error("اختر الضيف من قائمة ضيوف المجمع");
+      return;
+    }
     const destination = form.destination === OTHER ? form.otherDestination.trim() : form.destination;
-    if (!form.patientName.trim() || !destination || !form.buildingNumber.trim() || !form.apartmentNumber.trim() || !form.mobile || !form.appointmentAt) {
-      toast.error(form.destination === OTHER && !destination ? "اكتب الوجهة" : "أكمل الاسم والوجهة والمبنى والشقة والموبايل والوقت");
+    if (!destination || !form.mobile || !form.appointmentAt) {
+      toast.error(form.destination === OTHER && !destination ? "اكتب الوجهة" : "أكمل الوجهة والموبايل والوقت");
+      return;
+    }
+    if (!form.gender) {
+      toast.error("اختر جنس الضيف");
       return;
     }
     const mobile = form.mobile.replace(/[\s-]/g, "");
@@ -53,11 +82,15 @@ export default function NonMedicalTripForm({ defaultDate, onSave, onCancel }: {
     const stamp = Date.now();
     const appointment: ClinicAppointment = {
       id: `TRP-${String(stamp).slice(-6)}`,
-      patientName: form.patientName.trim(),
+      guestId: guest.id,
+      patientName: guest.name,
       clinic: destination,
-      buildingNumber: form.buildingNumber.trim(),
-      apartmentNumber: form.apartmentNumber.trim(),
+      buildingNumber: guest.buildingNumber,
+      apartmentNumber: guest.apartmentNumber,
       mobile,
+      gender: form.gender,
+      // ممرضة من قائمة الممرضات
+      ...(isNurse(guest) ? { nurse: true } : {}),
       appointmentDate: form.appointmentDate,
       appointmentAt: form.appointmentAt,
       category: "غير طبية",
@@ -85,7 +118,7 @@ export default function NonMedicalTripForm({ defaultDate, onSave, onCancel }: {
       actions={<button type="button" onClick={onCancel} aria-label="إغلاق" className={btn("ghost", "sm")}><X className="h-4 w-4" /></button>}
     >
       <form onSubmit={submit} className="grid gap-5 p-5 sm:grid-cols-2 sm:p-6">
-        <Field label="الاسم أو الرقم" value={form.patientName} onChange={(value) => setForm({ ...form, patientName: value })} wide />
+        <GuestPicker t={CLINIC_TEXT.ar} guests={guests} guest={guest} onSelect={selectGuest} />
 
         <fieldset className="sm:col-span-2">
           <legend className={labelClass}>الوجهة</legend>
@@ -99,9 +132,17 @@ export default function NonMedicalTripForm({ defaultDate, onSave, onCancel }: {
           )}
         </fieldset>
 
-        <Field label="رقم المبنى" value={form.buildingNumber} onChange={(value) => setForm({ ...form, buildingNumber: value })} dir="ltr" />
-        <Field label="رقم الشقة" value={form.apartmentNumber} onChange={(value) => setForm({ ...form, apartmentNumber: value })} dir="ltr" />
         <Field label="رقم الموبايل" value={form.mobile} onChange={(value) => setForm({ ...form, mobile: value })} type="tel" dir="ltr" wide />
+        {guest && !guest.gender && (
+          <fieldset className="sm:col-span-2">
+            <legend className={labelClass}>الجنس</legend>
+            <div className="grid grid-cols-2 gap-3">
+              {GENDERS.map((gender) => (
+                <button key={gender} type="button" aria-pressed={form.gender === gender} onClick={() => setForm({ ...form, gender })} className={choiceClass(form.gender === gender)}>{gender}</button>
+              ))}
+            </div>
+          </fieldset>
+        )}
         <div className="sm:col-span-2"><DateChooser label="التاريخ" value={form.appointmentDate} onChange={(value) => setForm({ ...form, appointmentDate: value })} /></div>
         <Field label="الوقت" value={form.appointmentAt} onChange={(value) => setForm({ ...form, appointmentAt: value })} type="time" />
 

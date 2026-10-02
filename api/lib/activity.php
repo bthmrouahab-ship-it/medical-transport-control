@@ -175,6 +175,11 @@ function describe_write(PDO $pdo, string $col, string $id, ?array $before, ?arra
             }
             // تغيّر الحالة وحده نتيجة طلب السيارة أو استلام المريض، ويُسجَّل مع الطلب نفسه
             if (!array_diff($changed, ['status'])) return null;
+            // رقم هاتف الضيف وحده (يصححه مشرف المبنى قبل طلب السيارة إن كان خطأ)
+            if ($changed === ['mobile']) {
+                $details['changes'] = text_value($before['mobile'] ?? '') . ' ← ' . text_value($after['mobile'] ?? '');
+                return ['appointment', 'appointment.mobile', "تعديل رقم هاتف $who ({$details['destination']}، $when): {$details['changes']}", $details];
+            }
             $changes = field_changes($before, $after, APPOINTMENT_FIELD_LABELS);
             if (!$changes) return null;
             $details['changes'] = changes_text($changes);

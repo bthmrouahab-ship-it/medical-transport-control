@@ -62,7 +62,8 @@ const HOSPITAL_FIELDS = ['id', 'name', 'nameEn', 'zone', 'lat', 'lng', 'aliases'
 /** nurse: ممرضة من قائمة الممرضات (يُطلب لها سيارة مثل الضيف)، organization: جهة عملها */
 const GUEST_FIELDS = ['id', 'name', 'nameEn', 'gender', 'mobile', 'buildingNumber', 'apartmentNumber', 'age', 'healthNumber', 'nurse', 'organization', '_o'];
 const GUEST_PRIVATE_FIELDS = ['age', 'healthNumber'];
-const GUEST_LIST_ROLES = ['admin', 'clinic', 'clinicLead'];
+/** من يرى قائمة الضيوف: المدير والعيادة ومسؤولها، ومشرف السيارات (الرحلات غير الطبية من القائمة) */
+const GUEST_LIST_ROLES = ['admin', 'clinic', 'clinicLead', 'fleetSupervisor'];
 /** من يرى العمر والرقم الصحي (من يرى الإحصائيات) */
 const GUEST_STATS_ROLES = ['admin', 'fleetSupervisor'];
 /** بيانات الضيف في الموعد: يجب أن تطابق القائمة */
@@ -70,7 +71,7 @@ const APPOINTMENT_GUEST_FIELDS = ['guestId', 'patientName', 'buildingNumber', 'a
 /** المجموعات التي تُزامن مع موظفي المكتب */
 const SYNC_COLLECTIONS = ['appointments', 'requests', 'fleet', 'hospitals', 'vehicleLocations', 'meta', 'guests', 'drivers'];
 
-/** مجموعات المزامنة لهذا المستخدم: قائمة الضيوف للمدير والعيادة فقط، وقائمة السائقين للمدير ومشرف السيارات */
+/** مجموعات المزامنة لهذا المستخدم: قائمة الضيوف للمدير والعيادة ومشرف السيارات، وقائمة السائقين للمدير ومشرف السيارات */
 function sync_collections(array $user): array
 {
     return array_values(array_filter(SYNC_COLLECTIONS, fn(string $col) => ($col !== 'guests' || in_array($user['role'], GUEST_LIST_ROLES, true))
@@ -125,7 +126,7 @@ function valid_guest(array $data, string $id): bool
  * والوجهة اسم المستشفى كما في الدليل. $changed = null عند الإضافة (يُفحص كل شيء)، وعند التعديل ما تغيّر فقط.
  * $docOf(col, id) يقرأ المستند المحفوظ، و$docOf(col, null) أي مستند من المجموعة (لمعرفة هل هي فارغة).
  */
-function registry_error(array $appointment, callable $docOf, ?array $changed = null): ?string
+function registry_error(array $appointment, callable $docOf, ?array $changed = null, bool $hospital = true): ?string
 {
     if ($changed === null || array_intersect($changed, APPOINTMENT_GUEST_FIELDS)) {
         $guestId = $appointment['guestId'] ?? null;
@@ -137,7 +138,8 @@ function registry_error(array $appointment, callable $docOf, ?array $changed = n
         // موعد الممرضة يحمل علامتها كما في القائمة
         if ((($appointment['nurse'] ?? null) === true) !== (($guest['nurse'] ?? null) === true)) return 'بيانات الضيف لا تطابق قائمة ضيوف المجمع';
     }
-    if ($changed === null || array_intersect($changed, ['hospitalId', 'clinic'])) {
+    // الرحلة غير الطبية: الضيف من القائمة، والوجهة ليست مستشفى
+    if ($hospital && ($changed === null || array_intersect($changed, ['hospitalId', 'clinic']))) {
         $hospitalId = $appointment['hospitalId'] ?? null;
         if (!is_string($hospitalId) || !preg_match('/^[A-Za-z0-9._:-]{1,160}$/', $hospitalId)) return 'المستشفى غير موجود في دليل المستشفيات';
         $hospital = $docOf('hospitals', $hospitalId);
@@ -174,14 +176,63 @@ function has_role(array $user, array $roles): bool
 }
 
 /**
- * الطلب (ذهابًا أو عودة) يتابعه مشرف المبنى الذي طلبه فقط، ومسؤول مشرفي المباني يتابع كل الطلبات.
+ * الطلب (ذهابًا أو عودة) يتابعه مشرف المبنى الذي طلبه فقط، ومسؤول مشرفي المباني يتابع كل الطلبات
+ * (ومسؤول العيادة كل طلبات الممرضات).
  * الطلب القديم أو الذي أضافه مشرف السيارات بلا مالك يتابعه أي مشرف مبنى.
  */
 function follows_request(array $user, ?array $request): bool
 {
-    if ($user['role'] === 'buildingLead') return true;
+    // مسؤول العيادة يتابع كل طلبات الممرضات (يُستدعى لها فقط)
+    if ($user['role'] === 'buildingLead' || $user['role'] === 'clinicLead') return true;
     $owner = $request['requestedBy'] ?? null;
     return $owner === null || $owner === (string)$user['id'];
+}
+
+/** رقم هاتف صالح: 8 إلى 15 رقمًا، ويمكن أن يبدأ بـ + */
+function valid_mobile($value): bool
+{
+    return is_string($value) && preg_match('/^\+?\d{8,15}$/', $value) === 1;
+}
+
+/**
+ * مسؤول العيادة يطلب سيارة للممرضات (مبنى 03) ويتابعها كمشرف المبنى: موعد ممرضة من قائمة الممرضات.
+ * $appointment الموعد المحفوظ المرتبط بالطلب.
+ */
+function nurse_lead(array $user, ?array $appointment): bool
+{
+    return $user['role'] === 'clinicLead' && ($appointment['nurse'] ?? null) === true;
+}
+
+/**
+ * مشرف المبنى (ومسؤولهم، ومسؤول العيادة لمواعيد الممرضات) لا يغيّر بيانات الضيف ولا وقت الموعد، بل حالة الموعد،
+ * أو يلغيه قبل استلام الضيف مع ذكر السبب، أو يسجّل أنه عاد بنفسه، أو يصحح رقم هاتفه قبل طلب السيارة.
+ */
+function building_appointment_error(array $user, array $before, array $after, array $changed): ?string
+{
+    $denied = 'ليست لديك صلاحية لتنفيذ هذا الإجراء.';
+    if (($before['status'] ?? null) === 'ملغي') return $denied;
+    // رقم هاتف الضيف خطأ: يصححه قبل طلب السيارة (لموعد وافق عليه مسؤول العيادة)
+    if ($changed === ['mobile']) {
+        if (($before['status'] ?? null) !== 'بانتظار طلب السيارة' || approval_of($before) !== 'approved') return $denied;
+        return valid_mobile($after['mobile'] ?? null) ? null : 'رقم الهاتف غير صالح';
+    }
+    if (($after['status'] ?? null) === 'ملغي') {
+        $reason = trim((string)($after['cancelReason'] ?? ''));
+        return only($changed, ['status', ...CANCEL_FIELDS])
+            && in_array($before['status'] ?? null, ['بانتظار طلب السيارة', 'تم طلب السيارة'], true)
+            && is_text($after['cancelReason'] ?? null, 300) && mb_strlen($reason) >= 3
+            && ($after['cancelledBy'] ?? null) === $user['display_name']
+            && is_text($after['cancelledAt'] ?? null, 40) && strtotime($after['cancelledAt']) !== false ? null : $denied;
+    }
+    // الضيف عاد بنفسه: ينتهي الموعد بعد ذهابه (أو طلب العودة فقط قبل طلب سيارته)، باسم المشرف ووقته
+    if (array_intersect($changed, SELF_RETURN_FIELDS)) {
+        $waitingReturn = ($before['returnOnly'] ?? null) === true && ($before['status'] ?? null) === 'بانتظار طلب السيارة';
+        return only($changed, ['status', ...SELF_RETURN_FIELDS])
+            && (in_array($before['status'] ?? null, ['تم استلام المريض', 'تم طلب السيارة'], true) || $waitingReturn)
+            && ($after['status'] ?? null) === 'مكتملة' && ($after['returnedSelf'] ?? null) === true
+            && ($after['returnedSelfBy'] ?? null) === $user['display_name'] && is_iso($after['returnedSelfAt'] ?? null) ? null : $denied;
+    }
+    return only($changed, ['status']) && in_array($after['status'] ?? null, APPOINTMENT_STATUSES, true) ? null : $denied;
 }
 
 /** الطاقة الكاملة (4 أشخاص بدل 3) للسيدان فقط، وقيمتها true/false. */
@@ -315,10 +366,15 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
                     $approval = $after['approval'] ?? null;
                     return $approval === 'pending' || ($approval === 'approved' && ($after['approvedBy'] ?? null) === $user['display_name']) ? null : $denied;
                 }
-                // مشرف السيارات يضيف رحلات غير طبية فقط (بلا موافقة العيادة)
-                return ($role === 'fleetSupervisor' && ($after['category'] ?? '') === 'غير طبية' && !array_key_exists('approval', $after)) ? null : $denied;
+                // مشرف السيارات يضيف رحلات غير طبية فقط (بلا موافقة العيادة)، لضيف من قائمة ضيوف المجمع
+                if (!($role === 'fleetSupervisor' && ($after['category'] ?? '') === 'غير طبية' && !array_key_exists('approval', $after))) return $denied;
+                return $docOf ? registry_error($after, $docOf, null, false) : null;
             }
             if (!valid_approval($after)) return 'بيانات الموعد غير صالحة';
+            // مسؤول العيادة يتابع رحلات الممرضات كمشرف المبنى: حالة الموعد وإلغاؤه وعودتها بنفسها
+            if (nurse_lead($user, $before) && $changed && only($changed, ['status', ...CANCEL_FIELDS, ...SELF_RETURN_FIELDS])) {
+                return building_appointment_error($user, $before, $after, $changed);
+            }
             if (has_role($user, ['admin', ...CLINIC_ROLES])) {
                 $valid = only($changed, APPOINTMENT_FIELDS) && !in_array('id', $changed, true)
                     && in_array($after['status'] ?? null, APPOINTMENT_STATUSES, true)
@@ -359,35 +415,18 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
                 return only($changed, ['status'])
                     && ((TRIP_END_APPOINTMENT_STATUS[$move[0] ?? ''] ?? null) === $move[1] || in_array($move, TRIP_UNDO_APPOINTMENT_STATUS, true)) ? null : $denied;
             }
-            // مشرف المبنى (ومسؤولهم) لا يغيّر بيانات المريض ولا وقت الموعد، بل حالة الموعد فقط، أو يلغيه قبل استلام المريض مع ذكر السبب
-            if (has_role($user, BUILDING_ROLES)) {
-                if (($before['status'] ?? null) === 'ملغي') return $denied;
-                if (($after['status'] ?? null) === 'ملغي') {
-                    $reason = trim((string)($after['cancelReason'] ?? ''));
-                    return only($changed, ['status', ...CANCEL_FIELDS])
-                        && in_array($before['status'] ?? null, ['بانتظار طلب السيارة', 'تم طلب السيارة'], true)
-                        && is_text($after['cancelReason'] ?? null, 300) && mb_strlen($reason) >= 3
-                        && ($after['cancelledBy'] ?? null) === $user['display_name']
-                        && is_text($after['cancelledAt'] ?? null, 40) && strtotime($after['cancelledAt']) !== false ? null : $denied;
-                }
-                // الضيف عاد بنفسه: ينتهي الموعد بعد ذهابه (أو طلب العودة فقط قبل طلب سيارته)، باسم المشرف ووقته
-                if (array_intersect($changed, SELF_RETURN_FIELDS)) {
-                    $waitingReturn = ($before['returnOnly'] ?? null) === true && ($before['status'] ?? null) === 'بانتظار طلب السيارة';
-                    return only($changed, ['status', ...SELF_RETURN_FIELDS])
-                        && (in_array($before['status'] ?? null, ['تم استلام المريض', 'تم طلب السيارة'], true) || $waitingReturn)
-                        && ($after['status'] ?? null) === 'مكتملة' && ($after['returnedSelf'] ?? null) === true
-                        && ($after['returnedSelfBy'] ?? null) === $user['display_name'] && is_iso($after['returnedSelfAt'] ?? null) ? null : $denied;
-                }
-                return only($changed, ['status']) && in_array($after['status'] ?? null, APPOINTMENT_STATUSES, true) ? null : $denied;
-            }
+            // مشرف المبنى (ومسؤولهم): حالة الموعد، وإلغاؤه بسبب، وعودة الضيف بنفسه، وتصحيح رقم هاتفه قبل طلب السيارة
+            if (has_role($user, BUILDING_ROLES)) return building_appointment_error($user, $before, $after, $changed);
             return $denied;
 
         case 'requests':
             if ($after === null) {
                 if ($role === 'admin') return null;
-                // العيادة تحذف طلب سيارة العودة مع طلب العودة الذي أضافته، قبل إرسال السيارة فقط
+                // العيادة تحذف طلب سيارة العودة مع طلب العودة الذي أضافته، قبل إرسال السيارة فقط،
+                // ومسؤول العيادة يلغي طلب سيارة الممرضة كمشرف المبنى
                 if (has_role($user, CLINIC_ROLES)) {
                     $linked = $docOf ? $docOf('appointments', (string)($before['appointmentId'] ?? '')) : null;
+                    if (nurse_lead($user, $linked)) return null;
                     return $linked !== null && ($linked['returnOnly'] ?? null) === true && ($before['status'] ?? null) === 'بانتظار التوزيع' ? null : $denied;
                 }
                 return has_role($user, BUILDING_ROLES) && follows_request($user, $before) ? null : $denied;
@@ -395,19 +434,23 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
             if ($before === null) {
                 // الطلب الجديد يبدأ دائمًا بانتظار التوزيع، والسيارة يحددها مشرف السيارات لاحقًا
                 if (!has_role($user, ['admin', ...BUILDING_ROLES, 'fleetSupervisor', ...CLINIC_ROLES])) return $denied;
+                // مسؤول العيادة يطلب سيارة الممرضة باسمه كمشرف المبنى (طلب فيه requestedBy)
+                $nurseLead = $docOf && array_key_exists('requestedBy', $after)
+                    && nurse_lead($user, $docOf('appointments', (string)($after['appointmentId'] ?? '')));
                 // العيادة ومسؤولها: سيارة العودة لطلب العودة من المستشفى الذي تضيفه (محفوظ قبله في نفس الدفعة)،
                 // بلا مالك فيتابعه كل مشرفي المباني، ويصل مباشرة إلى مشرف السيارات
-                if (has_role($user, CLINIC_ROLES)) {
+                if (has_role($user, CLINIC_ROLES) && !$nurseLead) {
                     $linked = $docOf ? $docOf('appointments', (string)($after['appointmentId'] ?? '')) : null;
                     if ($linked === null || ($linked['returnOnly'] ?? null) !== true || ($after['direction'] ?? null) !== 'عودة'
                         || array_intersect(array_keys($after), ['requestedBy', 'nurseOnly', 'fromAppointmentId'])) return $denied;
                 }
                 // طلب مشرف المبنى يُسجَّل باسمه (حتى يتابعه وحده)، والرحلة غير الطبية من مشرف السيارات بلا مالك
                 $owner = $after['requestedBy'] ?? null;
-                if (has_role($user, BUILDING_ROLES) && $owner !== (string)$user['id']) return 'بيانات الطلب غير صالحة';
+                $building = has_role($user, BUILDING_ROLES) || $nurseLead;
+                if ($building && $owner !== (string)$user['id']) return 'بيانات الطلب غير صالحة';
                 if ($role === 'fleetSupervisor' && $owner !== null) return 'بيانات الطلب غير صالحة';
                 // مشرف المبنى يطلب سيارة لموعد وافق عليه مسؤول العيادة فقط
-                if (has_role($user, BUILDING_ROLES) && $docOf) {
+                if ($building && $docOf) {
                     $linked = $docOf('appointments', (string)($after['appointmentId'] ?? ''));
                     if ($linked !== null && approval_of($linked) !== 'approved') return 'لم يوافق مسؤول العيادة على هذا الموعد بعد';
                     // طلب العودة فقط من المستشفى: سيارة عودة فقط (لا ذهاب ولا نقل إليه)
@@ -493,9 +536,9 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
                 // بيانات الوصول تُكتب مرة واحدة عند الوصول، ولا تُغيَّر بعده (مثل وصول سجّله GPS)
                 return !array_intersect($changed, ['arrivedAt', 'arrivalSource']) || $arriving ? null : $denied;
             }
-            // مشرف المبنى (لطلباته) ومسؤول مشرفي المباني (لكل الطلبات): تأكيد وصول السيارة واستلام المريض، ومعه
-            // وقت الاستلام والوقت المتوقع للوصول، والرد على ما سجّله السائق (التأكيد، أو النفي الذي يعيد الطلب إلى المرحلة السابقة)
-            if (has_role($user, BUILDING_ROLES)) {
+            // مشرف المبنى (لطلباته) ومسؤول مشرفي المباني (لكل الطلبات) ومسؤول العيادة (لطلبات الممرضات): تأكيد وصول السيارة
+            // واستلام المريض، ومعه وقت الاستلام والوقت المتوقع للوصول، والرد على ما سجّله السائق (التأكيد، أو النفي الذي يعيد الطلب إلى المرحلة السابقة)
+            if (has_role($user, BUILDING_ROLES) || ($role === 'clinicLead' && $docOf && nurse_lead($user, $docOf('appointments', (string)($before['appointmentId'] ?? ''))))) {
                 // أي مشرف مبنى يطلب عودة الضيف مع الـ Nurse التي تنتظر سيارتها: يصبح طلب عودتها طلب عودة لهما
                 if ($changed === ['nurseOnly'] && ($before['nurseOnly'] ?? null) === true && !array_key_exists('nurseOnly', $after)) {
                     return in_array($before['status'] ?? null, ['بانتظار التوزيع', 'تم إرسال السيارة', 'وصلت السيارة'], true) ? null : $denied;
