@@ -4,6 +4,7 @@ import AppHeader from "@/components/AppHeader";
 import GuestContact from "@/components/GuestContact";
 import { Badge, EmptyState, Segmented, Steps, Switch, TimeBlock, btn, cx, timeLabel } from "@/components/ui-kit";
 import { toast } from "sonner";
+import { goTo, reveal } from "@/lib/notify";
 import type { UserProfile } from "@shared/users";
 import { DEFAULT_HOSPITALS, distanceKm, type Hospital } from "@shared/hospitals";
 import {
@@ -194,9 +195,10 @@ export default function DriverPage({ profile, onLogout, onChangePassword }: {
         const fresh = Array.from(active).filter((id) => !previous.active.has(id) && requests.find((request) => request.id === id)?.status === "تم إرسال السيارة");
         const cancelled = Array.from(previous.active).filter((id) => !requests.some((request) => request.id === id));
         const denied = Array.from(denials).filter((key) => !previous.denials.has(key));
-        if (fresh.length) toast.success(t.newTrips(fresh.length), { description: t.newTripHint, duration: 15000 });
-        if (cancelled.length) toast.warning(t.cancelledTrips(cancelled.length), { duration: 15000 });
-        if (denied.length) toast.error(t.deniedTitle, { description: t.deniedHint, duration: 20000 });
+        // الضغط على الإشعار ينقل إلى الرحلة (والإلغاء إلى «رحلاتي»)
+        if (fresh.length) toast.success(t.newTrips(fresh.length), { description: t.newTripHint, duration: 15000, ...goTo(() => reveal(`trip:${fresh[0]}`), t.show) });
+        if (cancelled.length) toast.warning(t.cancelledTrips(cancelled.length), { duration: 15000, ...goTo(() => reveal("driver-trips"), t.show) });
+        if (denied.length) toast.error(t.deniedTitle, { description: t.deniedHint, duration: 20000, ...goTo(() => reveal(`trip:${denied[0].split(":")[0]}`), t.show) });
         if (fresh.length || cancelled.length || denied.length) alertDevice();
       }
       known.current = { active, denials };
@@ -212,6 +214,23 @@ export default function DriverPage({ profile, onLogout, onChangePassword }: {
     known.current = null;
     if (!plate && watchId.current !== null) stop(true);
   }, [plate]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // الضغط على إشعار الهاتف ينقل إلى رحلته: رابط ?trip= عند فتح التطبيق به، أو رسالة من sw.js والتطبيق مفتوح
+  useEffect(() => {
+    const openUrl = (url: string) => {
+      const trip = new URL(url, window.location.origin).searchParams.get("trip");
+      reveal(trip ? `trip:${trip}` : "driver-trips", 80);
+    };
+    if (new URLSearchParams(window.location.search).get("trip")) {
+      openUrl(window.location.href);
+      window.history.replaceState(null, "", window.location.pathname);
+    }
+    const onMessage = (event: MessageEvent) => {
+      if (event.data?.type === "open" && typeof event.data.url === "string") openUrl(event.data.url);
+    };
+    navigator.serviceWorker?.addEventListener("message", onMessage);
+    return () => navigator.serviceWorker?.removeEventListener("message", onMessage);
+  }, []);
 
   // تحديث الرحلات كل بضع ثوانٍ والتطبيق ظاهر، وفورًا عند العودة إليه
   useEffect(() => {
@@ -362,7 +381,7 @@ export default function DriverPage({ profile, onLogout, onChangePassword }: {
 
             <PushCard t={t} state={push} onEnable={turnOnPush} />
 
-            <section aria-label={t.myTrips} className="space-y-3">
+            <section id="driver-trips" aria-label={t.myTrips} className="space-y-3">
               <div className="flex items-center justify-between gap-2 px-1">
                 <h2 className="text-lg font-bold text-ink dark:text-white">{t.myTrips} {activeTrips.length > 0 && <span className="text-sm font-semibold text-slate-500 dark:text-slate-400">({activeTrips.length})</span>}</h2>
                 <button type="button" onClick={() => loadTrips()} className={btn("ghost", "sm")}><RefreshCw className="h-4 w-4" /> {t.refresh}</button>
@@ -524,7 +543,7 @@ function TripCard({ t, lang, request, appointment, from, hospitals, group, perso
   const status = t.status[request.status as keyof DriverText["status"]] ?? request.status;
 
   return (
-    <article className={cx("overflow-hidden rounded-2xl bg-white shadow-card ring-1 dark:bg-slate-900 dark:shadow-none", request.status === "تم إرسال السيارة" ? "ring-amber-300 dark:ring-amber-500/40" : "ring-blue-200 dark:ring-blue-500/40")}>
+    <article data-target={`trip:${request.id}`} className={cx("overflow-hidden rounded-2xl bg-white shadow-card ring-1 dark:bg-slate-900 dark:shadow-none", request.status === "تم إرسال السيارة" ? "ring-amber-300 dark:ring-amber-500/40" : "ring-blue-200 dark:ring-blue-500/40")}>
       <div className={cx("h-1", request.status === "تم إرسال السيارة" ? "bg-amber-400" : "bg-blue-500")} />
       <div className="p-4">
         <div className="flex gap-3">

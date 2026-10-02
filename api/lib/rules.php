@@ -27,9 +27,17 @@ const CHECK_FIELDS = ['arrivalCheck', 'arrivalCheckBy', 'arrivalCheckAt', 'picku
 const CHECK_SECONDS = 300;
 /** تغيير السيارة بعد إرسالها (عطل أو حادث أو تأخر): السيارة السابقة، والسبب، ووقت التغيير */
 const VEHICLE_CHANGE_FIELDS = ['previousPlate', 'changeReason', 'changedAt'];
+/** إزالة ضيف من رحلة جارية (لم يركب، أو سُجّل استلامه خطأً): السيارة التي أُزيل منها، والسبب، والوقت */
+const TRIP_REMOVAL_FIELDS = ['removedFrom', 'removeReason', 'removedAt'];
+/** ما يُمحى من الطلب حين يعود إلى «بانتظار التوزيع» بعد إزالته من رحلة: السيارة وكل مراحل الرحلة */
+const TRIP_RESET_FIELDS = ['vehiclePlate', 'driver', 'groupId', 'notificationSentAt', 'pickedUpAt', 'etaAt', 'destLat', 'destLng', 'arrivedAt', 'arrivalSource',
+    'driverArrivedAt', 'arrivalGps', 'pickupGps', 'arrivalCheck', 'arrivalCheckBy', 'arrivalCheckAt', 'pickupCheck', 'pickupCheckBy', 'pickupCheckAt',
+    'previousPlate', 'changeReason', 'changedAt'];
+/** حالة الموعد قبل استلام الضيف: إزالة ضيف سُجّل استلامه من الرحلة تعيدها (الذهاب، والعودة، والموعد الأول في النقل) */
+const TRIP_UNDO_APPOINTMENT_STATUS = [['تم استلام المريض', 'تم طلب السيارة'], ['مكتملة', 'طلب عودة'], ['مكتملة', 'تم استلام المريض']];
 const REQUEST_FIELDS = ['id', 'appointmentId', 'vehiclePlate', 'driver', 'direction', 'status', 'notificationMethod',
     'createdAt', 'groupId', 'notificationSentAt', 'requestedBy', 'pickedUpAt', 'etaAt', 'destLat', 'destLng', 'arrivedAt', 'arrivalSource',
-    'fromAppointmentId', 'nurseOnly', 'driverArrivedAt', 'arrivalGps', 'pickupGps', ...CHECK_FIELDS, ...VEHICLE_CHANGE_FIELDS, '_o'];
+    'fromAppointmentId', 'nurseOnly', 'driverArrivedAt', 'arrivalGps', 'pickupGps', ...CHECK_FIELDS, ...VEHICLE_CHANGE_FIELDS, ...TRIP_REMOVAL_FIELDS, '_o'];
 /** خانات مرحلة الطريق إلى الوجهة (تُكتب عند استلام المريض وعند الوصول) */
 const TRIP_FIELDS = ['pickedUpAt', 'etaAt', 'destLat', 'destLng', 'arrivedAt', 'arrivalSource'];
 /** driver وphone: اسم السائق المخصص للسيارة ورقمه، منسوخان من قائمة السائقين (driverId) ويحدّثهما الخادم */
@@ -344,10 +352,12 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
                 }
                 return null;
             }
-            // مشرف السيارات: عند إنهاء رحلة عالقة (لم يُسجَّل استلام ضيفها) تتقدم حالة الموعد كما عند الاستلام فقط
+            // مشرف السيارات: حالة الموعد فقط، تتقدم كما عند الاستلام (إنهاء رحلة عالقة، أو ضم ضيف استلمه السائق إلى رحلة)،
+            // أو تعود إلى ما قبل الاستلام (إزالة ضيف سُجّل استلامه من الرحلة)
             if ($role === 'fleetSupervisor') {
+                $move = [$before['status'] ?? null, $after['status'] ?? null];
                 return only($changed, ['status'])
-                    && (TRIP_END_APPOINTMENT_STATUS[$before['status'] ?? ''] ?? null) === ($after['status'] ?? null) ? null : $denied;
+                    && ((TRIP_END_APPOINTMENT_STATUS[$move[0] ?? ''] ?? null) === $move[1] || in_array($move, TRIP_UNDO_APPOINTMENT_STATUS, true)) ? null : $denied;
             }
             // مشرف المبنى (ومسؤولهم) لا يغيّر بيانات المريض ولا وقت الموعد، بل حالة الموعد فقط، أو يلغيه قبل استلام المريض مع ذكر السبب
             if (has_role($user, BUILDING_ROLES)) {
@@ -435,6 +445,25 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
             // مشرف السيارات: إرسال السيارة وجمع الرحلات، وتأكيد وصولها إلى الوجهة (يدويًا أو بانتهاء المدة التقديرية)،
             // وإنهاء رحلة عالقة قبل تسجيل الاستلام (يدويًا فقط) حتى تتفرغ السيارة
             if ($role === 'fleetSupervisor') {
+                // إزالة ضيف من رحلة جارية: يعود طلبه إلى «بانتظار التوزيع» بلا سيارة ولا مراحل الرحلة، ومعه السيارة والسبب ووقته
+                if (($after['status'] ?? null) === 'بانتظار التوزيع' && !empty($before['vehiclePlate'])) {
+                    $valid = in_array($before['status'] ?? null, ['تم إرسال السيارة', 'وصلت السيارة', 'تم استلام المريض'], true)
+                        && only($changed, ['status', ...TRIP_RESET_FIELDS, ...TRIP_REMOVAL_FIELDS])
+                        && !array_intersect(array_keys($after), TRIP_RESET_FIELDS)
+                        && ($after['removedFrom'] ?? null) === $before['vehiclePlate']
+                        && is_text($after['removeReason'] ?? null, 120) && trim($after['removeReason']) !== ''
+                        && is_iso($after['removedAt'] ?? null);
+                    return $valid ? null : $denied;
+                }
+                // ضم ضيف استلمه السائق إلى رحلة جارية: من «بانتظار التوزيع» مباشرة إلى «تم استلام المريض» في سيارة موجودة،
+                // ومعه وقت الاستلام والوقت المتوقع للوصول وإحداثيات الوجهة
+                if (($before['status'] ?? null) === 'بانتظار التوزيع' && ($after['status'] ?? null) === 'تم استلام المريض') {
+                    $plate = $after['vehiclePlate'] ?? null;
+                    $valid = only($changed, ['vehiclePlate', 'driver', 'status', 'groupId', 'notificationSentAt', 'pickedUpAt', 'etaAt', 'destLat', 'destLng'])
+                        && is_string($plate) && valid_doc_id($plate) && $docOf && $docOf('fleet', $plate) !== null
+                        && is_iso($after['pickedUpAt'] ?? null) && is_iso($after['etaAt'] ?? null);
+                    return $valid ? null : $denied;
+                }
                 // تغيير السيارة بعد إرسالها وقبل وصولها إلى الوجهة: سيارة موجودة أخرى ومعها السيارة السابقة والسبب ووقته.
                 // قبل استلام الضيف تعود الرحلة إلى «تم إرسال السيارة» ويُمحى ما سجّله سائق السيارة السابقة عند الاستلام،
                 // وبعد الاستلام تبقى «تم استلام المريض» (تكمل السيارة الجديدة الطريق)

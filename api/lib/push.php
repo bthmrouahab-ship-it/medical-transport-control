@@ -195,6 +195,11 @@ function push_trip_parts(PDO $pdo, array $trip, string $lang): array
 /** إشعارات السائق الناتجة عن عملية كتابة واحدة على طلب (تُرسل بعد الحفظ). */
 function queue_request_pushes(PDO $pdo, ?array $before, ?array $after): void
 {
+    // إزالة ضيف من رحلة جارية: تُلغى رحلته عند سائق السيارة
+    if ($after && empty($after['vehiclePlate']) && !empty($before['vehiclePlate']) && in_array($before['status'] ?? null, DRIVER_ACTIVE_STATUSES, true)) {
+        push_queue(['plate' => (string)$before['vehiclePlate'], 'type' => 'cancel', 'trip' => push_trip_text($pdo, $before)]);
+        return;
+    }
     $plate = (string)(($after ?? $before)['vehiclePlate'] ?? '');
     if ($plate === '') return;
     // نفي مشرف المبنى لما سجّله السائق (يعيد الطلب إلى «تم إرسال السيارة» أو «وصلت السيارة»)
@@ -211,8 +216,8 @@ function queue_request_pushes(PDO $pdo, ?array $before, ?array $after): void
         if (in_array($after['status'] ?? null, DRIVER_ACTIVE_STATUSES, true)) push_queue(['plate' => $plate, 'type' => 'new', 'trip' => push_trip_text($pdo, $after)]);
         return;
     }
-    // إرسال السيارة (من بانتظار التوزيع)
-    if ($after && ($after['status'] ?? null) === 'تم إرسال السيارة'
+    // إرسال السيارة من «بانتظار التوزيع» (أو ضم ضيف استلمه السائق إلى رحلة جارية)
+    if ($after && in_array($after['status'] ?? null, DRIVER_ACTIVE_STATUSES, true)
         && (($before['status'] ?? null) === 'بانتظار التوزيع' || ($before['vehiclePlate'] ?? null) !== $plate)) {
         push_queue(['plate' => $plate, 'type' => 'new', 'trip' => push_trip_text($pdo, $after)]);
         return;
@@ -221,6 +226,13 @@ function queue_request_pushes(PDO $pdo, ?array $before, ?array $after): void
     if ($after === null && in_array($before['status'] ?? null, ['تم إرسال السيارة', 'وصلت السيارة'], true)) {
         push_queue(['plate' => $plate, 'type' => 'cancel', 'trip' => push_trip_text($pdo, $before)]);
     }
+}
+
+/** رابط التطبيق على رحلة (الضغط على الإشعار ينقل إلى بطاقتها في «رحلاتي») */
+function trip_url(array $trip): string
+{
+    $id = (string)($trip['id'] ?? '');
+    return valid_doc_id($id) ? '/?trip=' . rawurlencode($id) : '/';
 }
 
 /** نص الإشعار لكل سيارة بلغة الهاتف: الرحلات الجديدة في إشعار واحد (رحلة مجمّعة)، وكل إلغاء أو نفي في إشعار. */
@@ -235,6 +247,8 @@ function push_messages(PDO $pdo, array $items, string $lang): array
         $messages[] = count($trips) > 1
             ? ['title' => sprintf($text['group'], count($trips)), 'body' => $join(...array_map(fn($trip) => "{$trip['time']} {$trip['name']}", $trips)), 'tag' => 'trip-new']
             : ['title' => $join($text['new'], $trips[0]['time']), 'body' => $join($trips[0]['name'], $trips[0]['route']), 'tag' => 'trip-new'];
+        // الضغط على الإشعار يفتح التطبيق على الرحلة
+        $messages[count($messages) - 1]['url'] = trip_url($new[0]['trip']);
     }
     foreach ($items as $item) {
         if ($item['type'] === 'new') continue;
@@ -242,9 +256,9 @@ function push_messages(PDO $pdo, array $items, string $lang): array
         if ($item['type'] === 'cancel') {
             $messages[] = ['title' => $text['cancel'], 'body' => $join($trip['name'], $trip['time'], $trip['route']), 'tag' => 'trip-cancel'];
         } elseif ($item['type'] === 'denied-arrival') {
-            $messages[] = ['title' => $text['deniedArrival'], 'body' => sprintf($text['deniedArrivalBody'], $trip['name']), 'tag' => 'trip-denied'];
+            $messages[] = ['title' => $text['deniedArrival'], 'body' => sprintf($text['deniedArrivalBody'], $trip['name']), 'tag' => 'trip-denied', 'url' => trip_url($item['trip'])];
         } elseif ($item['type'] === 'denied-pickup') {
-            $messages[] = ['title' => $text['deniedPickup'], 'body' => sprintf($text['deniedPickupBody'], $trip['name']), 'tag' => 'trip-denied'];
+            $messages[] = ['title' => $text['deniedPickup'], 'body' => sprintf($text['deniedPickupBody'], $trip['name']), 'tag' => 'trip-denied', 'url' => trip_url($item['trip'])];
         }
     }
     return array_map(fn($message) => $message + ['lang' => $lang, 'dir' => $text['dir']], $messages);

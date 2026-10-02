@@ -219,6 +219,19 @@ function describe_write(PDO $pdo, string $col, string $id, ?array $before, ?arra
             if ($after === null) {
                 return ['request', 'request.cancel', "إلغاء طلب السيارة ($direction) لـ $who" . ($plate ? " وكانت السيارة $plate قد أُرسلت" : ''), $details];
             }
+            // إزالة ضيف من رحلة جارية: عاد طلبه إلى «بانتظار التوزيع»
+            if ($before !== null && !empty($before['vehiclePlate']) && ($after['status'] ?? null) === 'بانتظار التوزيع') {
+                $details['plate'] = $before['vehiclePlate'];
+                $details['reason'] = $after['removeReason'] ?? '';
+                $picked = ($before['status'] ?? null) === 'تم استلام المريض' ? ' (كان مسجلًا أنه استُلم)' : '';
+                return ['request', 'request.remove_from_trip', "إزالة $who من رحلة السيارة {$before['vehiclePlate']} ($direction)$picked"
+                    . ($details['reason'] !== '' ? " · السبب: {$details['reason']}" : '') . ' · عاد طلبه إلى «بانتظار التوزيع»', $details];
+            }
+            // ضم ضيف استلمه السائق إلى رحلة جارية
+            if ($before !== null && ($before['status'] ?? null) === 'بانتظار التوزيع' && ($after['status'] ?? null) === 'تم استلام المريض') {
+                $details['eta'] = qatar_time($after['etaAt'] ?? null);
+                return ['request', 'request.join_trip', "ضم $who إلى رحلة السيارة $plate ($direction) · استلمه السائق" . ($details['eta'] ? " · الوصول المتوقع {$details['eta']}" : ''), $details];
+            }
             // تغيير السيارة بعد إرسالها (عطل أو حادث أو تأخر)
             if ($before !== null && !empty($before['vehiclePlate']) && in_array('vehiclePlate', $changed, true)) {
                 $details['previous'] = $before['vehiclePlate'];
@@ -271,7 +284,11 @@ function describe_write(PDO $pdo, string $col, string $id, ?array $before, ?arra
                     return ['request', 'request.arrived', "وصول السيارة $plate بـ $who إلى $to" . ($source ? " ($source)" : ''), $details, $automatic];
                 }
             }
-            if (in_array('groupId', $changed, true)) return ['request', 'request.group', "ضم طلب $who إلى رحلة السيارة $plate", $details];
+            if (in_array('groupId', $changed, true)) {
+                // بقي وحده في الرحلة بعد إزالة ضيف منها (الإزالة نفسها في السجل)
+                if (empty($after['groupId'])) return null;
+                return ['request', 'request.group', "ضم طلب $who إلى رحلة السيارة $plate", $details];
+            }
             foreach ($checks as $kind => $what) {
                 if (in_array("{$kind}Check", $changed, true) && ($after["{$kind}Check"] ?? null) === 'confirmed') {
                     return ['request', 'request.check_confirmed', "تأكيد $what ($direction) كما سجّله السائق", $details];

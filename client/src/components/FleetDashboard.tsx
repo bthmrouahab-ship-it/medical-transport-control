@@ -27,7 +27,13 @@ const FRESH_TONE: Record<string, Tone> = { live: "green", stale: "amber", offlin
  * لوحة السيارات: خريطة قطر المباشرة، إحصائيات الرحلات، ودليل المستشفيات (للمدير).
  * alerts: رسالة عند وصول سيارة إلى وجهتها (لمشرف السيارات وهو على الخريطة).
  */
-export default function FleetDashboard({ canEdit = false, alerts = false, actor }: { canEdit?: boolean; alerts?: boolean; actor: string }) {
+export default function FleetDashboard({ canEdit = false, alerts = false, actor, onOpen }: {
+  canEdit?: boolean;
+  alerts?: boolean;
+  actor: string;
+  /** الضغط على إشعار (مشرف السيارات على الخريطة): الرجوع إلى التوزيع ثم مكان الإشعار */
+  onOpen?: (target: string) => void;
+}) {
   const [tab, setTab] = useState<Tab>("map");
   const [focus, setFocus] = useState<{ lat: number; lng: number; key: number } | null>(null);
   const hospitals = useHospitals();
@@ -77,8 +83,8 @@ export default function FleetDashboard({ canEdit = false, alerts = false, actor 
     return [{ id: request.id, plate: request.vehiclePlate, phase: phase.kind, from, to, label }];
   }), [requests, appointments, hospitals, now, freshness]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  useArrivalAlerts({ arrivals: arrivalsOn(localDateString(now), requests, now, isLive), appointments, hospitals, driverOf, enabled: alerts });
-  useCancellationAlerts({ requests, appointments, enabled: alerts });
+  useArrivalAlerts({ arrivals: arrivalsOn(localDateString(now), requests, now, isLive), appointments, hospitals, driverOf, enabled: alerts, onOpen });
+  useCancellationAlerts({ requests, appointments, enabled: alerts, onOpen });
 
   const liveCount = fleet.filter((vehicle) => isLive(vehicle.plate)).length;
   const busyPlates = new Set(trips.map((trip) => trip.plate));

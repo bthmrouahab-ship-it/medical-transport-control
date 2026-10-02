@@ -29,6 +29,8 @@ import {
   Timer,
   Truck,
   UserCog,
+  UserMinus,
+  UserPlus,
   Ribbon,
   Clock3,
   Wand2,
@@ -37,6 +39,7 @@ import {
   BUS_ROLES,
   BUS_ROLE_LABELS,
   CHANGE_VEHICLE_REASONS,
+  REMOVE_FROM_TRIP_REASONS,
   VEHICLE_FAULT_REASONS,
   appointmentDateTime,
   appointmentPickupLabel,
@@ -111,6 +114,7 @@ import { RecentActivity } from "@/components/ActivityLog";
 import { AppointmentsOverview } from "@/components/AppointmentsOverview";
 import { KindIcon, KindLabel, VehiclePicker } from "@/components/VehiclePicker";
 import DriverAssignment from "@/components/DriverAssignment";
+import { reveal } from "@/lib/notify";
 import GuestContact from "@/components/GuestContact";
 import { useDrivers, useHospitals, useLiveVehicles, useNow, useSharedState } from "@/lib/useShared";
 import { locationFreshness, type VehicleLocation } from "@/lib/vehicleLocation";
@@ -183,7 +187,7 @@ const roleOf = (vehicle: Vehicle) => (busRoleOf(vehicle) ? BUS_ROLE_LABELS[busRo
 /** why: لا تناسب الرحلة (معطّلة)، warning: تناسبها بعد موافقة المشرف (سيارة عادية لضيف احتياجات خاصة) */
 type VehicleChoice = { vehicle: Vehicle; why: string | null; warning?: string | null };
 
-export function FleetSupervisorPage({ vehicles, appointments, requests, date, onDateChange, onManager, onUpdate, onDispatch, onDispatchMany, onArrived, onEndTrip, onChangeVehicle, onExport, onAddTrip }: {
+export function FleetSupervisorPage({ vehicles, appointments, requests, date, onDateChange, onManager, onUpdate, onDispatch, onDispatchMany, onArrived, onEndTrip, onChangeVehicle, onRemoveFromTrip, onAddToTrip, onExport, onAddTrip }: {
   vehicles: Vehicle[];
   appointments: ClinicAppointment[];
   requests: VehicleRequest[];
@@ -198,6 +202,10 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
   onEndTrip: (requestIds: string[]) => void;
   /** سيارة أخرى لرحلة أُرسلت لها سيارة (عطل أو حادث أو تأخر)، مع السبب وإيقاف السابقة. يعيد رسالة السائق الجديد */
   onChangeVehicle: (requestIds: string[], vehicle: Vehicle, reason: string, stopOld: boolean) => DriverMessage[];
+  /** إزالة ضيف من رحلة جارية (لم يركب أو سُجّل استلامه خطأً): يعود طلبه إلى «بانتظار التوزيع» */
+  onRemoveFromTrip: (requestId: string, reason: string) => void;
+  /** ضم ضيف ينتظر السيارة إلى رحلة جارية (استلمه السائق أو سيستلمه). يعيد رسالة السائق */
+  onAddToTrip: (requestId: string, tripRequestIds: string[], vehicle: Vehicle, pickedUp: boolean) => DriverMessage[];
   onExport: () => void;
   onAddTrip: (appointment: ClinicAppointment, request: VehicleRequest) => void;
 }) {
@@ -214,6 +222,9 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
   const [shownPlate, setShownPlate] = useState<string | null>(null);
   /** نافذة تغيير سيارة رحلة جارية (عطل أو حادث أو تأخر) */
   const [changing, setChanging] = useState<Trip[] | null>(null);
+  /** إزالة ضيف من رحلة جارية، وإضافة ضيف إليها */
+  const [removing, setRemoving] = useState<{ trip: Trip; alone: boolean } | null>(null);
+  const [adding, setAdding] = useState<Trip[] | null>(null);
   /** نافذة السائقين في السيارات (بداية الشفت)، ومعها نص البحث الأول (رقم سيارة من تفاصيلها) */
   const [assigning, setAssigning] = useState<string | null>(null);
   const drivers = useDrivers();
@@ -355,10 +366,16 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
   }, [requests, now, liveGps]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // رسالة لمشرف السيارات عند وصول سيارة، وتنبيه على الجهاز إن فعّله
-  useArrivalAlerts({ arrivals, appointments, hospitals, driverOf });
-  useCancellationAlerts({ requests, appointments });
-  useDenialAlerts({ requests, appointments });
-  useRedirectAlerts({ redirects, driverOf, onDispatch: redirectVehicle });
+  // الضغط على إشعار ينقل إلى مكانه في «توزيع السيارات» (ولو كان المشرف في «كل المواعيد»)
+  const openTarget = (target: string) => {
+    setView("dispatch");
+    if (target.startsWith("vehicle:")) setVehicleFilter("all");
+    reveal(target);
+  };
+  useArrivalAlerts({ arrivals, appointments, hospitals, driverOf, onOpen: openTarget });
+  useCancellationAlerts({ requests, appointments, onOpen: openTarget });
+  useDenialAlerts({ requests, appointments, onOpen: openTarget });
+  useRedirectAlerts({ redirects, driverOf, onDispatch: redirectVehicle, onOpen: openTarget });
   const [notifyDevice, setNotifyDevice] = useState(deviceNotificationsOn);
 
   async function toggleDeviceNotifications() {
@@ -572,7 +589,7 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
             <Panel tone="violet" icon={Navigation} title="توجيه سيارات خارج المجمع" count={redirects.length} description="سيارة عائدة من وجهتها لم تقطع نصف الطريق إلى المجمع، وهي أقرب إلى ضيف ينتظر العودة من المجمع">
               <div className="divide-y divide-slate-100">
                 {redirects.map((item) => (
-                  <div key={item.request.id} className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:p-5">
+                  <div key={item.request.id} data-target={`redirect:${item.request.id}`} className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:p-5">
                     <div className="min-w-0 flex-1">
                       <p className="font-medium text-ink">
                         <span dir="ltr">{item.vehicle.plate}</span> · {driverOf(item.vehicle.plate, item.vehicle.driver)} ← {item.appointment.patientName}
@@ -616,7 +633,7 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
                   const ready = choices.filter((choice) => !choice.why).map((choice) => choice.vehicle);
                   const zone = matchHospitalZone(trip.appointment, hospitals);
                   return (
-                    <div key={trip.request.id} className="flex flex-col gap-4 p-4 sm:p-5 lg:flex-row lg:items-center">
+                    <div key={trip.request.id} data-target={`request:${trip.request.id}`} className="flex flex-col gap-4 p-4 sm:p-5 lg:flex-row lg:items-center">
                       <div className="flex min-w-0 flex-1 gap-4">
                         <TimeBlock time={trip.appointment.appointmentAt} day={formatDay(trip.appointment.appointmentDate, now)} />
                         <div className="min-w-0">
@@ -632,6 +649,12 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
                           </div>
                           <p className="mt-1 text-sm text-slate-600">{routeLabel(trip.appointment, trip.from)}{zone && <span className="text-slate-400"> · {zone}</span>}</p>
                           <p className="mt-0.5 text-xs text-slate-500">{riderDetails(trip)}</p>
+                          {/* أُزيل من رحلة جارية: ينتظر سيارة أخرى */}
+                          {trip.request.removedFrom && (
+                            <p className="mt-1 text-xs font-medium leading-5 text-red-700">
+                              <UserMinus className="me-1 inline h-3.5 w-3.5 align-[-3px]" />أُزيل من رحلة السيارة <span dir="ltr">{trip.request.removedFrom}</span>{trip.request.removeReason ? ` · ${trip.request.removeReason}` : ""}{trip.request.removedAt ? ` · ${timeLabel(new Date(trip.request.removedAt))}` : ""}
+                            </p>
+                          )}
                           {trip.request.createdAt && (
                             <p className="mt-1 flex flex-wrap items-center gap-1 text-xs font-medium text-amber-800">
                               <Clock3 className="h-3.5 w-3.5" /> {requestTimes(trip)}
@@ -751,6 +774,8 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
                     onArrived={() => onArrived(trips.map((trip) => trip.request.id), "manual")}
                     onEnd={() => onEndTrip(trips.map((trip) => trip.request.id))}
                     onChangeVehicle={() => setChanging(trips)}
+                    onRemove={(trip) => setRemoving({ trip, alone: trips.length === 1 })}
+                    onAdd={() => setAdding(trips)}
                   />
                 ))}
               </div>
@@ -760,6 +785,7 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
 
         <aside className="min-w-0 space-y-6">
           <Panel
+            id="fleet-arrivals"
             tone="green"
             icon={CheckCircle2}
             title="وصول السيارات اليوم"
@@ -783,7 +809,7 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
                   const appointment = appointments.find((item) => item.id === request.appointmentId);
                   const destination = appointment ? tripEndpoints(appointment, request.direction, hospitals).destination : "";
                   return (
-                    <li key={request.id} className="flex items-start gap-3 px-5 py-3">
+                    <li key={request.id} data-target={`arrival:${request.id}`} className="flex items-start gap-3 px-5 py-3">
                       <span dir="ltr" className="mt-0.5 w-12 shrink-0 text-sm font-semibold text-ink tabular">{timeLabel(at)}</span>
                       <div className="min-w-0 flex-1">
                         <p className="truncate text-sm font-medium text-ink"><span dir="ltr">{request.vehiclePlate}</span> · {driverOf(request.vehiclePlate, request.driver)}</p>
@@ -829,7 +855,7 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
                 const state = availabilityText(vehicle);
                 const live = liveGps.get(vehicle.plate);
                 return (
-                  <li key={vehicle.plate} className="flex items-center gap-2 px-3 py-2.5">
+                  <li key={vehicle.plate} data-target={`vehicle:${vehicle.plate}`} className="flex items-center gap-2 px-3 py-2.5">
                     <div className="min-w-0 flex-1">
                       {/* الضغط على السيارة يفتح تفاصيلها: السائق ورقمه، والحالة، ومن فيها، ورحلاتها اليوم */}
                       <button
@@ -930,6 +956,48 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
           onClose={() => setShownPlate(null)}
         />
       )}
+      {removing && (
+        <RemoveFromTripDialog
+          trip={removing.trip}
+          alone={removing.alone}
+          onConfirm={(reason) => {
+            onRemoveFromTrip(removing.trip.request.id, reason);
+            setRemoving(null);
+          }}
+          onClose={() => setRemoving(null)}
+        />
+      )}
+      {adding && (() => {
+        const vehicle = vehicles.find((item) => item.plate === adding[0].request.vehiclePlate);
+        const day = adding[0].appointment.appointmentDate;
+        // الضيوف الذين ينتظرون سيارة في يوم الرحلة: نفس الاتجاه أولًا، ثم الأقرب وقتًا
+        const candidates = requests
+          .filter((request) => request.status === "بانتظار التوزيع")
+          .map(withAppointment)
+          .filter(isTrip)
+          .filter((trip) => trip.appointment.appointmentDate === day)
+          .sort((a, b) => Number(a.request.direction !== adding[0].request.direction) - Number(b.request.direction !== adding[0].request.direction)
+            || Math.abs((a.at?.getTime() ?? 0) - (adding[0].at?.getTime() ?? 0)) - Math.abs((b.at?.getTime() ?? 0) - (adding[0].at?.getTime() ?? 0)));
+        return vehicle && (
+          <AddToTripDialog
+            trips={adding}
+            vehicle={vehicle}
+            candidates={candidates}
+            pickedUpDefault={adding.some((trip) => trip.request.status === "تم استلام المريض")}
+            warningFor={(candidate) => vehicleRestriction({ ...vehicle, available: true }, {
+              appointments: [...adding, candidate].map((trip) => trip.appointment),
+              persons: sumPersons([...adding, candidate]),
+            }, { ...rules, regularForSpecial: true }) ?? regularForSpecialWarning(vehicle, [candidate.appointment])}
+            hospitals={hospitals}
+            onConfirm={(candidate, pickedUp) => {
+              const messages = onAddToTrip(candidate.request.id, adding.map((trip) => trip.request.id), vehicle, pickedUp);
+              setAdding(null);
+              if (messages.length) setDriverMessages(messages);
+            }}
+            onClose={() => setAdding(null)}
+          />
+        );
+      })()}
       {changing && (
         <ChangeVehicleDialog
           trips={changing}
@@ -980,7 +1048,7 @@ function TripList({ trips, hospitals }: { trips: Trip[]; hospitals: Hospital[] }
 const STEPS = ["أُرسلت", "عند الاستلام", "في الطريق", "الوجهة"];
 
 /** رحلة سيارة جارية: مرحلتها، والوقت المتوقع للوصول، ومتابعة GPS، ورسالة السائق. */
-function ActiveTrip({ trips, phase, late = false, vehicle, driver, hospitals, onArrived, onEnd, onChangeVehicle }: {
+function ActiveTrip({ trips, phase, late = false, vehicle, driver, hospitals, onArrived, onEnd, onChangeVehicle, onRemove, onAdd }: {
   trips: Trip[];
   phase: TripPhase;
   /** تأخرت: لم تصل إلى الاستلام بعد LATE_MINUTES من إرسالها، أو تجاوزت الوقت المتوقع للوصول */
@@ -991,6 +1059,9 @@ function ActiveTrip({ trips, phase, late = false, vehicle, driver, hospitals, on
   onArrived: () => void;
   onEnd: () => void;
   onChangeVehicle: () => void;
+  /** إزالة ضيف من الرحلة، وإضافة ضيف إليها */
+  onRemove: (trip: Trip) => void;
+  onAdd: () => void;
 }) {
   const plate = trips[0].request.vehiclePlate ?? "";
   const changed = trips.find((trip) => trip.request.previousPlate)?.request;
@@ -1001,7 +1072,7 @@ function ActiveTrip({ trips, phase, late = false, vehicle, driver, hospitals, on
   const step = phase.kind === "toPickup" ? (phase.atPickup ? 1 : 0) : phase.kind === "toDestination" ? 2 : 3;
   const destinations = Array.from(new Set(trips.map((trip) => tripEndpoints(trip.appointment, trip.request.direction, hospitals, trip.from).destination)));
   return (
-    <article className="p-4 sm:p-5">
+    <article data-target={trips.map((trip) => `trip:${trip.request.id}`).join(" ")} className="p-4 sm:p-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="flex min-w-0 items-center gap-3">
           <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-50 text-blue-700"><Truck className="h-5 w-5" /></span>
@@ -1037,6 +1108,10 @@ function ActiveTrip({ trips, phase, late = false, vehicle, driver, hospitals, on
             <span className="text-slate-500">{routeLabel(trip.appointment, trip.from)}</span>
             {isPriority(trip.appointment) && <span className="font-medium text-red-700">· أولوية</span>}
             {trip.request.createdAt && <span className="text-slate-400">· {requestTimes(trip)}</span>}
+            {/* لم يركب السيارة، أو سجّل السائق استلامه خطأً */}
+            <button type="button" onClick={() => onRemove(trip)} aria-label={`إزالة ${riderName(trip)} من الرحلة`} className="ms-auto inline-flex items-center gap-1 rounded-md px-1.5 text-xs font-medium text-red-700 hover:bg-red-50">
+              <UserMinus className="h-3.5 w-3.5" /> إزالة
+            </button>
             {(["arrival", "pickup"] as const).map((kind) => {
               // ما سجّله السائق من تطبيقه ورد مشرف المبنى عليه
               const check = driverCheck(trip.request, kind);
@@ -1063,6 +1138,8 @@ function ActiveTrip({ trips, phase, late = false, vehicle, driver, hospitals, on
         {phase.kind === "toDestination" && (
           <button onClick={() => window.confirm(`تأكيد وصول السيارة ${plate} إلى الوجهة؟ ستصبح متاحة لرحلة جديدة.`) && onArrived()} className={btn("success", "sm")}><CheckCircle2 className="h-4 w-4" /> تأكيد الوصول</button>
         )}
+        {/* السائق استلم ضيفًا آخر ينتظر السيارة (أو سيستلمه في طريقه) */}
+        <button onClick={onAdd} className={btn("secondary", "sm")}><UserPlus className="h-4 w-4" /> إضافة ضيف</button>
         {/* عطل أو حادث أو تأخر: سيارة أخرى للرحلة قبل وصولها إلى الوجهة */}
         <button onClick={onChangeVehicle} className={cx(btn("secondary", "sm"), "text-amber-800")}><ArrowLeftRight className="h-4 w-4" /> تغيير السيارة</button>
         {/* رحلة عالقة: أُرسلت السيارة ولم يُسجَّل استلام الضيف */}
@@ -1149,6 +1226,132 @@ function ChangeVehicleDialog({ trips, choices, driverOf, details, onConfirm, onC
       <label className="mt-4 flex items-start gap-2.5 text-sm text-slate-700">
         <input type="checkbox" checked={stopOld} onChange={(event) => setStopOld(event.target.checked)} className="mt-0.5 h-4 w-4 accent-brand-600" />
         <span>إيقاف السيارة <span dir="ltr" className="font-semibold">{current}</span> عن الخدمة <span className="text-xs text-slate-500">(تعود متاحة من مفتاحها في قائمة السيارات)</span></span>
+      </label>
+    </Modal>
+  );
+}
+
+/** أسباب جاهزة مع «أخرى» مكتوب: أزرار اختيار ونص السبب الآخر */
+function ReasonChoice({ reasons, value, other, onChange, onOther, legend }: {
+  reasons: readonly string[];
+  value: string;
+  other: string;
+  onChange: (reason: string) => void;
+  onOther: (text: string) => void;
+  legend: string;
+}) {
+  return (
+    <fieldset>
+      <legend className={labelClass}>{legend}</legend>
+      <div className="flex flex-wrap gap-2">
+        {[...reasons, "أخرى"].map((item) => (
+          <button key={item} type="button" aria-pressed={value === item} onClick={() => onChange(item)} className={cx(choiceClass(value === item), "h-9 px-3 text-sm")}>{item}</button>
+        ))}
+      </div>
+      {value === "أخرى" && <input aria-label="سبب آخر" value={other} onChange={(event) => onOther(event.target.value)} maxLength={120} placeholder="اكتب السبب" className={cx(inputClass, "mt-2")} />}
+    </fieldset>
+  );
+}
+
+/**
+ * إزالة ضيف من رحلة جارية (لم يركب السيارة، أو سجّل السائق استلامه خطأً): يعود طلبه إلى «بانتظار التوزيع» لترسل له
+ * سيارة أخرى، وحالة موعده كما قبل الاستلام، وتبقى الرحلة لباقي الركاب.
+ */
+function RemoveFromTripDialog({ trip, alone, onConfirm, onClose }: { trip: Trip; alone: boolean; onConfirm: (reason: string) => void; onClose: () => void }) {
+  const pickedUp = trip.request.status === "تم استلام المريض";
+  const [reason, setReason] = useState<string>(pickedUp ? "لم يركب السيارة" : "الضيف غير جاهز");
+  const [other, setOther] = useState("");
+  const text = reason === "أخرى" ? other.trim() : reason;
+  return (
+    <Modal
+      tone="red"
+      icon={UserMinus}
+      title="إزالة من الرحلة"
+      description={<>{riderName(trip)} · السيارة <span dir="ltr" className="font-semibold">{trip.request.vehiclePlate}</span></>}
+      onClose={onClose}
+      footer={(
+        <>
+          <button type="button" onClick={onClose} className={btn("secondary")}>إلغاء</button>
+          <button type="button" disabled={!text} onClick={() => onConfirm(text)} className={btn("danger")}><UserMinus className="h-4 w-4" /> إزالة من الرحلة</button>
+        </>
+      )}
+    >
+      <ul className="space-y-1.5 rounded-xl bg-slate-50 px-4 py-3 text-sm leading-6 text-slate-700 ring-1 ring-inset ring-slate-200/70">
+        <li>يعود طلبه إلى «بانتظار التوزيع» لترسل له سيارة أخرى، وتُلغى عند السائق.</li>
+        {pickedUp && <li>سُجّل استلامه، فتعود حالة موعده إلى ما قبل الاستلام.</li>}
+        <li>{alone ? "هو الراكب الوحيد: تنتهي رحلة السيارة وتصبح متاحة." : "تبقى الرحلة لباقي الركاب."}</li>
+      </ul>
+      <div className="mt-4"><ReasonChoice legend="السبب" reasons={REMOVE_FROM_TRIP_REASONS} value={reason} other={other} onChange={setReason} onOther={setOther} /></div>
+    </Modal>
+  );
+}
+
+/**
+ * ضم ضيف ينتظر السيارة إلى رحلة جارية: السائق استلمه (يُسجَّل استلامه الآن) أو سيستلمه في طريقه. الضيوف في نفس الاتجاه
+ * أولًا ثم الأقرب وقتًا، وما لا يناسب السيارة (المقاعد أو الاحتياجات الخاصة) يظهر بتنبيه ويُسأل عنه قبل الإضافة.
+ */
+function AddToTripDialog({ trips, vehicle, candidates, pickedUpDefault, warningFor, hospitals, onConfirm, onClose }: {
+  trips: Trip[];
+  vehicle: Vehicle;
+  candidates: Trip[];
+  pickedUpDefault: boolean;
+  warningFor: (candidate: Trip) => string | null;
+  hospitals: Hospital[];
+  onConfirm: (candidate: Trip, pickedUp: boolean) => void;
+  onClose: () => void;
+}) {
+  const [selected, setSelected] = useState("");
+  const [pickedUp, setPickedUp] = useState(pickedUpDefault);
+  const [query, setQuery] = useState("");
+  const words = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const shown = candidates.filter((trip) => words.every((word) => `${trip.appointment.patientName} ${trip.appointment.buildingNumber} ${trip.appointment.clinic}`.toLowerCase().includes(word)));
+  const candidate = candidates.find((trip) => trip.request.id === selected);
+  const warning = candidate ? warningFor(candidate) : null;
+  function confirm() {
+    if (!candidate) return;
+    if (warning && !window.confirm(`${warning}\nإضافة ${riderName(candidate)} إلى السيارة ${vehicle.plate} رغم ذلك؟`)) return;
+    onConfirm(candidate, pickedUp);
+  }
+  return (
+    <Modal
+      tone="blue"
+      icon={UserPlus}
+      title="إضافة ضيف إلى الرحلة"
+      description={<>السيارة <span dir="ltr" className="font-semibold">{vehicle.plate}</span> · {trips.map(riderName).join("، ")}</>}
+      onClose={onClose}
+      footer={(
+        <>
+          <button type="button" onClick={onClose} className={btn("secondary")}>إلغاء</button>
+          <button type="button" disabled={!candidate} onClick={confirm} className={btn("primary")}><UserPlus className="h-4 w-4" /> إضافة إلى الرحلة</button>
+        </>
+      )}
+    >
+      <p className="text-sm leading-6 text-slate-600">اختر الضيف الذي استلمه السائق (أو سيستلمه في طريقه) من الضيوف الذين ينتظرون سيارة. إن لم يكن في القائمة يطلب له مشرف المبنى سيارة أولًا.</p>
+      {candidates.length > 4 && (
+        <input aria-label="بحث في الضيوف" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="بحث بالاسم أو المبنى أو الوجهة..." className={cx(inputClass, "mt-3 h-10")} />
+      )}
+      <ul className="mt-3 max-h-72 divide-y divide-slate-100 overflow-y-auto rounded-xl ring-1 ring-slate-200" role="radiogroup" aria-label="الضيوف الذين ينتظرون سيارة">
+        {shown.map((trip) => {
+          const checked = trip.request.id === selected;
+          const why = warningFor(trip);
+          return (
+            <li key={trip.request.id}>
+              <label className={cx("flex cursor-pointer items-start gap-3 px-3 py-2.5 text-sm", checked ? "bg-blue-50" : "hover:bg-slate-50")}>
+                <input type="radio" name="guest" checked={checked} onChange={() => setSelected(trip.request.id)} className="mt-1 h-4 w-4 accent-brand-600" />
+                <span className="min-w-0 flex-1">
+                  <span className="block font-medium text-ink">{riderName(trip)} <span dir="ltr" className="font-normal text-slate-500 tabular">{trip.appointment.appointmentAt}</span></span>
+                  <span className="block text-xs leading-5 text-slate-500">{trip.request.direction} · {tripRoute(trip, hospitals)} · {personsText(trip.persons)}</span>
+                  {why && <span className="block text-xs font-medium text-amber-700">{why}</span>}
+                </span>
+              </label>
+            </li>
+          );
+        })}
+        {!shown.length && <li className="p-6 text-center text-sm text-slate-400">{candidates.length ? "لا يوجد ضيوف مطابقون" : "لا يوجد ضيوف ينتظرون سيارة في يوم هذه الرحلة"}</li>}
+      </ul>
+      <label className="mt-4 flex items-start gap-2.5 text-sm text-slate-700">
+        <input type="checkbox" checked={pickedUp} onChange={(event) => setPickedUp(event.target.checked)} className="mt-0.5 h-4 w-4 accent-brand-600" />
+        <span>استلمه السائق الآن <span className="text-xs text-slate-500">(يُسجَّل استلامه ووقت وصوله المتوقع؛ بلا تحديد يستلمه السائق في طريقه)</span></span>
       </label>
     </Modal>
   );

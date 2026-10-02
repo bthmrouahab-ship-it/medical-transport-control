@@ -106,3 +106,16 @@ input::placeholder { color: #94a3b8; }
 
 /* صفحة السائق في الوضع الداكن: حقول النموذج وشريط التمرير داكنة أيضًا */
 .driver-dark { color-scheme: dark; }
+
+/* الإشعار الذي له مكان يُضغط كله، والمكان الذي ينقل إليه يبرز لحظات (reveal في lib/notify.ts) */
+[data-sonner-toast].toast-link { cursor: pointer; }
+.reveal-flash { animation: reveal-flash 2.6s ease-out; scroll-margin: 96px; }
+@keyframes reveal-flash {
+  0%, 55% { outline: 3px solid var(--color-brand-500); outline-offset: -3px; background-color: var(--color-brand-50); }
+  100% { outline: 3px solid transparent; outline-offset: -3px; }
+}
+.driver-dark .reveal-flash { animation-name: reveal-flash-dark; }
+@keyframes reveal-flash-dark {
+  0%, 55% { outline: 3px solid var(--color-brand-500); outline-offset: -3px; }
+  100% { outline: 3px solid transparent; outline-offset: -3px; }
+}

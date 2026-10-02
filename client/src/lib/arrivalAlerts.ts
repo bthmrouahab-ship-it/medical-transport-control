@@ -3,6 +3,10 @@ import { toast } from "sonner";
 import type { Hospital } from "@shared/hospitals";
 import type { ClinicAppointment, VehicleRequest } from "@shared/transport";
 import { tripEndpoints, type Arrival, type ReturnRedirect } from "@shared/trips";
+import { deviceNotify, goTo, reveal } from "./notify";
+
+/** فتح مكان الإشعار: الصفحة تمرر طريقتها (مثل الرجوع من الخريطة إلى التوزيع أولًا)، وإلا ينقل إليه في الصفحة نفسها */
+type Open = (target: string) => void;
 
 /** تنبيه الجهاز عند الوصول (يفعّله مشرف السيارات من صفحته، ويُحفظ على هذا الجهاز). */
 export const NOTIFY_KEY = "fox_arrival_notify";
@@ -48,16 +52,18 @@ const carsText = (count: number) => (count === 1 ? "سيارة واحدة" : cou
  * العنوان يذكر وقت الوصول نفسه، لأن رسالة الصفحة تبقى معلّقة حتى يعود المشرف إليها (sonner يوقفها والصفحة مخفية).
  * الوصولات الموجودة عند أول فتح للصفحة لا تظهر لها رسالة (تظهر في قائمة الوصول فقط).
  */
-export function useArrivalAlerts({ arrivals, appointments, hospitals, driverOf, enabled = true }: {
+export function useArrivalAlerts({ arrivals, appointments, hospitals, driverOf, enabled = true, onOpen = reveal }: {
   arrivals: Arrival[];
   appointments: ClinicAppointment[];
   hospitals: Hospital[];
   driverOf: (plate: string | undefined, fallback?: string) => string;
   enabled?: boolean;
+  /** الضغط على الإشعار: الوصول في «وصول السيارات اليوم» */
+  onOpen?: Open;
 }) {
   const seen = useRef<Set<string> | null>(null);
-  const latest = useRef({ appointments, hospitals, driverOf });
-  latest.current = { appointments, hospitals, driverOf };
+  const latest = useRef({ appointments, hospitals, driverOf, onOpen });
+  latest.current = { appointments, hospitals, driverOf, onOpen };
 
   useEffect(() => {
     if (!enabled) return;
@@ -74,7 +80,7 @@ export function useArrivalAlerts({ arrivals, appointments, hospitals, driverOf, 
     fresh.forEach((item) => seen.current!.add(item.request.id));
     writeSeen(seen.current);
 
-    const { appointments, hospitals, driverOf } = latest.current;
+    const { appointments, hospitals, driverOf, onOpen } = latest.current;
     const now = Date.now();
     const stale = fresh.filter((item) => now - item.at.getTime() > STALE_ARRIVAL_MINUTES * 60000);
     const recent = fresh.filter((item) => !stale.includes(item));
@@ -92,14 +98,9 @@ export function useArrivalAlerts({ arrivals, appointments, hospitals, driverOf, 
       // بعد الذهاب تكون السيارة متاحة خارج المجمع (عائدة)، وبعد العودة متاحة داخله
       const place = items.some((item) => item.request.direction === "ذهاب") ? "السيارة متاحة خارج المجمع (عائدة إليه)" : "السيارة عادت إلى المجمع ومتاحة";
       const body = `${driver ? `السائق ${driver} · ` : ""}${destinations ? `${destinations} · ` : ""}${place}${source === "gps" ? " (GPS)" : source === "estimate" ? " (بلا GPS)" : ""}`;
-      toast.success(title, { description: body, duration: 15000 });
-      if (document.hidden && deviceNotificationsOn()) {
-        try {
-          new Notification(title, { body, icon: "/icon-192.png", tag: `arrival-${plate}` });
-        } catch {
-          /* المتصفح لا يدعم التنبيه هنا */
-        }
-      }
+      const open = () => onOpen(`arrival:${items[0].request.id}`);
+      toast.success(title, { description: body, duration: 15000, ...goTo(open) });
+      if (document.hidden && deviceNotificationsOn()) deviceNotify(title, body, `arrival-${plate}`, open);
     }
 
     // وصولات فاتت الصفحة: رسالة واحدة بوقت كل سيارة (الأحدث أولًا)، وهي كلها في قائمة الوصول
@@ -112,36 +113,31 @@ export function useArrivalAlerts({ arrivals, appointments, hospitals, driverOf, 
       const more = count > 5 ? ` · و${count - 5} أخرى` : "";
       const hint = deviceNotificationsOn() ? "" : " · لتصلك التنبيهات وأنت في صفحة أخرى فعّل زر الجرس في «وصول السيارات اليوم»";
       const body = `${shown}${more}${hint}`;
-      toast.info(title, { description: body, duration: 20000 });
-      if (document.hidden && deviceNotificationsOn()) {
-        try {
-          new Notification(title, { body, icon: "/icon-192.png", tag: "arrival-missed" });
-        } catch {
-          /* المتصفح لا يدعم التنبيه هنا */
-        }
-      }
+      const open = () => onOpen("fleet-arrivals");
+      toast.info(title, { description: body, duration: 20000, ...goTo(open) });
+      if (document.hidden && deviceNotificationsOn()) deviceNotify(title, body, "arrival-missed", open);
     }
   }, [arrivals, enabled]);
 }
 
-function notifyDevice(title: string, body: string, tag: string) {
-  if (!document.hidden || !deviceNotificationsOn()) return;
-  try {
-    new Notification(title, { body, icon: "/icon-192.png", tag });
-  } catch {
-    /* المتصفح لا يدعم التنبيه هنا */
-  }
+/** تنبيه الجهاز والصفحة في الخلفية (إن فعّله مشرف السيارات)، والضغط عليه ينقل إلى مكانه */
+function notifyDevice(title: string, body: string, tag: string, open: () => void) {
+  if (document.hidden && deviceNotificationsOn()) deviceNotify(title, body, tag, open);
 }
 
 /**
  * رسالة لمشرف السيارات عندما يلغي مشرف المبنى طلبًا في طريق سيارته إلى الاستلام (أو يلغي الموعد نفسه)،
  * حتى يبلغ السائق. تنتظر بضع ثوانٍ ليصل سبب إلغاء الموعد مع المزامنة.
  */
-export function useCancellationAlerts({ requests, appointments, enabled = true }: {
+export function useCancellationAlerts({ requests, appointments, enabled = true, onOpen = reveal }: {
   requests: VehicleRequest[];
   appointments: ClinicAppointment[];
   enabled?: boolean;
+  /** الضغط على الإشعار: السيارة (أصبحت متاحة) في قائمة السيارات */
+  onOpen?: Open;
 }) {
+  const latestOpen = useRef(onOpen);
+  latestOpen.current = onOpen;
   const tracked = useRef<Map<string, VehicleRequest> | null>(null);
   const latestAppointments = useRef(appointments);
   latestAppointments.current = appointments;
@@ -167,8 +163,9 @@ export function useCancellationAlerts({ requests, appointments, enabled = true }
           ? `أُلغي موعد ${appointment.patientName}${appointment.cancelReason ? `: ${appointment.cancelReason}` : ""}`
           : `ألغى مشرف المبنى طلب ${appointment?.patientName ?? "الموعد"}`;
         const body = `${reason} · أبلغ السائق${request.driver ? ` ${request.driver}` : ""}، والسيارة متاحة الآن`;
-        toast.warning(title, { description: body, duration: 20000 });
-        notifyDevice(title, body, `cancel-${request.id}`);
+        const open = () => latestOpen.current(`vehicle:${request.vehiclePlate}`);
+        toast.warning(title, { description: body, duration: 20000, ...goTo(open) });
+        notifyDevice(title, body, `cancel-${request.id}`, open);
       }, 5000));
     }
   }, [requests, enabled]);
@@ -178,11 +175,15 @@ export function useCancellationAlerts({ requests, appointments, enabled = true }
  * تنبيه لمشرف السيارات عندما ينفي مشرف المبنى ما سجّله السائق من تطبيقه (وصوله أو استلام الضيف)،
  * فالرحلة عادت إلى المرحلة السابقة ويجب التواصل مع السائق. ما كان منفيًا عند فتح الصفحة لا يُنبَّه له.
  */
-export function useDenialAlerts({ requests, appointments, enabled = true }: {
+export function useDenialAlerts({ requests, appointments, enabled = true, onOpen = reveal }: {
   requests: VehicleRequest[];
   appointments: ClinicAppointment[];
   enabled?: boolean;
+  /** الضغط على الإشعار: الرحلة في «رحلات جارية» */
+  onOpen?: Open;
 }) {
+  const latestOpen = useRef(onOpen);
+  latestOpen.current = onOpen;
   const seen = useRef<Set<string> | null>(null);
   const latestAppointments = useRef(appointments);
   latestAppointments.current = appointments;
@@ -204,8 +205,9 @@ export function useDenialAlerts({ requests, appointments, enabled = true }: {
       const by = (kind === "arrival" ? request.arrivalCheckBy : request.pickupCheckBy) ?? "مشرف المبنى";
       const title = kind === "arrival" ? `نفى ${by} وصول السيارة ${request.vehiclePlate ?? ""}` : `نفى ${by} استلام ${appointment?.patientName ?? "الضيف"}`;
       const body = `${appointment ? `${appointment.patientName} · ` : ""}السائق${request.driver ? ` ${request.driver}` : ""} سجّله من تطبيقه، وعادت الرحلة إلى المرحلة السابقة. تواصل مع السائق.`;
-      toast.error(title, { description: body, duration: 30000 });
-      notifyDevice(title, body, `denied-${request.id}-${kind}`);
+      const open = () => latestOpen.current(`trip:${request.id}`);
+      toast.error(title, { description: body, duration: 30000, ...goTo(open) });
+      notifyDevice(title, body, `denied-${request.id}-${kind}`, open);
     }
   }, [signature, enabled]); // eslint-disable-line react-hooks/exhaustive-deps
 }
@@ -217,14 +219,16 @@ const SEEN_REDIRECTS_KEY = "fox_seen_redirects";
  * تنبيه لمشرف السيارات عندما يمكن توجيه سيارة خارج المجمع إلى ضيف ينتظر العودة: في الصفحة مع زر
  * «توجيه»، وعلى الجهاز إن فعّله والصفحة في الخلفية. كل اقتراح (ضيف وسيارة) يُنبَّه له مرة واحدة.
  */
-export function useRedirectAlerts({ redirects, driverOf, onDispatch, enabled = true }: {
+export function useRedirectAlerts({ redirects, driverOf, onDispatch, enabled = true, onOpen = reveal }: {
   redirects: ReturnRedirect[];
   driverOf: (plate: string | undefined, fallback?: string) => string;
   onDispatch: (redirect: ReturnRedirect) => void;
   enabled?: boolean;
+  /** الضغط على الإشعار: الاقتراح في «توجيه سيارات خارج المجمع» */
+  onOpen?: Open;
 }) {
-  const latest = useRef({ driverOf, onDispatch });
-  latest.current = { driverOf, onDispatch };
+  const latest = useRef({ driverOf, onDispatch, onOpen });
+  latest.current = { driverOf, onDispatch, onOpen };
   const key = (item: ReturnRedirect) => `${item.request.id}:${item.vehicle.plate}`;
   const signature = redirects.map(key).join("|");
 
@@ -248,8 +252,9 @@ export function useRedirectAlerts({ redirects, driverOf, onDispatch, enabled = t
       const driver = latest.current.driverOf(item.vehicle.plate, item.vehicle.driver);
       const title = `وجّه السيارة ${item.vehicle.plate} إلى ${item.appointment.patientName}`;
       const body = `${driver ? `السائق ${driver} · ` : ""}عائدة من ${item.from || "الوجهة"} ولم تقطع نصف الطريق، والضيف ينتظر العودة من ${item.pickup} على بعد ${item.distanceKm} كم`;
-      toast.info(title, { description: body, duration: 30000, action: { label: "توجيه", onClick: () => latest.current.onDispatch(item) } });
-      notifyDevice(title, body, `redirect-${item.request.id}`);
+      const open = () => latest.current.onOpen(`redirect:${item.request.id}`);
+      toast.info(title, { description: body, duration: 30000, ...goTo(open, false), action: { label: "توجيه", onClick: () => latest.current.onDispatch(item) } });
+      notifyDevice(title, body, `redirect-${item.request.id}`, open);
     }
   }, [signature, enabled]); // eslint-disable-line react-hooks/exhaustive-deps
 }

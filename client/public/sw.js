@@ -64,14 +64,16 @@ self.addEventListener("push", (event) => {
   );
 });
 
-// الضغط على الإشعار يفتح التطبيق (أو يعيده إلى الواجهة إن كان مفتوحًا)
+// الضغط على الإشعار يفتح التطبيق على رحلته (url فيه ?trip=)، أو يعيده إلى الواجهة إن كان مفتوحًا وينقله إليها
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
   const url = (event.notification.data && event.notification.data.url) || "/";
   event.waitUntil(
     self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((windows) => {
       const open = windows.find((client) => "focus" in client);
-      return open ? open.focus() : self.clients.openWindow(url);
+      if (!open) return self.clients.openWindow(url);
+      open.postMessage({ type: "open", url });
+      return open.focus();
     })
   );
 });
