@@ -151,6 +151,11 @@ const ar = {
   // مسؤول العيادة: الموافقة على المواعيد قبل ظهورها لمشرف المبنى، والاستبعاد والإرجاع، والتنبيهات
   leadWorkspace: "مسؤول العيادة",
   leadHint: "لا تظهر المواعيد لمشرف المبنى قبل موافقتك",
+  // مسؤول العيادة يطلب سيارة للممرضات (مبنى 03) ويتابعها مثل مشرف المبنى
+  leadTabs: "أقسام صفحة مسؤول العيادة",
+  tabAppointments: "المواعيد",
+  tabNurseCars: "سيارات الممرضات",
+  nurseCarsArabic: "",
   approvalStates: { pending: "بانتظار الموافقة", approved: "موافق عليه", excluded: "مستبعد" } as Record<"pending" | "approved" | "excluded", string>,
   approvedByText: (name: string) => `وافق ${name}`,
   excludedByText: (name: string) => `استبعده ${name}`,
@@ -333,6 +338,10 @@ const en: ClinicText = {
   clearFilters: "Clear filters",
   leadWorkspace: "Clinic supervisor",
   leadHint: "Appointments reach building supervisors only after your approval",
+  leadTabs: "Clinic supervisor sections",
+  tabAppointments: "Appointments",
+  tabNurseCars: "Nurses' cars",
+  nurseCarsArabic: "This section is in Arabic, like the building supervisor's page: request a car for nurses (building 03) and follow it.",
   approvalStates: { pending: "Awaiting approval", approved: "Approved", excluded: "Excluded" },
   approvedByText: (name) => `Approved by ${name}`,
   excludedByText: (name) => `Excluded by ${name}`,

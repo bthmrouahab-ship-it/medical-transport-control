@@ -171,6 +171,8 @@ function place_name(PDO $pdo, array $appointment, string $lang): string
 function push_trip_text(PDO $pdo, array $request): array
 {
     return [
+        // رقم الطلب: رابط الإشعار يفتح التطبيق على الرحلة (trip_url)
+        'id' => (string)($request['id'] ?? ''),
         'appointment' => appointment_doc($pdo, (string)($request['appointmentId'] ?? '')) ?? [],
         'from' => empty($request['fromAppointmentId']) ? null : appointment_doc($pdo, (string)$request['fromAppointmentId']),
         'returning' => ($request['direction'] ?? '') === 'عودة',

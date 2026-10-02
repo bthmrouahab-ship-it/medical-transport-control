@@ -727,7 +727,7 @@ const byUnit = (a: string, b: string) => a.localeCompare(b, "en", { numeric: tru
  * اختيار الضيف من قائمة ضيوف المجمع: بحث بالاسم (العربي أو الإنجليزي أو الهاتف)، أو بالمبنى والشقة
  * لمن كُتب اسمه بطريقة مختلفة. القائمة تظهر تحت الحقول وتضيق مع كل اختيار.
  */
-function GuestPicker({ t, guests, guest, onSelect, notListed }: {
+export function GuestPicker({ t, guests, guest, onSelect, notListed }: {
   t: ClinicText;
   guests: Guest[];
   guest?: Guest;

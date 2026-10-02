@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { ArrowRight, Languages, Loader2 } from "lucide-react";
+import { ArrowRight, BriefcaseMedical, CalendarDays, Languages, Loader2 } from "lucide-react";
 import {
   DEFAULT_VEHICLES,
   appointmentsAfterPickup,
@@ -17,6 +17,7 @@ import {
   migrateAppointment,
   migrateRequest,
   requestPersons,
+  requestWindow,
   statusText,
   whatsappLink,
   type Approval,
@@ -25,15 +26,15 @@ import {
   type VehicleRequest,
 } from "@shared/transport";
 import type { UserProfile } from "@shared/users";
-import { useHospitals } from "@/lib/useShared";
+import { useHospitals, useNow } from "@/lib/useShared";
 import AppHeader from "@/components/AppHeader";
-import { addDays, btn, byAppointmentTime, headerButton, timeLabel } from "@/components/ui-kit";
+import { Segmented, addDays, btn, byAppointmentTime, headerButton, timeLabel } from "@/components/ui-kit";
 import { pickupDetails } from "@shared/trips";
 import { reveal } from "@/lib/notify";
-import { checkReplyChanges, confirmPendingChecks, type CheckKind } from "@shared/driverChecks";
+import { checkReplyChanges, confirmPendingChecks, pendingCheck, type CheckKind } from "@shared/driverChecks";
 import { CLINIC_TEXT, useLang } from "@/lib/i18n";
 import { ClinicForm, ClinicHome } from "./ClinicPages";
-import { SupervisorHome } from "./SupervisorPage";
+import { SupervisorHome, type RequestHandlers } from "./SupervisorPage";
 import { FleetSupervisorPage } from "./FleetSupervisorPage";
 import Login from "./Login";
 import ChangePasswordForm from "@/components/ChangePasswordForm";
@@ -271,6 +272,9 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
   /** نموذج جديد لطلب عودة فقط من المستشفى (بدل موعد) */
   const [newReturnOnly, setNewReturnOnly] = useState(false);
   const [lang, setLang] = useLang();
+  // مسؤول العيادة: المواعيد، أو سيارات الممرضات (مبنى 03) يطلبها ويتابعها مثل مشرف المبنى
+  const [leadTab, setLeadTab] = useState<"appointments" | "nurses">("appointments");
+  const now = useNow();
   // مسؤول العيادة يبدأ بمواعيد الغد (يوافق عليها قبل يومها)
   const [selectedDate, setSelectedDate] = useState(() => (session.role === "clinicLead" ? addDays(localDateString(), 1) : localDateString()));
   const hospitals = useHospitals();
@@ -628,6 +632,110 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
     return [driverMessage([...tripRequestIds, request.id], vehicle, next)];
   }
 
+  /**
+   * إجراءات مشرف المبنى: صفحة مشرف المبنى ومسؤولهم، وسيارات الممرضات في صفحة مسؤول العيادة (يطلبها ويتابعها مثلهم).
+   * الطلب باسم من طلبه (session.uid)، والإلغاء والعودة بنفسه باسمه.
+   */
+  const supervisorHandlers: RequestHandlers = {
+    onRequest: (request, appointmentId) => {
+      // الطلب باسم المشرف الذي طلبه: هو وحده يتابعه
+      updateRequests([...requests, { ...request, requestedBy: session.uid }]);
+      updateAppointments(appointments.map((appointment) => appointment.id === appointmentId ? { ...appointment, status: request.direction === "عودة" ? "طلب عودة" : "تم طلب السيارة" } : appointment));
+      toast.success("تم إرسال الطلب إلى مشرف السيارات");
+    },
+    onUpdateRequest: updateRequestStatus,
+    onCheckReply: replyToDriverCheck,
+    onCancel: (appointment, request) => {
+      updateRequests(requests.filter((item) => item.id !== request.id));
+      // إلغاء عودة الـ Nurse فقط لا يغيّر موعد الضيف
+      if (!request.nurseOnly) {
+        // طلب العودة فقط يعود إلى انتظار طلب سيارته (الضيف ما زال في المستشفى)
+        updateAppointments(appointments.map((item) => item.id === appointment.id
+          ? { ...item, status: request.direction === "عودة" && !isReturnOnly(item) ? "تم استلام المريض" : "بانتظار طلب السيارة" }
+          : item));
+      }
+      toast.success("تم إلغاء طلب السيارة");
+    },
+    onReturn: (appointment, request) => {
+      // الـ Nurse طُلبت عودتها وحدها ولم تُستلم بعد: تعود مع الضيف في نفس الطلب (والسيارة إن أُرسلت)
+      const nurseTrip = requests.find((item) => item.nurseOnly && item.appointmentId === appointment.id
+        && (item.status === "بانتظار التوزيع" || item.status === "تم إرسال السيارة" || item.status === "وصلت السيارة"));
+      if (nurseTrip) {
+        updateRequests(requests.map((item) => {
+          if (item.id !== nurseTrip.id) return item;
+          const { nurseOnly: _nurseOnly, ...rest } = item;
+          return rest;
+        }));
+        updateAppointments(appointments.map((item) => item.id === appointment.id ? { ...item, status: "طلب عودة" } : item));
+        toast.success("الضيف يعود مع الـ Nurse في نفس الطلب", { description: nurseTrip.vehiclePlate ? `السيارة ${nurseTrip.vehiclePlate} في طريقها` : undefined });
+        return;
+      }
+      const returnRequest: VehicleRequest = {
+        id: `REQ-${Date.now()}`,
+        appointmentId: appointment.id,
+        direction: "عودة",
+        status: "بانتظار التوزيع",
+        notificationMethod: request.notificationMethod,
+        createdAt: timeLabel(new Date()),
+        requestedBy: session.uid,
+      };
+      updateRequests([...requests, returnRequest]);
+      updateAppointments(appointments.map((item) => item.id === appointment.id ? { ...item, status: "طلب عودة" } : item));
+      toast.success("تم إرسال طلب العودة");
+    },
+    onNurseReturn: (appointment, request) => {
+      // الـ Nurse تعود وحدها إلى المجمع ويبقى الضيف في موعده (حالة الموعد لا تتغير)
+      const nurseRequest: VehicleRequest = {
+        id: `REQ-${Date.now()}`,
+        appointmentId: appointment.id,
+        direction: "عودة",
+        status: "بانتظار التوزيع",
+        notificationMethod: request.notificationMethod,
+        createdAt: timeLabel(new Date()),
+        requestedBy: session.uid,
+        nurseOnly: true,
+      };
+      updateRequests([...requests, nurseRequest]);
+      toast.success("تم إرسال طلب عودة الـ Nurse فقط", { description: "يبقى الضيف في «ضيوف في الموعد» حتى تُطلب عودته" });
+    },
+    onSelfReturn: (appointment) => {
+      // الضيف عاد إلى المجمع بنفسه: ينتهي موعده بلا سيارة عودة
+      updateAppointments(appointments.map((item) => item.id === appointment.id
+        ? { ...item, status: "مكتملة" as const, returnedSelf: true, returnedSelfBy: session.name, returnedSelfAt: new Date().toISOString() }
+        : item));
+      toast.success(`سُجّل أن ${appointment.patientName} عاد بنفسه`);
+    },
+    onTransfer: (appointment, request, next) => {
+      // بدل العودة إلى المجمع: طلب ذهاب للموعد التالي يبدأ من مستشفى هذا الموعد
+      const transfer: VehicleRequest = {
+        id: `REQ-${Date.now()}`,
+        appointmentId: next.id,
+        direction: "ذهاب",
+        status: "بانتظار التوزيع",
+        notificationMethod: request.notificationMethod,
+        createdAt: timeLabel(new Date()),
+        requestedBy: session.uid,
+        fromAppointmentId: appointment.id,
+      };
+      updateRequests([...requests, transfer]);
+      updateAppointments(appointments.map((item) => item.id === next.id ? { ...item, status: "تم طلب السيارة" } : item));
+      toast.success(`تم طلب نقل الضيف إلى موعده التالي (${next.appointmentAt} · ${next.clinic})`);
+    },
+    onCancelAppointment: (appointment, reason, request) => {
+      // طلب السيارة القائم يُلغى أولًا حتى تتفرغ السيارة، ثم يُعلَّم الموعد ملغيًا مع السبب
+      if (request) updateRequests(requests.filter((item) => item.id !== request.id));
+      updateAppointments(appointments.map((item) => item.id === appointment.id
+        ? { ...item, status: "ملغي" as const, cancelReason: reason, cancelledBy: session.name, cancelledAt: new Date().toISOString() }
+        : item));
+      toast.success("تم إلغاء الموعد", { description: request?.vehiclePlate ? `وأُلغي طلب السيارة ${request.vehiclePlate}` : undefined });
+    },
+    onEditMobile: (appointment, mobile) => {
+      // رقم الضيف خطأ: يُصحَّح في الموعد قبل طلب السيارة (ويصل الرقم الجديد إلى السائق)
+      updateAppointments(appointments.map((item) => (item.id === appointment.id ? { ...item, mobile } : item)));
+      toast.success(`تم تعديل رقم ${appointment.patientName}`, { description: mobile });
+    },
+  };
+
   function dispatch(requestIds: string[], vehicle: Vehicle, joinRequestIds: string[] = []) {
     const [{ count, message }] = dispatchMany([{ requestIds, vehicle, joinRequestIds }]);
     toast.success(count > 1 ? `رحلة مجمّعة (${count}) · السيارة ${vehicle.plate}` : `تم إرسال السيارة ${vehicle.plate}`, {
@@ -635,6 +743,13 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
       duration: 10000,
     });
   }
+
+  // مواعيد الممرضات بعد موافقة مسؤول العيادة: ما ينتظر طلب السيارة اليوم، وما سجّله السائق وينتظر الرد
+  const nurseAppointments = isClinicLead ? appointments.filter((appointment) => appointment.nurse && isApproved(appointment)) : [];
+  const today = localDateString(now);
+  const nurseIds = new Set(nurseAppointments.map((appointment) => appointment.id));
+  const nurseWaiting = nurseAppointments.filter((appointment) => appointment.appointmentDate === today && appointment.status === "بانتظار طلب السيارة" && requestWindow(appointment, now).open).length
+    + requests.filter((request) => nurseIds.has(request.appointmentId) && pendingCheck(request, now)).length;
 
   return (
     <div className="min-h-screen bg-page" dir={t.dir}>
@@ -652,7 +767,39 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
       />
 
       <main className={`mx-auto p-4 lg:p-8 ${session.role === "fleetSupervisor" ? "max-w-7xl" : "max-w-6xl"}`}>
-        {view === "home" && isClinic && (
+        {view === "home" && isClinicLead && (
+          <div className="mb-5">
+            <Segmented
+              label={t.leadTabs}
+              value={leadTab}
+              onChange={setLeadTab}
+              options={[
+                { value: "appointments", label: t.tabAppointments, icon: CalendarDays },
+                {
+                  value: "nurses",
+                  icon: BriefcaseMedical,
+                  label: <>{t.tabNurseCars}{nurseWaiting > 0 && <span className="ms-1 rounded-full bg-amber-500 px-1.5 text-[11px] leading-5 text-white tabular">{nurseWaiting}</span>}</>,
+                },
+              ]}
+            />
+          </div>
+        )}
+        {view === "home" && isClinicLead && leadTab === "nurses" && (
+          // صفحة مشرف المبنى نفسها (بالعربية) لمواعيد الممرضات فقط
+          <div dir="rtl" lang="ar">
+            {t.nurseCarsArabic && <p dir="ltr" className="mb-4 text-xs text-slate-500">{t.nurseCarsArabic}</p>}
+            <SupervisorHome
+              uid={session.uid}
+              lead
+              nurses
+              appointments={nurseAppointments}
+              requests={requests}
+              vehicles={fleetVehicles}
+              {...supervisorHandlers}
+            />
+          </div>
+        )}
+        {view === "home" && isClinic && !(isClinicLead && leadTab === "nurses") && (
           <ClinicHome
             t={t}
             lang={lang}
@@ -695,98 +842,7 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
             appointments={appointments.filter(isApproved)}
             requests={requests}
             vehicles={fleetVehicles}
-            onRequest={(request, appointmentId) => {
-              // الطلب باسم المشرف الذي طلبه: هو وحده يتابعه
-              updateRequests([...requests, { ...request, requestedBy: session.uid }]);
-              updateAppointments(appointments.map((appointment) => appointment.id === appointmentId ? { ...appointment, status: request.direction === "عودة" ? "طلب عودة" : "تم طلب السيارة" } : appointment));
-              toast.success("تم إرسال الطلب إلى مشرف السيارات");
-            }}
-            onUpdateRequest={updateRequestStatus}
-            onCheckReply={replyToDriverCheck}
-            onCancel={(appointment, request) => {
-              updateRequests(requests.filter((item) => item.id !== request.id));
-              // إلغاء عودة الـ Nurse فقط لا يغيّر موعد الضيف
-              if (!request.nurseOnly) {
-                // طلب العودة فقط يعود إلى انتظار طلب سيارته (الضيف ما زال في المستشفى)
-                updateAppointments(appointments.map((item) => item.id === appointment.id
-                  ? { ...item, status: request.direction === "عودة" && !isReturnOnly(item) ? "تم استلام المريض" : "بانتظار طلب السيارة" }
-                  : item));
-              }
-              toast.success("تم إلغاء طلب السيارة");
-            }}
-            onReturn={(appointment, request) => {
-              // الـ Nurse طُلبت عودتها وحدها ولم تُستلم بعد: تعود مع الضيف في نفس الطلب (والسيارة إن أُرسلت)
-              const nurseTrip = requests.find((item) => item.nurseOnly && item.appointmentId === appointment.id
-                && (item.status === "بانتظار التوزيع" || item.status === "تم إرسال السيارة" || item.status === "وصلت السيارة"));
-              if (nurseTrip) {
-                updateRequests(requests.map((item) => {
-                  if (item.id !== nurseTrip.id) return item;
-                  const { nurseOnly: _nurseOnly, ...rest } = item;
-                  return rest;
-                }));
-                updateAppointments(appointments.map((item) => item.id === appointment.id ? { ...item, status: "طلب عودة" } : item));
-                toast.success("الضيف يعود مع الـ Nurse في نفس الطلب", { description: nurseTrip.vehiclePlate ? `السيارة ${nurseTrip.vehiclePlate} في طريقها` : undefined });
-                return;
-              }
-              const returnRequest: VehicleRequest = {
-                id: `REQ-${Date.now()}`,
-                appointmentId: appointment.id,
-                direction: "عودة",
-                status: "بانتظار التوزيع",
-                notificationMethod: request.notificationMethod,
-                createdAt: timeLabel(new Date()),
-                requestedBy: session.uid,
-              };
-              updateRequests([...requests, returnRequest]);
-              updateAppointments(appointments.map((item) => item.id === appointment.id ? { ...item, status: "طلب عودة" } : item));
-              toast.success("تم إرسال طلب العودة");
-            }}
-            onNurseReturn={(appointment, request) => {
-              // الـ Nurse تعود وحدها إلى المجمع ويبقى الضيف في موعده (حالة الموعد لا تتغير)
-              const nurseRequest: VehicleRequest = {
-                id: `REQ-${Date.now()}`,
-                appointmentId: appointment.id,
-                direction: "عودة",
-                status: "بانتظار التوزيع",
-                notificationMethod: request.notificationMethod,
-                createdAt: timeLabel(new Date()),
-                requestedBy: session.uid,
-                nurseOnly: true,
-              };
-              updateRequests([...requests, nurseRequest]);
-              toast.success("تم إرسال طلب عودة الـ Nurse فقط", { description: "يبقى الضيف في «ضيوف في الموعد» حتى تُطلب عودته" });
-            }}
-            onSelfReturn={(appointment) => {
-              // الضيف عاد إلى المجمع بنفسه: ينتهي موعده بلا سيارة عودة
-              updateAppointments(appointments.map((item) => item.id === appointment.id
-                ? { ...item, status: "مكتملة" as const, returnedSelf: true, returnedSelfBy: session.name, returnedSelfAt: new Date().toISOString() }
-                : item));
-              toast.success(`سُجّل أن ${appointment.patientName} عاد بنفسه`);
-            }}
-            onTransfer={(appointment, request, next) => {
-              // بدل العودة إلى المجمع: طلب ذهاب للموعد التالي يبدأ من مستشفى هذا الموعد
-              const transfer: VehicleRequest = {
-                id: `REQ-${Date.now()}`,
-                appointmentId: next.id,
-                direction: "ذهاب",
-                status: "بانتظار التوزيع",
-                notificationMethod: request.notificationMethod,
-                createdAt: timeLabel(new Date()),
-                requestedBy: session.uid,
-                fromAppointmentId: appointment.id,
-              };
-              updateRequests([...requests, transfer]);
-              updateAppointments(appointments.map((item) => item.id === next.id ? { ...item, status: "تم طلب السيارة" } : item));
-              toast.success(`تم طلب نقل الضيف إلى موعده التالي (${next.appointmentAt} · ${next.clinic})`);
-            }}
-            onCancelAppointment={(appointment, reason, request) => {
-              // طلب السيارة القائم يُلغى أولًا حتى تتفرغ السيارة، ثم يُعلَّم الموعد ملغيًا مع السبب
-              if (request) updateRequests(requests.filter((item) => item.id !== request.id));
-              updateAppointments(appointments.map((item) => item.id === appointment.id
-                ? { ...item, status: "ملغي" as const, cancelReason: reason, cancelledBy: session.name, cancelledAt: new Date().toISOString() }
-                : item));
-              toast.success("تم إلغاء الموعد", { description: request?.vehiclePlate ? `وأُلغي طلب السيارة ${request.vehiclePlate}` : undefined });
-            }}
+            {...supervisorHandlers}
           />
         )}
         {session.role === "fleetSupervisor" && (
@@ -807,8 +863,8 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
             date={selectedDate}
             onDateChange={setSelectedDate}
             onAddTrip={(appointment, request) => {
-              updateAppointments([...appointments, appointment].sort(byAppointmentTime));
-              updateRequests([...requests, request]);
+              // الرحلة وطلب سيارتها في حفظ واحد (الرحلة أولًا: يجدها الخادم قبل طلبها)
+              updateBoth([...appointments, appointment].sort(byAppointmentTime), [...requests, request]);
               toast.success("تمت إضافة الرحلة إلى الطلبات");
               setSelectedDate(appointment.appointmentDate);
             }}

@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import { goTo, reveal } from "@/lib/notify";
-import { Accessibility, AlertTriangle, ArrowLeftRight, Ban, BellRing, BriefcaseMedical, Building2, Check, CheckCircle2, ChevronDown, Clock3, Footprints, Hospital, House, Link2, MapPin, Ribbon, RotateCcw, ShieldCheck, Smartphone, Stethoscope, Timer, Truck, UserMinus, Users, XCircle } from "lucide-react";
+import { Accessibility, AlertTriangle, ArrowLeftRight, Ban, BellRing, BriefcaseMedical, Building2, Check, CheckCircle2, ChevronDown, Clock3, Footprints, Hospital, House, Link2, MapPin, Pencil, Ribbon, RotateCcw, ShieldCheck, Smartphone, Stethoscope, Timer, Truck, UserMinus, Users, XCircle } from "lucide-react";
+import { NURSE_BUILDING } from "@shared/guests";
+import { toWesternDigits } from "@shared/text";
 import {
   CANCEL_REASONS,
   appointmentPickupLabel,
@@ -66,7 +68,7 @@ export const UNRETURNED_DAYS = 7;
 
 type Row = { appointment: ClinicAppointment; request?: VehicleRequest };
 type Stage = "request" | "expired" | "progress" | "atAppointment";
-type RequestHandlers = {
+export type RequestHandlers = {
   onRequest: (request: VehicleRequest, appointmentId: string) => void;
   onUpdateRequest: (requestId: string, status: VehicleRequest["status"]) => void;
   onCancel: (appointment: ClinicAppointment, request: VehicleRequest) => void;
@@ -81,6 +83,8 @@ type RequestHandlers = {
   onNurseReturn: (appointment: ClinicAppointment, request: VehicleRequest) => void;
   /** الضيف عاد إلى المجمع بنفسه بلا سيارة عودة */
   onSelfReturn: (appointment: ClinicAppointment) => void;
+  /** تصحيح رقم هاتف الضيف قبل طلب السيارة (إن كان خطأ) */
+  onEditMobile: (appointment: ClinicAppointment, mobile: string) => void;
 };
 
 /** المباني التي يتابعها المشرف على هذا الجهاز (فارغة = كل المباني). */
@@ -107,11 +111,13 @@ function newRequest(appointment: ClinicAppointment): VehicleRequest {
   };
 }
 
-export function SupervisorHome({ uid, lead = false, appointments, requests, vehicles, onRequest, onUpdateRequest, onCancel, onReturn, onTransfer, onCancelAppointment, onCheckReply, onNurseReturn, onSelfReturn }: {
+export function SupervisorHome({ uid, lead = false, nurses = false, appointments, requests, vehicles, onRequest, onUpdateRequest, onCancel, onReturn, onTransfer, onCancelAppointment, onCheckReply, onNurseReturn, onSelfReturn, onEditMobile }: {
   /** رقم حساب المشرف: يرى متابعة طلباته هو فقط */
   uid: string;
   /** مسؤول مشرفي المباني: يتابع كل الطلبات (يؤكد وصول السيارة واستلام الضيف ويرد على السائق في أي طلب) */
   lead?: boolean;
+  /** مسؤول العيادة: سيارات الممرضات (مبنى 03) فقط، ويتابع كل طلباتها */
+  nurses?: boolean;
   appointments: ClinicAppointment[];
   requests: VehicleRequest[];
   /** السيارات: رقم هاتف سائق السيارة المرسلة للاتصال به */
@@ -183,7 +189,7 @@ export function SupervisorHome({ uid, lead = false, appointments, requests, vehi
   }
   const buildingNumbers = Array.from(new Set([...Array.from(buildingCounts.keys()), ...buildings]))
     .sort((first, second) => first.localeCompare(second, "ar", { numeric: true }));
-  const inFilter = (appointment: ClinicAppointment) => !buildings.length || buildings.includes(appointment.buildingNumber);
+  const inFilter = (appointment: ClinicAppointment) => nurses || !buildings.length || buildings.includes(appointment.buildingNumber);
   function chooseBuildings(next: string[]) {
     setBuildings(next);
     try { localStorage.setItem(BUILDINGS_KEY, JSON.stringify(next)); } catch { /* التخزين غير متاح */ }
@@ -238,9 +244,9 @@ export function SupervisorHome({ uid, lead = false, appointments, requests, vehi
   return (
     <>
       <PageHeader
-        title={lead ? "كل طلبات السيارات" : "طلبات السيارات"}
-        subtitle={`${longDate(today)} · مواعيد اليوم${lead ? " · طلبات كل مشرفي المباني" : ""}`}
-        actions={<BuildingFilter all={visible.length + pastAtAppointment.length} counts={buildingCounts} buildings={buildingNumbers} selected={buildings} onChange={chooseBuildings} />}
+        title={nurses ? "سيارات الممرضات" : lead ? "كل طلبات السيارات" : "طلبات السيارات"}
+        subtitle={`${longDate(today)} · ${nurses ? `مواعيد الممرضات اليوم (مبنى ${NURSE_BUILDING}) · طلب السيارة ومتابعتها كما في صفحة مشرف المبنى` : `مواعيد اليوم${lead ? " · طلبات كل مشرفي المباني" : ""}`}`}
+        actions={!nurses && <BuildingFilter all={visible.length + pastAtAppointment.length} counts={buildingCounts} buildings={buildingNumbers} selected={buildings} onChange={chooseBuildings} />}
       />
 
       {/* شريط الحالة: عدادات حية ملونة، والضغط ينقل إلى القسم */}
@@ -295,14 +301,15 @@ export function SupervisorHome({ uid, lead = false, appointments, requests, vehi
                   now={now}
                   onRequest={onRequest}
                   onSelfReturn={onSelfReturn}
+                  onEditMobile={onEditMobile}
                   onCancelAppointment={() => setCancelling({ appointment })}
                 />
               ))}
             </div>
-          ) : <EmptyState icon={CheckCircle2} title="لا توجد مواعيد بانتظار طلب سيارة" hint="تظهر هنا مواعيد العيادات لليوم حتى يُطلب لها سيارة" />}
+          ) : <EmptyState icon={CheckCircle2} title="لا توجد مواعيد بانتظار طلب سيارة" hint={nurses ? "تظهر هنا مواعيد الممرضات لليوم بعد موافقتك حتى يُطلب لها سيارة" : "تظهر هنا مواعيد العيادات لليوم حتى يُطلب لها سيارة"} />}
         </Panel>
 
-        <Panel id="sup-progress" tone="blue" icon={Truck} title="طلبات جارية" count={progressRows.length} description={lead ? "طلبات كل مشرفي المباني حتى وصول السيارة إلى الوجهة" : "طلباتك حتى وصول السيارة إلى الوجهة"}>
+        <Panel id="sup-progress" tone="blue" icon={Truck} title="طلبات جارية" count={progressRows.length} description={nurses ? "طلبات سيارات الممرضات حتى وصول السيارة إلى الوجهة" : lead ? "طلبات كل مشرفي المباني حتى وصول السيارة إلى الوجهة" : "طلباتك حتى وصول السيارة إلى الوجهة"}>
           {progressRows.length ? (
             <div className="divide-y divide-slate-100">
               {progressRows.map(({ appointment, request }) => (
@@ -310,7 +317,7 @@ export function SupervisorHome({ uid, lead = false, appointments, requests, vehi
                   key={request.id}
                   appointment={appointment}
                   request={request}
-                  byOther={lead && Boolean(request.requestedBy) && request.requestedBy !== uid}
+                  byOther={lead && !nurses && Boolean(request.requestedBy) && request.requestedBy !== uid}
                   day={dayOf(appointment)}
                   driver={driverOf(request)}
                   phase={phaseOf(request)}
@@ -734,23 +741,28 @@ function GuestSummary({ appointment, request, from, day, timeTone, status }: {
 }
 
 /** تفاصيل البطاقة المفتوحة: الاتصال بالضيف وواتساب، واحتياجاته وعدد الأشخاص والسيارة. */
-function GuestDetails({ appointment, request, driver, persons }: {
+function GuestDetails({ appointment, request, driver, persons, onEditMobile }: {
   appointment: ClinicAppointment;
   request?: VehicleRequest;
   driver?: string;
   /** عدد الأشخاص في الرحلة (الضيف ومرافقه والـ Nurse، أو الـ Nurse وحدها) */
   persons?: number;
+  /** قبل طلب السيارة: زر القلم بجانب الرقم لتصحيحه إن كان خطأ */
+  onEditMobile?: (mobile: string) => void;
 }) {
   const assistance = appointment.assistance.join("، ");
   const count = persons ?? tripPersons(appointment, request);
+  const hasMobile = Boolean(appointment.mobile && appointment.mobile !== "-");
   return (
     <div className="space-y-2.5">
-      {appointment.mobile && appointment.mobile !== "-" && (
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-sm text-slate-700">
-          <span className="text-xs font-medium text-slate-500">هاتف الضيف</span>
-          <GuestContact mobile={appointment.mobile} size="md" />
-        </div>
-      )}
+      {onEditMobile
+        ? <GuestMobile mobile={hasMobile ? appointment.mobile : ""} name={appointment.patientName} onSave={onEditMobile} />
+        : hasMobile && (
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-sm text-slate-700">
+            <span className="text-xs font-medium text-slate-500">هاتف الضيف</span>
+            <GuestContact mobile={appointment.mobile} size="md" />
+          </div>
+        )}
       <p className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-500">
         {appointment.gender && <span>{appointment.gender}</span>}
         {assistance && !request?.nurseOnly && <span className="inline-flex items-center gap-1"><Accessibility className="h-3.5 w-3.5" />{assistance}</span>}
@@ -773,7 +785,68 @@ function GuestDetails({ appointment, request, driver, persons }: {
   );
 }
 
-function RequestRow({ appointment, day, match, partner, earlier, now, onRequest, onSelfReturn, onCancelAppointment }: {
+/**
+ * هاتف الضيف قبل طلب السيارة: الرقم مع الاتصال وواتساب، وبجانبه زر القلم لتصحيحه إن كان خطأ
+ * (يُحفظ في الموعد ويُسجَّل في سجل العمليات).
+ */
+function GuestMobile({ mobile, name, onSave }: { mobile: string; name: string; onSave: (mobile: string) => void }) {
+  const [draft, setDraft] = useState<string | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (draft !== null) inputRef.current?.focus();
+  }, [draft !== null]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  function save(event: React.FormEvent) {
+    event.preventDefault();
+    const next = toWesternDigits(draft ?? "").replace(/[\s-]/g, "");
+    if (!/^\+?\d{8,15}$/.test(next)) {
+      toast.error("أدخل رقم هاتف صحيحًا من 8 إلى 15 رقمًا");
+      return;
+    }
+    if (next !== mobile) onSave(next);
+    setDraft(null);
+  }
+
+  if (draft !== null) {
+    return (
+      <form onSubmit={save} className="flex flex-wrap items-center gap-2 text-sm">
+        <label className="flex items-center gap-2">
+          <span className="shrink-0 whitespace-nowrap text-xs font-medium text-slate-500">هاتف الضيف</span>
+          <input
+            ref={inputRef}
+            dir="ltr"
+            type="tel"
+            inputMode="tel"
+            value={draft}
+            onChange={(event) => setDraft(event.target.value)}
+            onKeyDown={(event) => event.key === "Escape" && setDraft(null)}
+            aria-label={`رقم هاتف ${name}`}
+            className={cx(inputClass, "h-10 w-44 tabular")}
+          />
+        </label>
+        <button type="submit" className={btn("primary", "sm")}><Check className="h-4 w-4" /> حفظ الرقم</button>
+        <button type="button" onClick={() => setDraft(null)} className={btn("ghost", "sm")}>إلغاء</button>
+      </form>
+    );
+  }
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-sm text-slate-700">
+      <span className="text-xs font-medium text-slate-500">هاتف الضيف</span>
+      {mobile ? <GuestContact mobile={mobile} size="md" /> : <span className="text-amber-700">بلا رقم</span>}
+      <button
+        type="button"
+        onClick={() => setDraft(mobile)}
+        title="تعديل رقم الضيف"
+        aria-label={`تعديل رقم هاتف ${name}`}
+        className={cx(btn("ghost", "sm"), "h-10 w-10 px-0 text-slate-500 hover:text-ink")}
+      >
+        <Pencil className="h-4 w-4" />
+      </button>
+    </div>
+  );
+}
+
+function RequestRow({ appointment, day, match, partner, earlier, now, onRequest, onSelfReturn, onEditMobile, onCancelAppointment }: {
   appointment: ClinicAppointment;
   day?: string;
   match?: UnrequestedMatch;
@@ -784,8 +857,10 @@ function RequestRow({ appointment, day, match, partner, earlier, now, onRequest,
   onRequest: RequestHandlers["onRequest"];
   /** طلب العودة فقط: الضيف عاد من المستشفى بنفسه قبل طلب سيارته */
   onSelfReturn: RequestHandlers["onSelfReturn"];
+  onEditMobile: RequestHandlers["onEditMobile"];
   onCancelAppointment: () => void;
 }) {
+  const editMobile = (mobile: string) => onEditMobile(appointment, mobile);
   const deadline = requestWindow(appointment, now);
   // طلب عودة فقط: الضيف في المستشفى، وتُطلب سيارة العودة عند جاهزيته (طوال يومه)
   const returnOnly = isReturnOnly(appointment);
@@ -807,7 +882,7 @@ function RequestRow({ appointment, day, match, partner, earlier, now, onRequest,
         )}
         action={<button onClick={() => onRequest(newRequest(appointment), appointment.id)} className={btn("primary")}><RotateCcw className="h-4 w-4" /> طلب سيارة العودة</button>}
       >
-        <GuestDetails appointment={appointment} />
+        <GuestDetails appointment={appointment} onEditMobile={editMobile} />
         <Note tone="cyan" icon={House}>
           طلب عودة فقط من {appointment.clinic} إلى المجمع (لم يذهب الضيف بسيارة من المجمع). اطلب السيارة عندما يكون الضيف جاهزًا، أو سجّل أنه عاد بنفسه.
         </Note>
@@ -856,7 +931,7 @@ function RequestRow({ appointment, day, match, partner, earlier, now, onRequest,
       )}
       action={<button onClick={requestCar} className={btn("primary")}><BellRing className="h-4 w-4" /> طلب السيارة</button>}
     >
-      <GuestDetails appointment={appointment} />
+      <GuestDetails appointment={appointment} onEditMobile={editMobile} />
       {earlier && (
         <Note tone="cyan" icon={ArrowLeftRight}>
           للضيف موعد سابق اليوم الساعة <span dir="ltr" className="font-semibold tabular">{earlier.appointmentAt}</span> في {earlier.clinic}. عند انتهائه يمكن نقله مباشرة إلى هذا الموعد من «ضيوف في الموعد»، بدل طلب سيارة من المجمع.
