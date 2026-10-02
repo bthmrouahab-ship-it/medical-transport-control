@@ -2,6 +2,7 @@ import { DEFAULT_HOSPITALS, ORIGIN, distanceKm, type Hospital } from "./hospital
 import {
   appointmentDateTime,
   appointmentHospital,
+  inService,
   isRushHour,
   isReturnOnly,
   isTransfer,
@@ -321,7 +322,7 @@ export function suggestReturnRedirects(
     const special = trip.appointment.kind === "احتياجات خاصة";
     for (const vehicle of vehicles) {
       const state = states.get(vehicle.plate);
-      if (!vehicle.available || state?.kind !== "outside" || !state.canRedirect || !state.position) continue;
+      if (!inService(vehicle) || state?.kind !== "outside" || !state.canRedirect || !state.position) continue;
       if ((special && vehicle.kind !== "احتياجات خاصة") || !fits(vehicle, trip)) continue;
       const distance = distanceKm(state.position, hospital);
       if (distance >= distanceKm(origin, hospital)) continue;

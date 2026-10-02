@@ -17,10 +17,14 @@ function qatar_today(): string
     return (new DateTimeImmutable('now', new DateTimeZone('Asia/Qatar')))->format('Y-m-d');
 }
 
+/** حساب السائق بلا سيارة: لم يُربط بسائق، أو لم يخصص مشرف السيارات لسائقه سيارة */
+const NO_VEHICLE_MESSAGE = 'لا توجد سيارة مخصصة لك الآن. يختار مشرف السيارات السائق لكل سيارة في بداية الشفت.';
+
+/** السيارة المخصصة لسائق الحساب الآن (users.vehicle_plate يحسبه drivers.php) */
 function driver_plate(array $user): string
 {
     $plate = (string)($user['vehicle_plate'] ?? '');
-    if ($plate === '' || !valid_doc_id($plate)) throw new ApiException(400, 'لم يربط مدير النظام حسابك بسيارة بعد.', 'no_vehicle');
+    if ($plate === '' || !valid_doc_id($plate)) throw new ApiException(400, NO_VEHICLE_MESSAGE, 'no_vehicle');
     return $plate;
 }
 

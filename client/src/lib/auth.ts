@@ -99,7 +99,8 @@ export function watchUsers(onChange: (users: UserProfile[]) => void, onError: (e
 
 const reloadUsers = () => usersListeners.forEach((load) => load());
 
-export async function createUser(input: { username: string; displayName: string; role: UserRole; password: string; vehiclePlate?: string }, _createdBy: string) {
+/** driverId: حساب السائق يُربط بسائق من قائمة السائقين (سيارته يخصصها مشرف السيارات لسائقه) */
+export async function createUser(input: { username: string; displayName: string; role: UserRole; password: string; driverId?: string }, _createdBy: string) {
   const username = normalizeUsername(input.username);
   const usernameError = validateUsername(username);
   if (usernameError) throw new AuthError(usernameError);
@@ -107,12 +108,12 @@ export async function createUser(input: { username: string; displayName: string;
   if (displayName.length < 2 || displayName.length > 60) throw new AuthError("الاسم الظاهر يجب أن يكون من 2 إلى 60 حرفًا");
   const passwordError = validatePassword(input.password);
   if (passwordError) throw new AuthError(passwordError);
-  if (input.role === "driver" && !input.vehiclePlate) throw new AuthError("اختر السيارة المرتبطة بالسائق");
   await api("users.create", { ...input, username, displayName });
   reloadUsers();
 }
 
-export async function updateUser(uid: string, changes: Partial<Pick<UserProfile, "displayName" | "role" | "active" | "vehiclePlate">>) {
+/** driverId: ربط حساب السائق بسائق من القائمة، و"" يلغي الربط */
+export async function updateUser(uid: string, changes: Partial<Pick<UserProfile, "displayName" | "role" | "active">> & { driverId?: string }) {
   if (changes.displayName !== undefined) {
     const displayName = changes.displayName.trim();
     if (displayName.length < 2 || displayName.length > 60) throw new AuthError("الاسم الظاهر يجب أن يكون من 2 إلى 60 حرفًا");

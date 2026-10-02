@@ -1,0 +1,63 @@
+import { normalizeMobile, toText } from "./text";
+import type { Vehicle } from "./transport";
+
+/**
+ * السائق مستقل عن السيارة: اسمه ورقم موبايله، وحساب تطبيق السائق المرتبط به (uid، يربطه المدير من «المستخدمين»).
+ * مشرف السيارات يختار السائق لكل سيارة في بداية الشفت، ويبقى آخر تخصيص محفوظًا حتى يغيّره.
+ */
+export type Driver = { id: string; name: string; phone?: string; uid?: string };
+
+/** يتحقق من بيانات سائق قبل الحفظ (المدير) ويعيدها بصيغة موحدة، أو رسالة الخطأ. */
+export function validateDriver(
+  input: { name: string; phone: string },
+  drivers: Driver[],
+  originalId?: string,
+): { driver: { name: string; phone: string } } | { error: string } {
+  const name = toText(input.name).replace(/\s+/g, " ");
+  const phone = normalizeMobile(input.phone);
+  if (name.length < 2 || name.length > 60) return { error: "اسم السائق يجب أن يكون من 2 إلى 60 حرفًا" };
+  if (!/^\+?\d{8,15}$/.test(phone)) return { error: "رقم موبايل السائق يجب أن يكون من 8 إلى 15 رقمًا" };
+  if (drivers.some((driver) => driver.id !== originalId && driver.name === name && (driver.phone ?? "") === phone)) {
+    return { error: `السائق ${name} مسجل مسبقًا بنفس الرقم` };
+  }
+  return { driver: { name, phone } };
+}
+
+/** رقم سائق جديد: D-1، D-2، ... */
+export function newDriverId(drivers: Pick<Driver, "id">[]) {
+  const top = drivers.reduce((max, driver) => Math.max(max, Number(/^D-(\d+)$/.exec(driver.id)?.[1] ?? 0)), 0);
+  return `D-${top + 1}`;
+}
+
+/** السيارة التي يقودها السائق الآن */
+export const vehicleOfDriver = (vehicles: Vehicle[], driverId: string) => vehicles.find((vehicle) => vehicle.driverId === driverId);
+
+/** السائق المرتبط بحساب تطبيق السائق */
+export const driverOfAccount = (drivers: Driver[], uid: string) => drivers.find((driver) => driver.uid === uid);
+
+/** السيارة مع سائقها (اسمه ورقمه منسوخان فيها لكل الصفحات)، أو بلا سائق. */
+function withDriver(vehicle: Vehicle, driver: Driver | undefined, now: Date): Vehicle {
+  const { driverId: _id, driverSince: _since, ...rest } = vehicle;
+  return driver
+    ? { ...rest, driverId: driver.id, driver: driver.name, phone: driver.phone ?? "", driverSince: now.toISOString() }
+    : { ...rest, driver: "", phone: "" };
+}
+
+/**
+ * تخصيص السائقين للسيارات: assignments رقم السيارة ← رقم السائق (أو null = بلا سائق).
+ * السائق في سيارة واحدة فقط: إن خُصّص لسيارة وهو في غيرها تبقى السابقة بلا سائق (ما لم يُخصّص لها غيره).
+ * السيارة التي لم يتغير سائقها تبقى كما هي (ومعها وقت استلامه لها).
+ */
+export function assignDrivers(vehicles: Vehicle[], drivers: Driver[], assignments: Map<string, string | null>, now = new Date()): Vehicle[] {
+  const byId = new Map(drivers.map((driver) => [driver.id, driver]));
+  const moved = new Set(Array.from(assignments.values()).filter((id): id is string => Boolean(id)));
+  return vehicles.map((vehicle) => {
+    if (assignments.has(vehicle.plate)) {
+      const driver = byId.get(assignments.get(vehicle.plate) ?? "");
+      if ((driver?.id ?? null) === (vehicle.driverId ?? null) && (driver || !vehicle.driver)) return vehicle;
+      return withDriver(vehicle, driver, now);
+    }
+    if (vehicle.driverId && moved.has(vehicle.driverId)) return withDriver(vehicle, undefined, now);
+    return vehicle;
+  });
+}

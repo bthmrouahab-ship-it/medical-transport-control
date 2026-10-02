@@ -10,7 +10,7 @@ export type UserProfile = {
   active: boolean;
   /** يُطلب من المستخدم تغيير كلمة المرور المؤقتة عند أول دخول. */
   mustChangePassword: boolean;
-  /** للسائق فقط: رقم السيارة التي يرسل موقعها */
+  /** للسائق فقط: السيارة المخصصة لسائقه الآن (يحسبها الخادم من تخصيص مشرف السيارات)، ومنها رحلاته وموقعه */
   vehiclePlate?: string;
   createdAt: string;
   createdBy: string;

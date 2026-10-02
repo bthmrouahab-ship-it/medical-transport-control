@@ -19,7 +19,9 @@ import {
   type TripStat,
 } from "@shared/stats";
 import { localDateString, mergeVehicle, type ClinicAppointment, type Vehicle, type VehicleRequest } from "@shared/transport";
-import { saveState } from "@/lib/appStore";
+import { saveStates } from "@/lib/appStore";
+import { useDrivers } from "@/lib/useShared";
+import { assignDrivers, newDriverId, type Driver } from "@shared/drivers";
 import { api } from "@/lib/api";
 import { authErrorMessage } from "@/lib/auth";
 import { dayRange, fetchAllActivity } from "@/lib/activity";
@@ -277,6 +279,7 @@ export default function StatsPanel({ canEdit, actor, hospitals, fleet, appointme
 type Preview = { fileName: string; trips: TripStat[] | null; drivers: ImportedDriver[]; error?: string };
 
 function HistoryImport({ fleet, hospitals, imported }: { fleet: Vehicle[]; hospitals: Hospital[]; imported: StatsDay[] }) {
+  const drivers = useDrivers();
   const input = useRef<HTMLInputElement>(null);
   const [preview, setPreview] = useState<Preview | null>(null);
   const [busy, setBusy] = useState(false);
@@ -328,16 +331,32 @@ function HistoryImport({ fleet, hospitals, imported }: { fleet: Vehicle[]; hospi
     }
   }
 
+  /**
+   * السيارات من الملف (رقمها ونوعها)، وسائقوها يُضافون إلى قائمة السائقين (السيارة التي يتناوب عليها أكثر من سائق:
+   * كلهم). السيارة بلا سائق تأخذ أول سائق لها في الملف إن لم يكن في سيارة أخرى، والباقي يخصصه مشرف السيارات.
+   */
   function updateFleet() {
     if (!preview?.drivers.length) return;
-    const next = [...fleet];
+    const nextDrivers: Driver[] = [...drivers];
+    let next = [...fleet];
+    const assignments = new Map<string, string | null>();
     for (const item of preview.drivers) {
-      const data = { plate: item.plate, driver: item.drivers.join(" / "), phone: item.phone, kind: item.kind };
+      const phone = item.drivers.length === 1 && /^\+?\d{8,15}$/.test(item.phone) ? item.phone : undefined;
+      const ids = item.drivers.map((name) => name.trim().slice(0, 60)).filter((name) => name.length >= 2).map((name) => {
+        const known = nextDrivers.find((driver) => driver.name === name);
+        if (known) return known.id;
+        const driver: Driver = { id: newDriverId(nextDrivers), name, ...(phone ? { phone } : {}) };
+        nextDrivers.push(driver);
+        return driver.id;
+      });
       const index = next.findIndex((vehicle) => vehicle.plate === item.plate);
-      if (index >= 0) next[index] = mergeVehicle(next[index], data);
-      else next.push({ ...data, available: true });
+      if (index >= 0) next[index] = mergeVehicle(next[index], { kind: item.kind });
+      else next.push({ plate: item.plate, kind: item.kind, driver: "", phone: "", available: true });
+      const free = ids.find((id) => !next.some((vehicle) => vehicle.driverId === id) && !Array.from(assignments.values()).includes(id));
+      if (!next.find((vehicle) => vehicle.plate === item.plate)?.driverId && free) assignments.set(item.plate, free);
     }
-    saveState("fox_fleet", next);
+    next = assignDrivers(next, nextDrivers, assignments);
+    saveStates([{ key: "fox_drivers", value: nextDrivers, baseline: drivers }, { key: "fox_fleet", value: next, baseline: fleet }]);
     toast.success("تم تحديث السيارات والسائقين");
     setPreview(preview.trips ? { ...preview, drivers: [] } : null);
   }
@@ -373,7 +392,7 @@ function HistoryImport({ fleet, hospitals, imported }: { fleet: Vehicle[]; hospi
           )}
           {preview.drivers.length > 0 && (
             <div className="flex flex-col justify-between gap-3 rounded-xl bg-slate-50 p-3 sm:flex-row sm:items-center">
-              <p className="flex items-start gap-2 text-slate-700"><Building2 className="mt-0.5 h-4 w-4 shrink-0 text-slate-400" /> قائمة السائقين: {preview.drivers.length} سيارة ({newPlates} جديدة). السيارة التي يتناوب عليها أكثر من سائق تُحفظ بأسمائهم معًا.</p>
+              <p className="flex items-start gap-2 text-slate-700"><Building2 className="mt-0.5 h-4 w-4 shrink-0 text-slate-400" /> قائمة السائقين: {preview.drivers.length} سيارة ({newPlates} جديدة). يُضاف كل سائق إلى قائمة السائقين (ومنهم من يتناوبون على سيارة واحدة)، ويختار مشرف السيارات سائق كل سيارة.</p>
               <button onClick={updateFleet} className={btn("secondary", "sm")}>تحديث السيارات</button>
             </div>
           )}

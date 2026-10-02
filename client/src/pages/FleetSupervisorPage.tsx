@@ -27,6 +27,7 @@ import {
   Sparkles,
   Timer,
   Truck,
+  UserCog,
   Ribbon,
   Clock3,
   Wand2,
@@ -44,6 +45,7 @@ import {
   calculateTripGroupingScore,
   canShareVehicle,
   findUnrequestedMatches,
+  hasDriver,
   isApproved,
   isNonMedical,
   isPriority,
@@ -102,8 +104,9 @@ import NonMedicalTripForm from "./NonMedicalTripForm";
 import { RecentActivity } from "@/components/ActivityLog";
 import { AppointmentsOverview } from "@/components/AppointmentsOverview";
 import { KindIcon, KindLabel, VehiclePicker } from "@/components/VehiclePicker";
+import DriverAssignment from "@/components/DriverAssignment";
 import GuestContact from "@/components/GuestContact";
-import { useHospitals, useLiveVehicles, useNow, useSharedState } from "@/lib/useShared";
+import { useDrivers, useHospitals, useLiveVehicles, useNow, useSharedState } from "@/lib/useShared";
 import { locationFreshness, type VehicleLocation } from "@/lib/vehicleLocation";
 import { NOTIFY_KEY, deviceNotificationsOn, useArrivalAlerts, useCancellationAlerts, useDenialAlerts, useRedirectAlerts } from "@/lib/arrivalAlerts";
 import { checkStateText, driverCheck } from "@shared/driverChecks";
@@ -201,6 +204,9 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
   const [view, setView] = useState<"dispatch" | "appointments">("dispatch");
   /** السيارة المعروضة تفاصيلها (الضغط عليها في قائمة السيارات) */
   const [shownPlate, setShownPlate] = useState<string | null>(null);
+  /** نافذة السائقين في السيارات (بداية الشفت)، ومعها نص البحث الأول (رقم سيارة من تفاصيلها) */
+  const [assigning, setAssigning] = useState<string | null>(null);
+  const drivers = useDrivers();
   const hospitals = useHospitals();
   const now = useNow(15000);
   const today = localDateString(now);
@@ -239,7 +245,10 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
   const offHours = (vehicle: Vehicle) => vehicle.kind === "باص" && busOffNow;
   // باص العيادة في خدمتها، فلا يُحسب بين السيارات المتاحة للتوزيع
   const forClinic = (vehicle: Vehicle) => busRoleOf(vehicle) === "clinic";
-  const dispatchable = vehicles.filter((vehicle) => vehicle.available && !isBusy(vehicle.plate) && !offHours(vehicle) && !forClinic(vehicle));
+  // السيارة بلا سائق لا تُرسل حتى يختار مشرف السيارات سائقها
+  const dispatchable = vehicles.filter((vehicle) => vehicle.available && hasDriver(vehicle) && !isBusy(vehicle.plate) && !offHours(vehicle) && !forClinic(vehicle));
+  /** خارج الخدمة: موقوفة، أو بلا سائق وليست في رحلة */
+  const offDuty = (vehicle: Vehicle) => !vehicle.available || (!hasDriver(vehicle) && !isBusy(vehicle.plate));
   // رحلات كل سيارة في اليوم المختار: السيارة الأقل رحلات تُقترح أولًا حتى يتوزع العمل
   const load = vehicleLoad(requests, appointments, date);
 
@@ -448,6 +457,7 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
   const availabilityText = (vehicle: Vehicle) => {
     if (!vehicle.available) return { tone: "neutral" as const, text: "خارج الخدمة" };
     const state = availability.get(vehicle.plate);
+    if (!hasDriver(vehicle) && !state?.busy) return { tone: "amber" as const, text: "بلا سائق · اختر سائقها من «السائقون»" };
     if (!state?.busy) {
       if (forClinic(vehicle)) return { tone: "neutral" as const, text: "في خدمة العيادة" };
       if (offHours(vehicle)) return { tone: "neutral" as const, text: "الباصات غير متاحة من 6 إلى 9 صباحًا" };
@@ -467,14 +477,15 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
     all: vehicles.length,
     inside: dispatchable.filter((vehicle) => !isOutside(vehicle.plate)).length,
     outside: dispatchable.filter((vehicle) => isOutside(vehicle.plate)).length,
-    busy: vehicles.filter((vehicle) => vehicle.available && isBusy(vehicle.plate)).length,
-    off: vehicles.filter((vehicle) => !vehicle.available).length,
+    busy: vehicles.filter((vehicle) => !offDuty(vehicle) && isBusy(vehicle.plate)).length,
+    off: vehicles.filter(offDuty).length,
   };
   const shownVehicles = vehicles.filter((vehicle) => vehicleFilter === "all"
-    || (vehicleFilter === "inside" && vehicle.available && !isBusy(vehicle.plate) && !isOutside(vehicle.plate))
-    || (vehicleFilter === "outside" && vehicle.available && !isBusy(vehicle.plate) && isOutside(vehicle.plate))
-    || (vehicleFilter === "busy" && vehicle.available && isBusy(vehicle.plate))
-    || (vehicleFilter === "off" && !vehicle.available));
+    || (vehicleFilter === "inside" && !offDuty(vehicle) && !isBusy(vehicle.plate) && !isOutside(vehicle.plate))
+    || (vehicleFilter === "outside" && !offDuty(vehicle) && !isBusy(vehicle.plate) && isOutside(vehicle.plate))
+    || (vehicleFilter === "busy" && !offDuty(vehicle) && isBusy(vehicle.plate))
+    || (vehicleFilter === "off" && offDuty(vehicle)));
+  const withoutDriver = vehicles.filter((vehicle) => !hasDriver(vehicle)).length;
   const trackingCount = activeGroups.filter((trips) => trips.some((trip) => {
     const phase = phases.get(trip.request.id)!;
     return phase.kind === "toDestination" && phase.tracking;
@@ -777,7 +788,15 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
             ) : <EmptyState icon={Radio} title="لم تصل سيارات اليوم بعد" hint="مع GPS يُكتشف الوصول تلقائيًا، وبدونه تنتهي الرحلة عند الوقت المتوقع" />}
           </Panel>
 
-          <Panel id="fleet-vehicles" icon={CarFront} title="السيارات" count={vehicles.length} bodyClassName="p-0">
+          <Panel
+            id="fleet-vehicles"
+            icon={CarFront}
+            title="السيارات"
+            count={vehicles.length}
+            bodyClassName="p-0"
+            description={withoutDriver ? `${withoutDriver === 1 ? "سيارة واحدة" : `${withoutDriver} سيارات`} بلا سائق` : undefined}
+            actions={<button type="button" onClick={() => setAssigning("")} className={btn(withoutDriver ? "primary" : "secondary", "sm")}><UserCog className="h-4 w-4" /> السائقون</button>}
+          >
             <div className="border-b border-slate-100 px-4 py-3">
               <Segmented
                 full
@@ -805,7 +824,7 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
                       <button
                         type="button"
                         aria-haspopup="dialog"
-                        aria-label={`تفاصيل السيارة ${vehicle.plate} · ${live?.driver ?? vehicle.driver}`}
+                        aria-label={`تفاصيل السيارة ${vehicle.plate} · ${live?.driver ?? (vehicle.driver || "بلا سائق")}`}
                         onClick={() => setShownPlate(vehicle.plate)}
                         className="group flex w-full items-center gap-3 rounded-xl px-1 py-1 text-start transition hover:bg-slate-50"
                       >
@@ -813,7 +832,7 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
                         <div className="min-w-0 flex-1">
                           <p className="flex items-center gap-1.5 text-sm font-medium text-ink">
                             <KindIcon vehicle={vehicle} size="sm" />
-                            <span className="truncate"><span dir="ltr" className="font-semibold">{vehicle.plate}</span> · {live?.driver ?? vehicle.driver}</span>
+                            <span className="truncate"><span dir="ltr" className="font-semibold">{vehicle.plate}</span> · {live?.driver ?? (vehicle.driver || <span className="text-amber-700">بلا سائق</span>)}</span>
                           </p>
                           <p className="text-xs leading-5 text-slate-500"><KindLabel vehicle={vehicle} extra={roleOf(vehicle)} /> · {state.text}{live ? " · GPS مباشر" : ""}</p>
                         </div>
@@ -896,7 +915,22 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
           date={date}
           now={now}
           hospitals={hospitals}
+          onChangeDriver={() => { setShownPlate(null); setAssigning(shownVehicle.plate); }}
           onClose={() => setShownPlate(null)}
+        />
+      )}
+      {assigning !== null && (
+        <DriverAssignment
+          vehicles={vehicles}
+          drivers={drivers}
+          busy={isBusy}
+          initialQuery={assigning}
+          onSave={(next) => {
+            onUpdate(next);
+            setAssigning(null);
+            toast.success("تم حفظ السائقين في السيارات", { description: "يبقى هذا التخصيص حتى تغيّره" });
+          }}
+          onClose={() => setAssigning(null)}
         />
       )}
     </>
@@ -1039,7 +1073,7 @@ function Info({ label, wide = false, children }: { label: string; wide?: boolean
  * تفاصيل سيارة عند الضغط عليها في قائمة السيارات: حالتها، والسائق ورقمه، ومن فيها الآن والمقاعد الفارغة،
  * وآخر موقع GPS، ورحلتها الجارية، ورحلاتها في اليوم المختار.
  */
-function VehicleDetailsDialog({ vehicle, driver, state, place, current, dayTrips, phaseOf, date, now, hospitals, onClose }: {
+function VehicleDetailsDialog({ vehicle, driver, state, place, current, dayTrips, phaseOf, date, now, hospitals, onChangeDriver, onClose }: {
   vehicle: Vehicle;
   /** السائق الذي يقودها الآن (من هاتفه) أو المسجل للسيارة */
   driver: string;
@@ -1053,6 +1087,8 @@ function VehicleDetailsDialog({ vehicle, driver, state, place, current, dayTrips
   date: string;
   now: Date;
   hospitals: Hospital[];
+  /** نافذة السائقين في السيارات على هذه السيارة */
+  onChangeDriver: () => void;
   onClose: () => void;
 }) {
   const locations = useSharedState<VehicleLocation[]>("fox_locations", []);
@@ -1069,6 +1105,8 @@ function VehicleDetailsDialog({ vehicle, driver, state, place, current, dayTrips
   const relative = formatDay(date, now);
   const dayLabel = relative === date ? longDate(date) : relative;
 
+  const since = vehicle.driverSince ? new Date(vehicle.driverSince) : null;
+  const driverSince = since && !Number.isNaN(since.getTime()) ? (localDateString(since) === localDateString(now) ? timeLabel(since) : stamp(since)) : "";
   const lastSeen = location ? new Date(location.updatedAt) : null;
   const lastSeenText = lastSeen ? (localDateString(lastSeen) === localDateString(now) ? timeLabel(lastSeen) : stamp(lastSeen)) : "";
   const locationText = !location || !lastSeen
@@ -1097,7 +1135,12 @@ function VehicleDetailsDialog({ vehicle, driver, state, place, current, dayTrips
       )}
       description={<><KindLabel vehicle={vehicle} extra={roleOf(vehicle)} /> · {seatsText(vehicle)}</>}
       onClose={onClose}
-      footer={<button type="button" onClick={onClose} className={btn("secondary")}>إغلاق</button>}
+      footer={(
+        <>
+          <button type="button" onClick={onChangeDriver} className={btn("secondary")}><UserCog className="h-4 w-4" /> تغيير السائق</button>
+          <button type="button" onClick={onClose} className={btn("secondary")}>إغلاق</button>
+        </>
+      )}
     >
       <p className="flex items-center gap-2.5 rounded-xl bg-slate-50 px-3 py-2.5 text-sm font-medium text-ink ring-1 ring-inset ring-slate-200/70">
         <Dot tone={state.tone} pulse={fresh?.state === "live"} />
@@ -1106,8 +1149,10 @@ function VehicleDetailsDialog({ vehicle, driver, state, place, current, dayTrips
 
       <dl className="mt-4 grid gap-x-5 gap-y-3 sm:grid-cols-2">
         <Info label="السائق">
-          {driver || "—"}
-          {driver !== vehicle.driver && vehicle.driver && <span className="block text-xs text-slate-500">السائق المسجل للسيارة: {vehicle.driver}</span>}
+          {driver || <span className="text-amber-700">بلا سائق</span>}
+          {driver !== vehicle.driver && vehicle.driver && <span className="block text-xs text-slate-500">السائق المخصص للسيارة: {vehicle.driver}</span>}
+          {/* منذ متى يقودها (من تخصيص مشرف السيارات) */}
+          {vehicle.driver && driverSince && <span className="block text-xs text-slate-500">يقودها منذ {driverSince}</span>}
         </Info>
         <Info label="رقم السائق">
           {vehicle.phone ? <GuestContact mobile={vehicle.phone} labels={{ call: "اتصال بالسائق", whatsapp: "واتساب" }} /> : <span className="text-slate-400">غير مسجل</span>}
