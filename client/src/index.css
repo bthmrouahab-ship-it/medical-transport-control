@@ -58,7 +58,7 @@ input::placeholder { color: #94a3b8; }
 ::selection { background: #fde1de; color: #0e1c2f; }
 /* أعمدة الأوقات والأرقام المتراصة */
 .tabular { font-variant-numeric: tabular-nums; }
-/* السيارة على الخريطة: بطاقة باسم السائق ورقم اللوحة، وتحتها نقطة موقعها بلون إشارة GPS */
+/* السيارة على الخريطة: بطاقة باسم السائق (بلا رقم اللوحة)، وتحتها نقطة موقعها بلون إشارة GPS */
 .vehicle-pin { background: transparent; border: 0; }
 .vehicle-pin__body {
   position: absolute;
