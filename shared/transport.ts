@@ -170,6 +170,10 @@ export type VehicleRequest = {
   pickupCheck?: CheckReply;
   pickupCheckBy?: string;
   pickupCheckAt?: string;
+  /** تغيير السيارة بعد إرسالها (عطل أو حادث أو تأخر): السيارة السابقة، والسبب، ووقت التغيير (ISO) */
+  previousPlate?: string;
+  changeReason?: string;
+  changedAt?: string;
 };
 
 export type GpsPoint = { lat: number; lng: number; accuracy?: number | null };
@@ -539,8 +543,41 @@ export function migrateRequest(value: unknown): VehicleRequest | null {
     arrivalSource,
     fromAppointmentId: toText(raw.fromAppointmentId) || undefined,
     ...(raw.nurseOnly === true ? { nurseOnly: true } : {}),
+    previousPlate: toText(raw.previousPlate) || undefined,
+    changeReason: toText(raw.changeReason) || undefined,
+    changedAt: isoTime(raw.changedAt),
     // الخانات الفارغة لا تُضاف، حتى لا تظهر تغييرات وهمية عند المقارنة قبل الحفظ
     ...Object.fromEntries(Object.entries(check).filter(([, value]) => value !== undefined)),
+  };
+}
+
+/** أسباب تغيير السيارة بعد إرسالها (ومعها «أخرى» مكتوب) */
+export const CHANGE_VEHICLE_REASONS = ["عطل في السيارة", "حادث", "تأخر السيارة", "السائق لا يرد"] as const;
+/** السيارة السابقة لا تكمل الخدمة بعد هذين السببين (تُقترح إيقافها) */
+export const VEHICLE_FAULT_REASONS: readonly string[] = ["عطل في السيارة", "حادث"];
+
+/** يمكن تغيير سيارة الرحلة: أُرسلت ولم تصل إلى الوجهة بعد (قبل استلام الضيف أو بعده) */
+export const canChangeVehicle = (request: Pick<VehicleRequest, "status" | "vehiclePlate">) => Boolean(request.vehiclePlate)
+  && (request.status === "تم إرسال السيارة" || request.status === "وصلت السيارة" || request.status === "تم استلام المريض");
+
+/**
+ * سيارة أخرى لرحلة أُرسلت لها سيارة (عطل أو حادث أو تأخر): السيارة الجديدة وسائقها ووقت إرسالها، والسيارة السابقة والسبب.
+ * قبل استلام الضيف تعود الرحلة إلى «تم إرسال السيارة» ويُمحى ما سجّله سائق السيارة السابقة عند الاستلام.
+ * بعد الاستلام (الضيف في السيارة السابقة) تبقى «تم استلام المريض» والوقت المتوقع للوصول، وتكمل السيارة الجديدة الطريق.
+ */
+export function changeRequestVehicle(request: VehicleRequest, vehicle: Pick<Vehicle, "plate" | "driver">, reason: string, now = new Date()): VehicleRequest {
+  const beforePickup = request.status === "تم إرسال السيارة" || request.status === "وصلت السيارة";
+  const { driverArrivedAt: _at, arrivalGps: _gps, arrivalCheck: _check, arrivalCheckBy: _by, arrivalCheckAt: _checkAt, ...rest } = request;
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return {
+    ...(beforePickup ? rest : request),
+    vehiclePlate: vehicle.plate,
+    driver: vehicle.driver,
+    status: beforePickup ? "تم إرسال السيارة" : request.status,
+    notificationSentAt: `${pad(now.getHours())}:${pad(now.getMinutes())}`,
+    previousPlate: request.vehiclePlate,
+    changeReason: reason.trim(),
+    changedAt: now.toISOString(),
   };
 }
 

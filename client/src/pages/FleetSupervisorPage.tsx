@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import {
   AlertTriangle,
+  ArrowLeftRight,
   Bell,
   BriefcaseMedical,
   BellRing,
@@ -35,6 +36,8 @@ import {
 import {
   BUS_ROLES,
   BUS_ROLE_LABELS,
+  CHANGE_VEHICLE_REASONS,
+  VEHICLE_FAULT_REASONS,
   appointmentDateTime,
   appointmentPickupLabel,
   assignVehicleForTrips,
@@ -93,8 +96,11 @@ import {
   Switch,
   TimeBlock,
   btn,
+  choiceClass,
   cx,
   formatDay,
+  inputClass,
+  labelClass,
   longDate,
   stamp,
   timeLabel,
@@ -177,7 +183,7 @@ const roleOf = (vehicle: Vehicle) => (busRoleOf(vehicle) ? BUS_ROLE_LABELS[busRo
 /** why: لا تناسب الرحلة (معطّلة)، warning: تناسبها بعد موافقة المشرف (سيارة عادية لضيف احتياجات خاصة) */
 type VehicleChoice = { vehicle: Vehicle; why: string | null; warning?: string | null };
 
-export function FleetSupervisorPage({ vehicles, appointments, requests, date, onDateChange, onManager, onUpdate, onDispatch, onDispatchMany, onArrived, onEndTrip, onExport, onAddTrip }: {
+export function FleetSupervisorPage({ vehicles, appointments, requests, date, onDateChange, onManager, onUpdate, onDispatch, onDispatchMany, onArrived, onEndTrip, onChangeVehicle, onExport, onAddTrip }: {
   vehicles: Vehicle[];
   appointments: ClinicAppointment[];
   requests: VehicleRequest[];
@@ -190,6 +196,8 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
   onArrived: (requestIds: string[], source: "manual" | "estimate") => void;
   /** إنهاء رحلة عالقة قبل تسجيل الاستلام (تصبح السيارة متاحة) */
   onEndTrip: (requestIds: string[]) => void;
+  /** سيارة أخرى لرحلة أُرسلت لها سيارة (عطل أو حادث أو تأخر)، مع السبب وإيقاف السابقة. يعيد رسالة السائق الجديد */
+  onChangeVehicle: (requestIds: string[], vehicle: Vehicle, reason: string, stopOld: boolean) => DriverMessage[];
   onExport: () => void;
   onAddTrip: (appointment: ClinicAppointment, request: VehicleRequest) => void;
 }) {
@@ -204,6 +212,8 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
   const [view, setView] = useState<"dispatch" | "appointments">("dispatch");
   /** السيارة المعروضة تفاصيلها (الضغط عليها في قائمة السيارات) */
   const [shownPlate, setShownPlate] = useState<string | null>(null);
+  /** نافذة تغيير سيارة رحلة جارية (عطل أو حادث أو تأخر) */
+  const [changing, setChanging] = useState<Trip[] | null>(null);
   /** نافذة السائقين في السيارات (بداية الشفت)، ومعها نص البحث الأول (رقم سيارة من تفاصيلها) */
   const [assigning, setAssigning] = useState<string | null>(null);
   const drivers = useDrivers();
@@ -740,6 +750,7 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
                     hospitals={hospitals}
                     onArrived={() => onArrived(trips.map((trip) => trip.request.id), "manual")}
                     onEnd={() => onEndTrip(trips.map((trip) => trip.request.id))}
+                    onChangeVehicle={() => setChanging(trips)}
                   />
                 ))}
               </div>
@@ -919,6 +930,21 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
           onClose={() => setShownPlate(null)}
         />
       )}
+      {changing && (
+        <ChangeVehicleDialog
+          trips={changing}
+          choices={choicesFor(changing).filter((choice) => choice.vehicle.plate !== changing[0].request.vehiclePlate)}
+          driverOf={(vehicle) => driverOf(vehicle.plate, vehicle.driver)}
+          details={(vehicle) => `${placeText(vehicle.plate)} · ${tripsText(load.get(vehicle.plate) ?? 0)}`}
+          onConfirm={(choice, reason, stopOld) => {
+            if (!confirmRegular(choice, changing)) return;
+            const messages = onChangeVehicle(changing.map((trip) => trip.request.id), choice.vehicle, reason, stopOld);
+            setChanging(null);
+            if (messages.length) setDriverMessages(messages);
+          }}
+          onClose={() => setChanging(null)}
+        />
+      )}
       {assigning !== null && (
         <DriverAssignment
           vehicles={vehicles}
@@ -954,7 +980,7 @@ function TripList({ trips, hospitals }: { trips: Trip[]; hospitals: Hospital[] }
 const STEPS = ["أُرسلت", "عند الاستلام", "في الطريق", "الوجهة"];
 
 /** رحلة سيارة جارية: مرحلتها، والوقت المتوقع للوصول، ومتابعة GPS، ورسالة السائق. */
-function ActiveTrip({ trips, phase, late = false, vehicle, driver, hospitals, onArrived, onEnd }: {
+function ActiveTrip({ trips, phase, late = false, vehicle, driver, hospitals, onArrived, onEnd, onChangeVehicle }: {
   trips: Trip[];
   phase: TripPhase;
   /** تأخرت: لم تصل إلى الاستلام بعد LATE_MINUTES من إرسالها، أو تجاوزت الوقت المتوقع للوصول */
@@ -964,8 +990,10 @@ function ActiveTrip({ trips, phase, late = false, vehicle, driver, hospitals, on
   hospitals: Hospital[];
   onArrived: () => void;
   onEnd: () => void;
+  onChangeVehicle: () => void;
 }) {
   const plate = trips[0].request.vehiclePlate ?? "";
+  const changed = trips.find((trip) => trip.request.previousPlate)?.request;
   const message = buildDriverMessage(trips, { plate, driver }, hospitals);
   const phone = vehicle?.phone;
   // المقاعد الباقية: الباص 14، وسيارة الاحتياجات الخاصة 4، والسيدان 3 (أو 4 بطاقتها الكاملة)
@@ -991,6 +1019,14 @@ function ActiveTrip({ trips, phase, late = false, vehicle, driver, hospitals, on
       </div>
 
       <div className="mt-3"><Steps steps={STEPS} current={step} /></div>
+
+      {/* تغيّرت سيارة هذه الرحلة بعد إرسالها */}
+      {changed && (
+        <p className="mt-3 flex flex-wrap items-center gap-x-1.5 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900 ring-1 ring-inset ring-amber-200">
+          <ArrowLeftRight className="h-3.5 w-3.5 shrink-0" />
+          <span>بدل السيارة <span dir="ltr" className="font-semibold tabular">{changed.previousPlate}</span>{changed.changeReason ? ` · ${changed.changeReason}` : ""}{changed.changedAt ? ` · ${timeLabel(new Date(changed.changedAt))}` : ""}</span>
+        </p>
+      )}
 
       <ul className="mt-3 space-y-1 text-sm text-slate-600">
         {trips.map((trip) => (
@@ -1027,6 +1063,8 @@ function ActiveTrip({ trips, phase, late = false, vehicle, driver, hospitals, on
         {phase.kind === "toDestination" && (
           <button onClick={() => window.confirm(`تأكيد وصول السيارة ${plate} إلى الوجهة؟ ستصبح متاحة لرحلة جديدة.`) && onArrived()} className={btn("success", "sm")}><CheckCircle2 className="h-4 w-4" /> تأكيد الوصول</button>
         )}
+        {/* عطل أو حادث أو تأخر: سيارة أخرى للرحلة قبل وصولها إلى الوجهة */}
+        <button onClick={onChangeVehicle} className={cx(btn("secondary", "sm"), "text-amber-800")}><ArrowLeftRight className="h-4 w-4" /> تغيير السيارة</button>
         {/* رحلة عالقة: أُرسلت السيارة ولم يُسجَّل استلام الضيف */}
         {phase.kind === "toPickup" && (
           <button
@@ -1038,6 +1076,81 @@ function ActiveTrip({ trips, phase, late = false, vehicle, driver, hospitals, on
         )}
       </div>
     </article>
+  );
+}
+
+/**
+ * تغيير سيارة رحلة جارية (عطل أو حادث أو تأخر): سيارة أخرى متاحة تناسب الرحلة (الرحلة المجمّعة كلها)، والسبب،
+ * وإيقاف السيارة السابقة عن الخدمة (مقترح عند العطل والحادث). قبل استلام الضيف تعود الرحلة إلى «تم إرسال السيارة»،
+ * وبعده تكمل السيارة الجديدة الطريق إلى الوجهة.
+ */
+function ChangeVehicleDialog({ trips, choices, driverOf, details, onConfirm, onClose }: {
+  trips: Trip[];
+  choices: VehicleChoice[];
+  driverOf: (vehicle: Vehicle) => string;
+  details: (vehicle: Vehicle) => string;
+  onConfirm: (choice: VehicleChoice, reason: string, stopOld: boolean) => void;
+  onClose: () => void;
+}) {
+  const current = trips[0].request.vehiclePlate ?? "";
+  const [plate, setPlate] = useState("");
+  const [reason, setReason] = useState<string>(CHANGE_VEHICLE_REASONS[0]);
+  const [other, setOther] = useState("");
+  const [stopOld, setStopOld] = useState(VEHICLE_FAULT_REASONS.includes(CHANGE_VEHICLE_REASONS[0]));
+  const text = reason === "أخرى" ? other.trim() : reason;
+  const choice = choices.find((item) => item.vehicle.plate === plate && !item.why);
+  const pickedUp = trips.some((trip) => trip.request.status === "تم استلام المريض");
+  const ready = choices.filter((item) => !item.why);
+  function chooseReason(next: string) {
+    setReason(next);
+    setStopOld(VEHICLE_FAULT_REASONS.includes(next));
+  }
+  return (
+    <Modal
+      tone="amber"
+      icon={ArrowLeftRight}
+      title="تغيير سيارة الرحلة"
+      description={<>{trips.map(riderName).join("، ")} · السيارة الحالية <span dir="ltr" className="font-semibold">{current}</span></>}
+      onClose={onClose}
+      footer={(
+        <>
+          <button type="button" onClick={onClose} className={btn("secondary")}>إلغاء</button>
+          <button type="button" disabled={!choice || !text} onClick={() => choice && onConfirm(choice, text, stopOld)} className={btn("primary")}><ArrowLeftRight className="h-4 w-4" /> تغيير السيارة</button>
+        </>
+      )}
+    >
+      <p className="rounded-xl bg-slate-50 px-3 py-2.5 text-sm leading-6 text-slate-700 ring-1 ring-inset ring-slate-200/70">
+        {pickedUp
+          ? "الضيف في السيارة الحالية: تكمل السيارة الجديدة الطريق إلى الوجهة. اتصل بالسائقين لتحديد مكان الالتقاء."
+          : "تعود الرحلة إلى «تم إرسال السيارة» بالسيارة الجديدة، وتُلغى عند سائق السيارة الحالية."}
+      </p>
+      <div className="mt-4">
+        <p className={labelClass}>السيارة الجديدة</p>
+        <VehiclePicker
+          label="السيارة الجديدة"
+          options={choices}
+          value={choice ? plate : ""}
+          onChange={setPlate}
+          placeholder={ready.length ? "اختر سيارة" : "لا توجد سيارة متاحة تناسب الرحلة الآن"}
+          driverOf={driverOf}
+          details={details}
+          roleOf={roleOf}
+        />
+      </div>
+      <fieldset className="mt-4">
+        <legend className={labelClass}>سبب التغيير</legend>
+        <div className="flex flex-wrap gap-2">
+          {[...CHANGE_VEHICLE_REASONS, "أخرى"].map((item) => (
+            <button key={item} type="button" aria-pressed={reason === item} onClick={() => chooseReason(item)} className={cx(choiceClass(reason === item), "h-9 px-3 text-sm")}>{item}</button>
+          ))}
+        </div>
+        {reason === "أخرى" && <input aria-label="سبب آخر" value={other} onChange={(event) => setOther(event.target.value)} maxLength={120} placeholder="اكتب السبب" className={cx(inputClass, "mt-2")} />}
+      </fieldset>
+      <label className="mt-4 flex items-start gap-2.5 text-sm text-slate-700">
+        <input type="checkbox" checked={stopOld} onChange={(event) => setStopOld(event.target.checked)} className="mt-0.5 h-4 w-4 accent-brand-600" />
+        <span>إيقاف السيارة <span dir="ltr" className="font-semibold">{current}</span> عن الخدمة <span className="text-xs text-slate-500">(تعود متاحة من مفتاحها في قائمة السيارات)</span></span>
+      </label>
+    </Modal>
   );
 }
 

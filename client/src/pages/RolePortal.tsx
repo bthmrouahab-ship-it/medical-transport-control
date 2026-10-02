@@ -5,6 +5,8 @@ import {
   DEFAULT_VEHICLES,
   approvalOf,
   buildDriverMessage,
+  canChangeVehicle,
+  changeRequestVehicle,
   isApproved,
   isNonMedical,
   isReturnOnly,
@@ -538,22 +540,45 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
         : joinRequestIds.includes(request.id) ? { ...request, groupId } : request);
     });
     updateRequests(next);
-    return items.map(({ requestIds, vehicle, joinRequestIds = [] }) => {
-      const allIds = [...requestIds, ...joinRequestIds];
-      const trips = next
-        .filter((request) => allIds.includes(request.id))
-        .map((request) => {
-          const appointment = appointments.find((item) => item.id === request.appointmentId)!;
-          return {
-            request,
-            appointment,
-            from: request.fromAppointmentId ? appointments.find((item) => item.id === request.fromAppointmentId) ?? null : null,
-            persons: appointment ? requestPersons(request, appointment, next) : 1,
-          };
-        })
-        .filter((trip) => trip.appointment);
-      return { vehicle, count: allIds.length, message: buildDriverMessage(trips, vehicle, hospitals) };
-    });
+    return items.map(({ requestIds, vehicle, joinRequestIds = [] }) => driverMessage([...requestIds, ...joinRequestIds], vehicle, next));
+  }
+
+  /** رسالة سائق السيارة لرحلتها (ضيف أو أكثر) لإرسالها عبر واتساب */
+  function driverMessage(requestIds: string[], vehicle: Vehicle, next: VehicleRequest[]) {
+    const trips = next
+      .filter((request) => requestIds.includes(request.id))
+      .map((request) => {
+        const appointment = appointments.find((item) => item.id === request.appointmentId)!;
+        return {
+          request,
+          appointment,
+          from: request.fromAppointmentId ? appointments.find((item) => item.id === request.fromAppointmentId) ?? null : null,
+          persons: appointment ? requestPersons(request, appointment, next) : 1,
+        };
+      })
+      .filter((trip) => trip.appointment);
+    return { vehicle, count: requestIds.length, message: buildDriverMessage(trips, vehicle, hospitals) };
+  }
+
+  /**
+   * تغيير سيارة رحلة أُرسلت لها سيارة (عطل أو حادث أو تأخر): السيارة الجديدة للرحلة كلها (الرحلة المجمّعة معًا)،
+   * والسبب يُحفظ في الطلب. stopOld يوقف السيارة السابقة عن الخدمة في نفس الحفظ. يعيد رسالة السائق الجديد.
+   */
+  function changeVehicle(requestIds: string[], vehicle: Vehicle, reason: string, stopOld: boolean) {
+    const changed = requests.filter((request) => requestIds.includes(request.id) && canChangeVehicle(request) && request.vehiclePlate !== vehicle.plate);
+    if (!changed.length) return [];
+    const previous = changed[0].vehiclePlate;
+    const now = new Date();
+    const next = requests.map((request) => (changed.includes(request) ? changeRequestVehicle(request, vehicle, reason, now) : request));
+    const nextFleet = fleetVehicles.map((item) => (stopOld && item.plate === previous ? { ...item, available: false } : item));
+    saveStates([
+      { key: "fox_requests", value: next, baseline: requests },
+      ...(stopOld ? [{ key: "fox_fleet" as const, value: nextFleet, baseline: fleetVehicles }] : []),
+    ]);
+    setRequests(next);
+    if (stopOld) setFleetVehicles(nextFleet);
+    toast.success(`تغيّرت السيارة: ${previous} ← ${vehicle.plate}`, { description: stopOld ? `وأُوقفت السيارة ${previous} عن الخدمة` : undefined });
+    return [driverMessage(changed.map((request) => request.id), vehicle, next)];
   }
 
   function dispatch(requestIds: string[], vehicle: Vehicle, joinRequestIds: string[] = []) {
@@ -728,6 +753,7 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
             onDispatchMany={dispatchMany}
             onArrived={markArrived}
             onEndTrip={endTrips}
+            onChangeVehicle={changeVehicle}
             onExport={exportStats}
             date={selectedDate}
             onDateChange={setSelectedDate}

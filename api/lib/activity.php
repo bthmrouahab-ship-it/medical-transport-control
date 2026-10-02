@@ -219,6 +219,14 @@ function describe_write(PDO $pdo, string $col, string $id, ?array $before, ?arra
             if ($after === null) {
                 return ['request', 'request.cancel', "إلغاء طلب السيارة ($direction) لـ $who" . ($plate ? " وكانت السيارة $plate قد أُرسلت" : ''), $details];
             }
+            // تغيير السيارة بعد إرسالها (عطل أو حادث أو تأخر)
+            if ($before !== null && !empty($before['vehiclePlate']) && in_array('vehiclePlate', $changed, true)) {
+                $details['previous'] = $before['vehiclePlate'];
+                $details['reason'] = $after['changeReason'] ?? '';
+                $stage = ($after['status'] ?? '') === 'تم استلام المريض' ? ' · الضيف في الطريق، تكمل السيارة الجديدة الرحلة' : '';
+                return ['request', 'request.change_car', "تغيير سيارة $who ($direction): {$before['vehiclePlate']} ← $plate (" . ($after['driver'] ?? '') . ')'
+                    . ($details['reason'] !== '' ? " · السبب: {$details['reason']}" : '') . $stage, $details];
+            }
             $status = $after['status'] ?? '';
             // «تم استلام المريض» تُعرض «تم استلام الضيف»
             $details['status'] = str_replace('المريض', 'الضيف', $status);

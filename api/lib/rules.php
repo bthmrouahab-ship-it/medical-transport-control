@@ -25,9 +25,11 @@ const REQUEST_STATUSES = ['بانتظار التوزيع', 'تم إرسال ال
 const CHECK_FIELDS = ['arrivalCheck', 'arrivalCheckBy', 'arrivalCheckAt', 'pickupCheck', 'pickupCheckBy', 'pickupCheckAt'];
 /** مهلة رد مشرف المبنى بالثواني؛ بعدها يُعتبر ما سجّله السائق مقبولًا (نفس القيمة في shared/driverChecks.ts) */
 const CHECK_SECONDS = 300;
+/** تغيير السيارة بعد إرسالها (عطل أو حادث أو تأخر): السيارة السابقة، والسبب، ووقت التغيير */
+const VEHICLE_CHANGE_FIELDS = ['previousPlate', 'changeReason', 'changedAt'];
 const REQUEST_FIELDS = ['id', 'appointmentId', 'vehiclePlate', 'driver', 'direction', 'status', 'notificationMethod',
     'createdAt', 'groupId', 'notificationSentAt', 'requestedBy', 'pickedUpAt', 'etaAt', 'destLat', 'destLng', 'arrivedAt', 'arrivalSource',
-    'fromAppointmentId', 'nurseOnly', 'driverArrivedAt', 'arrivalGps', 'pickupGps', ...CHECK_FIELDS, '_o'];
+    'fromAppointmentId', 'nurseOnly', 'driverArrivedAt', 'arrivalGps', 'pickupGps', ...CHECK_FIELDS, ...VEHICLE_CHANGE_FIELDS, '_o'];
 /** خانات مرحلة الطريق إلى الوجهة (تُكتب عند استلام المريض وعند الوصول) */
 const TRIP_FIELDS = ['pickedUpAt', 'etaAt', 'destLat', 'destLng', 'arrivedAt', 'arrivalSource'];
 /** driver وphone: اسم السائق المخصص للسيارة ورقمه، منسوخان من قائمة السائقين (driverId) ويحدّثهما الخادم */
@@ -433,6 +435,25 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
             // مشرف السيارات: إرسال السيارة وجمع الرحلات، وتأكيد وصولها إلى الوجهة (يدويًا أو بانتهاء المدة التقديرية)،
             // وإنهاء رحلة عالقة قبل تسجيل الاستلام (يدويًا فقط) حتى تتفرغ السيارة
             if ($role === 'fleetSupervisor') {
+                // تغيير السيارة بعد إرسالها وقبل وصولها إلى الوجهة: سيارة موجودة أخرى ومعها السيارة السابقة والسبب ووقته.
+                // قبل استلام الضيف تعود الرحلة إلى «تم إرسال السيارة» ويُمحى ما سجّله سائق السيارة السابقة عند الاستلام،
+                // وبعد الاستلام تبقى «تم استلام المريض» (تكمل السيارة الجديدة الطريق)
+                if (in_array('vehiclePlate', $changed, true) && !empty($before['vehiclePlate'])) {
+                    $from = $before['status'] ?? null;
+                    $beforePickup = in_array($from, ['تم إرسال السيارة', 'وصلت السيارة'], true);
+                    $arrivalFields = ['driverArrivedAt', 'arrivalGps', 'arrivalCheck', 'arrivalCheckBy', 'arrivalCheckAt'];
+                    $allowed = ['vehiclePlate', 'driver', 'notificationSentAt', ...VEHICLE_CHANGE_FIELDS, ...($beforePickup ? ['status', ...$arrivalFields] : [])];
+                    $plate = $after['vehiclePlate'] ?? null;
+                    $valid = ($beforePickup || $from === 'تم استلام المريض')
+                        && only($changed, $allowed)
+                        && ($after['status'] ?? null) === ($beforePickup ? 'تم إرسال السيارة' : $from)
+                        && !array_intersect(array_keys($after), $beforePickup ? $arrivalFields : [])
+                        && is_string($plate) && valid_doc_id($plate) && $plate !== $before['vehiclePlate'] && $docOf && $docOf('fleet', $plate) !== null
+                        && ($after['previousPlate'] ?? null) === $before['vehiclePlate']
+                        && is_text($after['changeReason'] ?? null, 120) && trim($after['changeReason']) !== ''
+                        && is_iso($after['changedAt'] ?? null);
+                    return $valid ? null : $denied;
+                }
                 if (!only($changed, ['vehiclePlate', 'driver', 'status', 'groupId', 'notificationSentAt', 'arrivedAt', 'arrivalSource'])) return $denied;
                 $to = $after['status'] ?? null;
                 $from = $before['status'] ?? null;
