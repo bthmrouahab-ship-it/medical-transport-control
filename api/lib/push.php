@@ -228,6 +228,13 @@ function queue_request_pushes(PDO $pdo, ?array $before, ?array $after): void
     }
 }
 
+/** رابط التطبيق على رحلة (الضغط على الإشعار ينقل إلى بطاقتها في «رحلاتي») */
+function trip_url(array $trip): string
+{
+    $id = (string)($trip['id'] ?? '');
+    return valid_doc_id($id) ? '/?trip=' . rawurlencode($id) : '/';
+}
+
 /** نص الإشعار لكل سيارة بلغة الهاتف: الرحلات الجديدة في إشعار واحد (رحلة مجمّعة)، وكل إلغاء أو نفي في إشعار. */
 function push_messages(PDO $pdo, array $items, string $lang): array
 {
@@ -240,6 +247,8 @@ function push_messages(PDO $pdo, array $items, string $lang): array
         $messages[] = count($trips) > 1
             ? ['title' => sprintf($text['group'], count($trips)), 'body' => $join(...array_map(fn($trip) => "{$trip['time']} {$trip['name']}", $trips)), 'tag' => 'trip-new']
             : ['title' => $join($text['new'], $trips[0]['time']), 'body' => $join($trips[0]['name'], $trips[0]['route']), 'tag' => 'trip-new'];
+        // الضغط على الإشعار يفتح التطبيق على الرحلة
+        $messages[count($messages) - 1]['url'] = trip_url($new[0]['trip']);
     }
     foreach ($items as $item) {
         if ($item['type'] === 'new') continue;
@@ -247,9 +256,9 @@ function push_messages(PDO $pdo, array $items, string $lang): array
         if ($item['type'] === 'cancel') {
             $messages[] = ['title' => $text['cancel'], 'body' => $join($trip['name'], $trip['time'], $trip['route']), 'tag' => 'trip-cancel'];
         } elseif ($item['type'] === 'denied-arrival') {
-            $messages[] = ['title' => $text['deniedArrival'], 'body' => sprintf($text['deniedArrivalBody'], $trip['name']), 'tag' => 'trip-denied'];
+            $messages[] = ['title' => $text['deniedArrival'], 'body' => sprintf($text['deniedArrivalBody'], $trip['name']), 'tag' => 'trip-denied', 'url' => trip_url($item['trip'])];
         } elseif ($item['type'] === 'denied-pickup') {
-            $messages[] = ['title' => $text['deniedPickup'], 'body' => sprintf($text['deniedPickupBody'], $trip['name']), 'tag' => 'trip-denied'];
+            $messages[] = ['title' => $text['deniedPickup'], 'body' => sprintf($text['deniedPickupBody'], $trip['name']), 'tag' => 'trip-denied', 'url' => trip_url($item['trip'])];
         }
     }
     return array_map(fn($message) => $message + ['lang' => $lang, 'dir' => $text['dir']], $messages);

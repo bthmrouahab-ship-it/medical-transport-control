@@ -29,6 +29,7 @@ import { useHospitals } from "@/lib/useShared";
 import AppHeader from "@/components/AppHeader";
 import { addDays, btn, byAppointmentTime, headerButton, timeLabel } from "@/components/ui-kit";
 import { pickupDetails } from "@shared/trips";
+import { reveal } from "@/lib/notify";
 import { checkReplyChanges, confirmPendingChecks, type CheckKind } from "@shared/driverChecks";
 import { CLINIC_TEXT, useLang } from "@/lib/i18n";
 import { ClinicForm, ClinicHome } from "./ClinicPages";
@@ -232,7 +233,7 @@ export default function RolePortal() {
           actions={<button onClick={() => setShowManager(false)} className={headerButton}><ArrowRight className="h-4 w-4" /> التوزيع</button>}
           onLogout={() => signOutNow()}
         />
-        <main className="mx-auto max-w-7xl p-4 lg:p-8"><Suspense fallback={<div className="flex min-h-64 items-center justify-center text-slate-400"><Loader2 className="h-6 w-6 animate-spin" /></div>}><FleetDashboard alerts actor={profile.displayName} /></Suspense></main>
+        <main className="mx-auto max-w-7xl p-4 lg:p-8"><Suspense fallback={<div className="flex min-h-64 items-center justify-center text-slate-400"><Loader2 className="h-6 w-6 animate-spin" /></div>}><FleetDashboard alerts actor={profile.displayName} onOpen={(target) => { setShowManager(false); reveal(target); }} /></Suspense></main>
       </div>
     );
   }

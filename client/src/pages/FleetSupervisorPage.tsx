@@ -114,6 +114,7 @@ import { RecentActivity } from "@/components/ActivityLog";
 import { AppointmentsOverview } from "@/components/AppointmentsOverview";
 import { KindIcon, KindLabel, VehiclePicker } from "@/components/VehiclePicker";
 import DriverAssignment from "@/components/DriverAssignment";
+import { reveal } from "@/lib/notify";
 import GuestContact from "@/components/GuestContact";
 import { useDrivers, useHospitals, useLiveVehicles, useNow, useSharedState } from "@/lib/useShared";
 import { locationFreshness, type VehicleLocation } from "@/lib/vehicleLocation";
@@ -365,10 +366,16 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
   }, [requests, now, liveGps]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // رسالة لمشرف السيارات عند وصول سيارة، وتنبيه على الجهاز إن فعّله
-  useArrivalAlerts({ arrivals, appointments, hospitals, driverOf });
-  useCancellationAlerts({ requests, appointments });
-  useDenialAlerts({ requests, appointments });
-  useRedirectAlerts({ redirects, driverOf, onDispatch: redirectVehicle });
+  // الضغط على إشعار ينقل إلى مكانه في «توزيع السيارات» (ولو كان المشرف في «كل المواعيد»)
+  const openTarget = (target: string) => {
+    setView("dispatch");
+    if (target.startsWith("vehicle:")) setVehicleFilter("all");
+    reveal(target);
+  };
+  useArrivalAlerts({ arrivals, appointments, hospitals, driverOf, onOpen: openTarget });
+  useCancellationAlerts({ requests, appointments, onOpen: openTarget });
+  useDenialAlerts({ requests, appointments, onOpen: openTarget });
+  useRedirectAlerts({ redirects, driverOf, onDispatch: redirectVehicle, onOpen: openTarget });
   const [notifyDevice, setNotifyDevice] = useState(deviceNotificationsOn);
 
   async function toggleDeviceNotifications() {
@@ -582,7 +589,7 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
             <Panel tone="violet" icon={Navigation} title="توجيه سيارات خارج المجمع" count={redirects.length} description="سيارة عائدة من وجهتها لم تقطع نصف الطريق إلى المجمع، وهي أقرب إلى ضيف ينتظر العودة من المجمع">
               <div className="divide-y divide-slate-100">
                 {redirects.map((item) => (
-                  <div key={item.request.id} className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:p-5">
+                  <div key={item.request.id} data-target={`redirect:${item.request.id}`} className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:p-5">
                     <div className="min-w-0 flex-1">
                       <p className="font-medium text-ink">
                         <span dir="ltr">{item.vehicle.plate}</span> · {driverOf(item.vehicle.plate, item.vehicle.driver)} ← {item.appointment.patientName}
@@ -626,7 +633,7 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
                   const ready = choices.filter((choice) => !choice.why).map((choice) => choice.vehicle);
                   const zone = matchHospitalZone(trip.appointment, hospitals);
                   return (
-                    <div key={trip.request.id} className="flex flex-col gap-4 p-4 sm:p-5 lg:flex-row lg:items-center">
+                    <div key={trip.request.id} data-target={`request:${trip.request.id}`} className="flex flex-col gap-4 p-4 sm:p-5 lg:flex-row lg:items-center">
                       <div className="flex min-w-0 flex-1 gap-4">
                         <TimeBlock time={trip.appointment.appointmentAt} day={formatDay(trip.appointment.appointmentDate, now)} />
                         <div className="min-w-0">
@@ -778,6 +785,7 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
 
         <aside className="min-w-0 space-y-6">
           <Panel
+            id="fleet-arrivals"
             tone="green"
             icon={CheckCircle2}
             title="وصول السيارات اليوم"
@@ -801,7 +809,7 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
                   const appointment = appointments.find((item) => item.id === request.appointmentId);
                   const destination = appointment ? tripEndpoints(appointment, request.direction, hospitals).destination : "";
                   return (
-                    <li key={request.id} className="flex items-start gap-3 px-5 py-3">
+                    <li key={request.id} data-target={`arrival:${request.id}`} className="flex items-start gap-3 px-5 py-3">
                       <span dir="ltr" className="mt-0.5 w-12 shrink-0 text-sm font-semibold text-ink tabular">{timeLabel(at)}</span>
                       <div className="min-w-0 flex-1">
                         <p className="truncate text-sm font-medium text-ink"><span dir="ltr">{request.vehiclePlate}</span> · {driverOf(request.vehiclePlate, request.driver)}</p>
@@ -847,7 +855,7 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
                 const state = availabilityText(vehicle);
                 const live = liveGps.get(vehicle.plate);
                 return (
-                  <li key={vehicle.plate} className="flex items-center gap-2 px-3 py-2.5">
+                  <li key={vehicle.plate} data-target={`vehicle:${vehicle.plate}`} className="flex items-center gap-2 px-3 py-2.5">
                     <div className="min-w-0 flex-1">
                       {/* الضغط على السيارة يفتح تفاصيلها: السائق ورقمه، والحالة، ومن فيها، ورحلاتها اليوم */}
                       <button
@@ -1064,7 +1072,7 @@ function ActiveTrip({ trips, phase, late = false, vehicle, driver, hospitals, on
   const step = phase.kind === "toPickup" ? (phase.atPickup ? 1 : 0) : phase.kind === "toDestination" ? 2 : 3;
   const destinations = Array.from(new Set(trips.map((trip) => tripEndpoints(trip.appointment, trip.request.direction, hospitals, trip.from).destination)));
   return (
-    <article className="p-4 sm:p-5">
+    <article data-target={trips.map((trip) => `trip:${trip.request.id}`).join(" ")} className="p-4 sm:p-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="flex min-w-0 items-center gap-3">
           <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-50 text-blue-700"><Truck className="h-5 w-5" /></span>

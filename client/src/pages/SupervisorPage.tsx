@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
+import { goTo, reveal } from "@/lib/notify";
 import { Accessibility, AlertTriangle, ArrowLeftRight, Ban, BellRing, BriefcaseMedical, Building2, Check, CheckCircle2, ChevronDown, Clock3, Footprints, Hospital, House, Link2, MapPin, Ribbon, RotateCcw, ShieldCheck, Smartphone, Stethoscope, Timer, Truck, UserMinus, Users, XCircle } from "lucide-react";
 import {
   CANCEL_REASONS,
@@ -565,9 +566,11 @@ function useCheckAlerts(rows: Required<Row>[]) {
     if (!fresh.length) return;
     fresh.forEach((item) => seen.current!.add(item.key));
     for (const { appointment, request, check } of fresh) {
+      // الضغط على الإشعار يفتح بطاقة الطلب وفيها التأكيد والنفي
       toast.warning(`السائق سجّل ${check.kind === "arrival" ? "وصول السيارة" : request.nurseOnly ? "استلام الـ Nurse" : "استلام الضيف"}: ${request.nurseOnly ? `الـ Nurse · ${appointment.patientName}` : appointment.patientName}`, {
         description: `السيارة ${request.vehiclePlate ?? ""} · أكّد أو انفِ خلال 5 دقائق، وإلا يُقبل تلقائيًا`,
         duration: 20000,
+        ...goTo(() => reveal(`request:${request.id}`)),
       });
     }
     beep();
@@ -582,6 +585,7 @@ function useUnreturnedAlert(count: number) {
       toast.error(`${count === 1 ? "ضيف لم تُسجَّل عودته" : `${count} ضيوف لم تُسجَّل عودتهم`} من أيام سابقة`, {
         description: "تأكد من حالتهم في «لم تُسجَّل عودتهم» أعلى الصفحة: هل عادوا بأنفسهم؟",
         duration: 15000,
+        ...goTo(() => reveal("sup-unreturned")),
       });
     }
     shown.current = count;
@@ -912,6 +916,7 @@ function ProgressRow({ appointment, request, byOther = false, day, driver, phase
         : <Badge tone={step === 0 ? "amber" : "blue"}>{step === 0 ? "بانتظار إرسال سيارة" : rider(statusText(request.status))}</Badge>;
   return (
     <Expandable
+      target={`request:${request.id}`}
       label={`تفاصيل طلب ${request.nurseOnly ? `الـ Nurse مرافقة ${appointment.patientName}` : appointment.patientName}`}
       attention={Boolean(check) || late !== null}
       summary={(

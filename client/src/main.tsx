@@ -1,4 +1,5 @@
 import { createRoot } from "react-dom/client";
+import { installToastLinks } from "./lib/notify";
 import App from "./App";
 import { installNeedsChrome } from "./lib/browser";
 import "./index.css";
@@ -14,6 +15,8 @@ if (!installNeedsChrome()) {
 
 // تسجيل الدخول وتحميل البيانات المشتركة يتمان داخل بوابة الدخول (RolePortal).
 createRoot(document.getElementById("root")!).render(<App />);
+// الضغط على إشعار له مكان ينقل إليه
+installToastLinks();
 
 // عامل الخدمة يجعل الموقع قابلًا للتثبيت على الشاشة الرئيسية للهاتف (في النسخة المنشورة فقط).
 if (import.meta.env.PROD && "serviceWorker" in navigator) {

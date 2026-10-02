@@ -437,7 +437,7 @@ export function StatusBar({ items, label }: { items: StatusItem[]; label: string
  * والتفاصيل وباقي الإجراءات تنزل بحركة ناعمة. attention: تُفتح وحدها بخط كهرماني حين تحتاج انتباهًا
  * (تأكيد خلال مهلة، سيارة متأخرة)، ويستطيع المستخدم طيّها حتى يأتي تنبيه جديد.
  */
-export function Expandable({ summary, action, children, attention = false, label }: {
+export function Expandable({ summary, action, children, attention = false, label, target }: {
   /** بلا روابط أو أزرار داخله (عناصر span فقط): كله زر واحد يفتح البطاقة */
   summary: ReactNode;
   action?: ReactNode;
@@ -445,9 +445,18 @@ export function Expandable({ summary, action, children, attention = false, label
   attention?: boolean;
   /** اسم الزر لقارئ الشاشة (مثل «تفاصيل ضيف …») */
   label: string;
+  /** علامة البطاقة للإشعار الذي ينقل إليها (reveal في lib/notify.ts يفتحها) */
+  target?: string;
 }) {
   // null: تتبع attention، وبعد لمس المستخدم تتبع اختياره حتى يبدأ تنبيه جديد
   const [open, setOpen] = useState<boolean | null>(null);
+  const root = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const element = root.current;
+    const show = () => setOpen(true);
+    element?.addEventListener("reveal", show);
+    return () => element?.removeEventListener("reveal", show);
+  }, []);
   const [wasAttention, setWasAttention] = useState(attention);
   if (attention !== wasAttention) {
     setWasAttention(attention);
@@ -456,7 +465,7 @@ export function Expandable({ summary, action, children, attention = false, label
   const expanded = open ?? attention;
   const bodyId = useId();
   return (
-    <div className={cx(
+    <div ref={root} data-target={target} className={cx(
       "relative transition-colors duration-300",
       attention ? "bg-amber-50/40" : expanded ? "bg-slate-50/70" : "hover:bg-slate-50/50",
     )}>
