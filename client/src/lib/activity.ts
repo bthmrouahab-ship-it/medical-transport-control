@@ -19,6 +19,7 @@ export const ACTIVITY_TYPES: Record<string, string> = {
   appointment: "المواعيد",
   request: "طلبات السيارات",
   vehicle: "السيارات",
+  driver: "السائقون",
   hospital: "دليل المستشفيات",
   guest: "قائمة الضيوف",
   user: "المستخدمون",

@@ -158,7 +158,7 @@ export function VehiclePicker({ label, options, value, onChange, disabled, inval
                 <span className="block truncate text-sm">
                   <span dir="ltr" className={cx("font-bold tabular", why ? "text-slate-400" : styleOf(vehicle).text)}>{vehicle.plate}</span>
                   <span className="text-slate-400"> · </span>
-                  <span className={why ? "text-slate-400" : "font-medium text-ink"}>{driverOf(vehicle)}</span>
+                  <span className={why ? "text-slate-400" : "font-medium text-ink"}>{driverOf(vehicle) || "بلا سائق"}</span>
                 </span>
                 <span className="block truncate text-xs">
                   <span className={why ? "font-semibold text-slate-400" : undefined}>{why ? `${styleOf(vehicle).label}${roleText(vehicle) ? ` · ${roleText(vehicle)}` : ""}` : <KindLabel vehicle={vehicle} extra={roleText(vehicle)} />}</span>

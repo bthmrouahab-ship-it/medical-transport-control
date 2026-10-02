@@ -35,8 +35,9 @@ describe("users", () => {
 
 describe("vehicle management", () => {
   it("normalizes and accepts valid vehicle data", () => {
-    const result = validateVehicle({ plate: " ١٢٣٤٥٦ ", driver: "  أحمد   علي ", phone: "5512 3456", kind: "باص" }, DEFAULT_VEHICLES);
-    expect(result).toEqual({ vehicle: { plate: "123456", driver: "أحمد علي", phone: "55123456", kind: "باص" } });
+    // السائق منفصل عن السيارة (shared/drivers.ts): السيارة رقمها ونوعها فقط
+    const result = validateVehicle({ plate: " ١٢٣٤٥٦ ", kind: "باص" }, DEFAULT_VEHICLES);
+    expect(result).toEqual({ vehicle: { plate: "123456", kind: "باص" } });
   });
 
   it("rejects duplicate plates except for the vehicle being edited", () => {
@@ -45,9 +46,9 @@ describe("vehicle management", () => {
     expect(validateVehicle(existing, DEFAULT_VEHICLES, existing.plate)).toHaveProperty("vehicle");
   });
 
-  it("rejects invalid phone numbers and names", () => {
-    expect(validateVehicle({ plate: "999", driver: "علي", phone: "123", kind: "سيدان" }, [])).toHaveProperty("error");
-    expect(validateVehicle({ plate: "999", driver: "", phone: "55123456", kind: "سيدان" }, [])).toHaveProperty("error");
+  it("rejects invalid plates and kinds", () => {
+    expect(validateVehicle({ plate: "9", kind: "سيدان" }, [])).toHaveProperty("error");
+    expect(validateVehicle({ plate: "999", kind: "شاحنة" as never }, [])).toHaveProperty("error");
   });
 
   it("detects vehicles on an active trip", () => {

@@ -25,12 +25,21 @@ const REQUEST_STATUSES = ['بانتظار التوزيع', 'تم إرسال ال
 const CHECK_FIELDS = ['arrivalCheck', 'arrivalCheckBy', 'arrivalCheckAt', 'pickupCheck', 'pickupCheckBy', 'pickupCheckAt'];
 /** مهلة رد مشرف المبنى بالثواني؛ بعدها يُعتبر ما سجّله السائق مقبولًا (نفس القيمة في shared/driverChecks.ts) */
 const CHECK_SECONDS = 300;
+/** تغيير السيارة بعد إرسالها (عطل أو حادث أو تأخر): السيارة السابقة، والسبب، ووقت التغيير */
+const VEHICLE_CHANGE_FIELDS = ['previousPlate', 'changeReason', 'changedAt'];
 const REQUEST_FIELDS = ['id', 'appointmentId', 'vehiclePlate', 'driver', 'direction', 'status', 'notificationMethod',
     'createdAt', 'groupId', 'notificationSentAt', 'requestedBy', 'pickedUpAt', 'etaAt', 'destLat', 'destLng', 'arrivedAt', 'arrivalSource',
-    'fromAppointmentId', 'nurseOnly', 'driverArrivedAt', 'arrivalGps', 'pickupGps', ...CHECK_FIELDS, '_o'];
+    'fromAppointmentId', 'nurseOnly', 'driverArrivedAt', 'arrivalGps', 'pickupGps', ...CHECK_FIELDS, ...VEHICLE_CHANGE_FIELDS, '_o'];
 /** خانات مرحلة الطريق إلى الوجهة (تُكتب عند استلام المريض وعند الوصول) */
 const TRIP_FIELDS = ['pickedUpAt', 'etaAt', 'destLat', 'destLng', 'arrivedAt', 'arrivalSource'];
-const VEHICLE_FIELDS = ['plate', 'driver', 'phone', 'kind', 'available', 'busRole', 'fullCapacity', '_o'];
+/** driver وphone: اسم السائق المخصص للسيارة ورقمه، منسوخان من قائمة السائقين (driverId) ويحدّثهما الخادم */
+const VEHICLE_FIELDS = ['plate', 'driver', 'phone', 'kind', 'available', 'busRole', 'fullCapacity', 'driverId', 'driverSince', '_o'];
+/** تخصيص السائق للسيارة (مشرف السيارات في بداية الشفت) */
+const VEHICLE_DRIVER_FIELDS = ['driverId', 'driver', 'phone', 'driverSince'];
+/** قائمة السائقين (المدير): uid حساب تطبيق السائق المرتبط به، يربطه المدير من «المستخدمين» فقط */
+const DRIVER_FIELDS = ['id', 'name', 'phone', 'uid', '_o'];
+/** من يرى قائمة السائقين: المدير ومشرف السيارات (يخصصهم للسيارات) */
+const DRIVER_LIST_ROLES = ['admin', 'fleetSupervisor'];
 const VEHICLE_KINDS = ['سيدان', 'احتياجات خاصة', 'باص'];
 /** تخصيص الباص: باص المجمع، أو باص الرحلات غير الطبية، أو باص العيادة (نفس القيم في shared/transport.ts) */
 const BUS_ROLE_VALUES = ['shuttle', 'nonMedical', 'clinic'];
@@ -51,12 +60,32 @@ const GUEST_STATS_ROLES = ['admin', 'fleetSupervisor'];
 /** بيانات الضيف في الموعد: يجب أن تطابق القائمة */
 const APPOINTMENT_GUEST_FIELDS = ['guestId', 'patientName', 'buildingNumber', 'apartmentNumber', 'nurse'];
 /** المجموعات التي تُزامن مع موظفي المكتب */
-const SYNC_COLLECTIONS = ['appointments', 'requests', 'fleet', 'hospitals', 'vehicleLocations', 'meta', 'guests'];
+const SYNC_COLLECTIONS = ['appointments', 'requests', 'fleet', 'hospitals', 'vehicleLocations', 'meta', 'guests', 'drivers'];
 
-/** مجموعات المزامنة لهذا المستخدم: قائمة الضيوف للمدير والعيادة فقط */
+/** مجموعات المزامنة لهذا المستخدم: قائمة الضيوف للمدير والعيادة فقط، وقائمة السائقين للمدير ومشرف السيارات */
 function sync_collections(array $user): array
 {
-    return array_values(array_filter(SYNC_COLLECTIONS, fn(string $col) => $col !== 'guests' || in_array($user['role'], GUEST_LIST_ROLES, true)));
+    return array_values(array_filter(SYNC_COLLECTIONS, fn(string $col) => ($col !== 'guests' || in_array($user['role'], GUEST_LIST_ROLES, true))
+        && ($col !== 'drivers' || in_array($user['role'], DRIVER_LIST_ROLES, true))));
+}
+
+/** سائق من قائمة السائقين: الاسم إلزامي، والرقم 8 إلى 15 رقمًا إن وُجد، وحساب التطبيق لا يتغير هنا (يربطه المدير من «المستخدمين») */
+function valid_driver(array $data, string $id, ?array $before): bool
+{
+    return only(array_keys($data), DRIVER_FIELDS)
+        && ($data['id'] ?? null) === $id
+        && is_text($data['name'] ?? null, 60) && mb_strlen(trim($data['name'])) >= 2
+        && (!array_key_exists('phone', $data) || (is_string($data['phone']) && preg_match('/^\+?\d{8,15}$/', $data['phone'])))
+        && ($data['uid'] ?? null) === ($before['uid'] ?? null);
+}
+
+/** السائق المخصص للسيارة موجود في قائمة السائقين (أو بلا سائق)، ووقت تخصيصه نص قصير */
+function valid_vehicle_driver(array $vehicle, ?callable $docOf): bool
+{
+    $driverId = $vehicle['driverId'] ?? null;
+    if ($driverId !== null && (!is_string($driverId) || !preg_match('/^[A-Za-z0-9._:-]{1,160}$/', $driverId) || !$docOf || $docOf('drivers', $driverId) === null)) return false;
+    return (!array_key_exists('driverSince', $vehicle) || is_text($vehicle['driverSince'], 30))
+        && is_text($vehicle['driver'] ?? '', 60) && is_text($vehicle['phone'] ?? '', 20);
 }
 
 /** المستند كما يُرسل في المزامنة: قائمة الضيوف بلا العمر والرقم الصحي */
@@ -406,6 +435,25 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
             // مشرف السيارات: إرسال السيارة وجمع الرحلات، وتأكيد وصولها إلى الوجهة (يدويًا أو بانتهاء المدة التقديرية)،
             // وإنهاء رحلة عالقة قبل تسجيل الاستلام (يدويًا فقط) حتى تتفرغ السيارة
             if ($role === 'fleetSupervisor') {
+                // تغيير السيارة بعد إرسالها وقبل وصولها إلى الوجهة: سيارة موجودة أخرى ومعها السيارة السابقة والسبب ووقته.
+                // قبل استلام الضيف تعود الرحلة إلى «تم إرسال السيارة» ويُمحى ما سجّله سائق السيارة السابقة عند الاستلام،
+                // وبعد الاستلام تبقى «تم استلام المريض» (تكمل السيارة الجديدة الطريق)
+                if (in_array('vehiclePlate', $changed, true) && !empty($before['vehiclePlate'])) {
+                    $from = $before['status'] ?? null;
+                    $beforePickup = in_array($from, ['تم إرسال السيارة', 'وصلت السيارة'], true);
+                    $arrivalFields = ['driverArrivedAt', 'arrivalGps', 'arrivalCheck', 'arrivalCheckBy', 'arrivalCheckAt'];
+                    $allowed = ['vehiclePlate', 'driver', 'notificationSentAt', ...VEHICLE_CHANGE_FIELDS, ...($beforePickup ? ['status', ...$arrivalFields] : [])];
+                    $plate = $after['vehiclePlate'] ?? null;
+                    $valid = ($beforePickup || $from === 'تم استلام المريض')
+                        && only($changed, $allowed)
+                        && ($after['status'] ?? null) === ($beforePickup ? 'تم إرسال السيارة' : $from)
+                        && !array_intersect(array_keys($after), $beforePickup ? $arrivalFields : [])
+                        && is_string($plate) && valid_doc_id($plate) && $plate !== $before['vehiclePlate'] && $docOf && $docOf('fleet', $plate) !== null
+                        && ($after['previousPlate'] ?? null) === $before['vehiclePlate']
+                        && is_text($after['changeReason'] ?? null, 120) && trim($after['changeReason']) !== ''
+                        && is_iso($after['changedAt'] ?? null);
+                    return $valid ? null : $denied;
+                }
                 if (!only($changed, ['vehiclePlate', 'driver', 'status', 'groupId', 'notificationSentAt', 'arrivedAt', 'arrivalSource'])) return $denied;
                 $to = $after['status'] ?? null;
                 $from = $before['status'] ?? null;
@@ -450,13 +498,15 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
             if ($after === null) return $role === 'admin' ? null : $denied;
             if ($role === 'admin') {
                 return only(array_keys($after), VEHICLE_FIELDS) && ($after['plate'] ?? null) === $id
-                    && in_array($after['kind'] ?? null, VEHICLE_KINDS, true) && valid_bus_role($after) && valid_full_capacity($after) ? null : 'بيانات السيارة غير صالحة';
+                    && in_array($after['kind'] ?? null, VEHICLE_KINDS, true) && valid_bus_role($after) && valid_full_capacity($after)
+                    && valid_vehicle_driver($after, $docOf) ? null : 'بيانات السيارة غير صالحة';
             }
             // مشرف السيارات يغيّر إتاحة السيارة، وتخصيص الباص (باص المجمع أو الرحلات غير الطبية أو العيادة)،
-            // وتشغيل السيدان بطاقتها الكاملة (4 أشخاص)
+            // وتشغيل السيدان بطاقتها الكاملة (4 أشخاص)، والسائق الذي يقودها (في بداية الشفت)
             if ($role === 'fleetSupervisor' && $before !== null) {
-                return only($changed, ['available', 'busRole', 'fullCapacity']) && is_bool($after['available'] ?? null)
-                    && valid_bus_role($after) && valid_full_capacity($after) ? null : $denied;
+                return only($changed, ['available', 'busRole', 'fullCapacity', ...VEHICLE_DRIVER_FIELDS]) && is_bool($after['available'] ?? null)
+                    && valid_bus_role($after) && valid_full_capacity($after)
+                    && (!array_intersect($changed, VEHICLE_DRIVER_FIELDS) || valid_vehicle_driver($after, $docOf)) ? null : $denied;
             }
             return $denied;
 
@@ -470,6 +520,11 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
                 && is_numeric($after['lng'] ?? null) && $after['lng'] > 50 && $after['lng'] < 52.5
                 && is_array($after['aliases'] ?? null) && count($after['aliases']) <= 40;
             return $valid ? null : 'بيانات المستشفى غير صالحة';
+
+        case 'drivers':
+            // قائمة السائقين: المدير يضيف السائق ويعدّل اسمه ورقمه ويحذفه
+            if ($role !== 'admin') return $denied;
+            return $after === null || valid_driver($after, $id, $before) ? null : 'بيانات السائق غير صالحة';
 
         case 'guests':
             // قائمة ضيوف المجمع: المدير يضيف ضيفًا ويعدّل بياناته (المبنى والشقة) ويحذفه

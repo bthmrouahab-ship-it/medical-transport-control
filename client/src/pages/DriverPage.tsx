@@ -207,6 +207,12 @@ export default function DriverPage({ profile, onLogout, onChangePassword }: {
     }
   }, [plate]);
 
+  // غيّر مشرف السيارات سيارة السائق: رحلات السيارة الجديدة تظهر بلا تنبيه «رحلة جديدة»، وبلا سيارة تتوقف المشاركة
+  useEffect(() => {
+    known.current = null;
+    if (!plate && watchId.current !== null) stop(true);
+  }, [plate]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // تحديث الرحلات كل بضع ثوانٍ والتطبيق ظاهر، وفورًا عند العودة إليه
   useEffect(() => {
     loadTrips();

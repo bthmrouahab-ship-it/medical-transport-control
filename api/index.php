@@ -16,6 +16,7 @@ require __DIR__ . '/lib/rules.php';
 require __DIR__ . '/lib/activity.php';
 require __DIR__ . '/lib/push.php';
 require __DIR__ . '/lib/driver.php';
+require __DIR__ . '/lib/drivers.php';
 
 /** محاولات خاطئة قبل الإيقاف: للحساب الواحد، ولعنوان الشبكة (موظفو المكتب قد يشتركون في عنوان واحد) */
 const LOGIN_MAX_FAILURES = ['u' => 10, 'ip' => 50];
@@ -181,13 +182,6 @@ function route_users(PDO $pdo): array
     return ['users' => array_map('profile', $rows)];
 }
 
-function vehicle_exists(PDO $pdo, string $plate): bool
-{
-    $stmt = $pdo->prepare("SELECT 1 FROM docs WHERE col = 'fleet' AND id = ? AND data IS NOT NULL");
-    $stmt->execute([$plate]);
-    return (bool)$stmt->fetchColumn();
-}
-
 function route_users_create(PDO $pdo, array $body): array
 {
     $admin = current_user($pdo);
@@ -199,17 +193,33 @@ function route_users_create(PDO $pdo, array $body): array
     if (!in_array($role, ROLES, true)) throw new ApiException(400, 'اختر دورًا صحيحًا', 'invalid');
     $password = (string)($body['password'] ?? '');
     if ($error = validate_password($password)) throw new ApiException(400, $error, 'invalid');
-    $plate = $role === 'driver' ? trim((string)($body['vehiclePlate'] ?? '')) : null;
-    if ($role === 'driver' && ($plate === '' || !vehicle_exists($pdo, $plate))) throw new ApiException(400, 'اختر السيارة المرتبطة بالسائق', 'invalid');
+    // حساب السائق يُربط بسائق من قائمة السائقين (اختياري)، وسيارته يخصصها مشرف السيارات لسائقه
+    $driverId = $role === 'driver' ? driver_id_of($body['driverId'] ?? null) : null;
     $exists = $pdo->prepare('SELECT 1 FROM users WHERE username = ?');
     $exists->execute([$username]);
     if ($exists->fetchColumn()) throw new ApiException(409, 'اسم المستخدم مستخدم مسبقًا', 'exists');
-    $pdo->prepare('INSERT INTO users (username, display_name, role, active, must_change_password, vehicle_plate, password_hash, created_at, created_by)
-        VALUES (?, ?, ?, 1, 1, ?, ?, ?, ?)')
-        ->execute([$username, $displayName, $role, $plate, password_hash($password, PASSWORD_DEFAULT), now_iso(), $admin['username']]);
-    $created = user_row($pdo, (int)$pdo->lastInsertId());
-    log_activity($pdo, $admin, 'user', 'user.create', "إنشاء حساب $username ($displayName) بدور " . ACTIVITY_ROLE_LABELS[$role] . ($plate ? " للسيارة $plate" : ''), $username, ['plate' => $plate ?? '']);
-    return ['user' => profile($created)];
+    $pdo->beginTransaction();
+    try {
+        $pdo->prepare('INSERT INTO users (username, display_name, role, active, must_change_password, password_hash, created_at, created_by)
+            VALUES (?, ?, ?, 1, 1, ?, ?, ?)')
+            ->execute([$username, $displayName, $role, password_hash($password, PASSWORD_DEFAULT), now_iso(), $admin['username']]);
+        $id = (int)$pdo->lastInsertId();
+        $link = $driverId !== null ? link_driver_account($pdo, (string)$id, $driverId, next_revision($pdo)) : ['to' => null];
+        log_activity($pdo, $admin, 'user', 'user.create', "إنشاء حساب $username ($displayName) بدور " . ACTIVITY_ROLE_LABELS[$role] . ($link['to'] ? " للسائق {$link['to']}" : ''), $username, ['driver' => $link['to'] ?? '']);
+        $pdo->commit();
+    } catch (Throwable $error) {
+        $pdo->rollBack();
+        throw $error;
+    }
+    return ['user' => profile(user_row($pdo, $id))];
+}
+
+/** رقم سائق من الطلب: نص صالح، أو null (بلا سائق) */
+function driver_id_of($value): ?string
+{
+    if ($value === null || $value === '') return null;
+    if (!is_string($value) || !valid_doc_id($value)) throw new ApiException(400, 'اختر سائقًا من قائمة السائقين', 'invalid');
+    return $value;
 }
 
 function target_user(PDO $pdo, array $body): array
@@ -235,30 +245,38 @@ function route_users_update(PDO $pdo, array $body): array
         if (!is_bool($changes['active'])) throw new ApiException(400, 'قيمة غير صالحة', 'invalid');
         $fields['active'] = $changes['active'] ? 1 : 0;
     }
-    if (array_key_exists('vehiclePlate', $changes)) {
-        $plate = trim((string)$changes['vehiclePlate']);
-        if (!vehicle_exists($pdo, $plate)) throw new ApiException(400, 'اختر السيارة المرتبطة بالسائق', 'invalid');
-        $fields['vehicle_plate'] = $plate;
-    }
     // المدير لا يستطيع إيقاف نفسه أو سحب صلاحية المدير من نفسه
     if ((int)$row['id'] === (int)$admin['id'] && ((isset($fields['role']) && $fields['role'] !== 'admin') || (isset($fields['active']) && !$fields['active']))) {
         throw new ApiException(403, 'لا يمكنك إيقاف حسابك أو تغيير دورك', 'permission_denied');
     }
     $role = $fields['role'] ?? $row['role'];
-    $plate = $fields['vehicle_plate'] ?? $row['vehicle_plate'];
-    if ($role === 'driver' && !$plate) throw new ApiException(400, 'اختر السيارة المرتبطة بالسائق', 'invalid');
-    if ($fields) {
-        $set = implode(', ', array_map(fn($field) => "$field = ?", array_keys($fields)));
-        $pdo->prepare("UPDATE users SET $set WHERE id = ?")->execute([...array_values($fields), $row['id']]);
-        $labels = [
-            'display_name' => fn($value) => "الاسم: {$row['display_name']} ← $value",
-            'role' => fn($value) => 'الدور: ' . (ACTIVITY_ROLE_LABELS[$row['role']] ?? $row['role']) . ' ← ' . (ACTIVITY_ROLE_LABELS[$value] ?? $value),
-            'active' => fn($value) => $value ? 'تفعيل الحساب' : 'إيقاف الحساب',
-            'vehicle_plate' => fn($value) => "السيارة: {$row['vehicle_plate']} ← $value",
-        ];
-        $changes = [];
-        foreach ($fields as $field => $value) if ((string)$row[$field] !== (string)$value) $changes[] = $labels[$field]($value);
-        if ($changes) log_activity($pdo, $admin, 'user', 'user.update', "تعديل حساب {$row['username']}: " . implode('، ', $changes), $row['username']);
+    // ربط حساب السائق بسائق من القائمة (أو إلغاؤه)؛ الحساب الذي لم يعد سائقًا يُلغى ربطه
+    $relink = array_key_exists('driverId', $changes) || ($row['role'] === 'driver' && $role !== 'driver');
+    $driverId = $role === 'driver' && array_key_exists('driverId', $changes) ? driver_id_of($changes['driverId']) : null;
+    $pdo->beginTransaction();
+    try {
+        $log = [];
+        if ($fields) {
+            $set = implode(', ', array_map(fn($field) => "$field = ?", array_keys($fields)));
+            $pdo->prepare("UPDATE users SET $set WHERE id = ?")->execute([...array_values($fields), $row['id']]);
+            $labels = [
+                'display_name' => fn($value) => "الاسم: {$row['display_name']} ← $value",
+                'role' => fn($value) => 'الدور: ' . (ACTIVITY_ROLE_LABELS[$row['role']] ?? $row['role']) . ' ← ' . (ACTIVITY_ROLE_LABELS[$value] ?? $value),
+                'active' => fn($value) => $value ? 'تفعيل الحساب' : 'إيقاف الحساب',
+            ];
+            foreach ($fields as $field => $value) if ((string)$row[$field] !== (string)$value) $log[] = $labels[$field]($value);
+        }
+        if ($relink || isset($fields['role'])) {
+            $link = $relink ? link_driver_account($pdo, (string)$row['id'], $driverId, next_revision($pdo)) : null;
+            // تغيّر الدور: سيارة الحساب تتبع دوره الجديد
+            if (!$relink) normalize_fleet_drivers($pdo, next_revision($pdo));
+            if ($link && $link['from'] !== $link['to']) $log[] = 'السائق: ' . ($link['from'] ?? 'بلا سائق') . ' ← ' . ($link['to'] ?? 'بلا سائق');
+        }
+        if ($log) log_activity($pdo, $admin, 'user', 'user.update', "تعديل حساب {$row['username']}: " . implode('، ', $log), $row['username']);
+        $pdo->commit();
+    } catch (Throwable $error) {
+        $pdo->rollBack();
+        throw $error;
     }
     return ['user' => profile(user_row($pdo, (int)$row['id']))];
 }
@@ -362,6 +380,7 @@ function route_write(PDO $pdo, array $body): array
     $pdo->beginTransaction();
     try {
         $rev = next_revision($pdo);
+        $fleetChanged = false;
         foreach ($ops as $op) {
             $col = (string)($op['col'] ?? '');
             $id = (string)($op['id'] ?? '');
@@ -390,7 +409,10 @@ function route_write(PDO $pdo, array $body): array
             save_doc($pdo, $col, $id, $after, $rev);
             if ($entry) log_activity($pdo, empty($entry[4]) ? $user : null, $entry[0], $entry[1], $entry[2], $id, $entry[3]);
             if ($col === 'requests') queue_request_pushes($pdo, $before, $after);
+            if ($col === 'fleet' || $col === 'drivers') $fleetChanged = true;
         }
+        // اسم السائق ورقمه في السيارات، والسائق في سيارة واحدة، وحسابات السائقين تتبع سياراتهم
+        if ($fleetChanged) normalize_fleet_drivers($pdo, $rev);
         $pdo->commit();
     } catch (Throwable $error) {
         $pdo->rollBack();
@@ -521,7 +543,7 @@ function route_location(PDO $pdo, array $body): array
     $user = current_user($pdo);
     require_role($user, ['driver']);
     $plate = (string)($user['vehicle_plate'] ?? '');
-    if ($plate === '' || !valid_doc_id($plate)) throw new ApiException(400, 'لم يربط مدير النظام حسابك بسيارة بعد.', 'no_vehicle');
+    if ($plate === '' || !valid_doc_id($plate)) throw new ApiException(400, NO_VEHICLE_MESSAGE, 'no_vehicle');
     $sharing = (bool)($body['sharing'] ?? false);
     $pdo->beginTransaction();
     try {
@@ -541,7 +563,8 @@ function route_location(PDO $pdo, array $body): array
                 'accuracy' => $number($body['accuracy'] ?? null),
                 'speed' => $number($body['speed'] ?? null),
                 'heading' => $number($body['heading'] ?? null),
-                'driver' => $user['display_name'],
+                // اسم السائق من قائمة السائقين (المرتبط بالحساب)، وإلا الاسم الظاهر للحساب
+                'driver' => account_driver($pdo, (string)$user['id'])['name'] ?? $user['display_name'],
                 'sharing' => true,
                 'updatedAt' => now_iso(),
             ];

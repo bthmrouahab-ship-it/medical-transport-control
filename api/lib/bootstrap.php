@@ -14,6 +14,8 @@ const CLINIC_ROLES = ['clinic', 'clinicLead'];
 const BUILDING_ROLES = ['buildingSupervisor', 'buildingLead'];
 /** خروج تلقائي بعد ساعة بلا نشاط */
 const IDLE_SECONDS = 3600;
+/** نسخة قاعدة البيانات (settings.schema): 2 = فصل السائقين عن السيارات (migrate_drivers في drivers.php) */
+const SCHEMA_VERSION = 2;
 /** أقصى حجم لطلب واحد (رفع ملف إحصائيات كبير يُقسَّم على عدة طلبات) */
 const MAX_BODY_BYTES = 8 * 1024 * 1024;
 
@@ -53,13 +55,28 @@ function db(): PDO
     $config = load_config();
     if (!$config) throw new ApiException(503, 'لم يُضبط الموقع بعد. افتح صفحة الإعداد /api/setup.php', 'not_configured');
     $pdo = connect_db($config['db']);
-    // المواقع المضبوطة قبل إضافة جداول أو خانات جديدة (سجل العمليات، ثم إشعارات السائقين ولغتها) تُنشأ هنا (خارج أي معاملة)
+    // المواقع المضبوطة قبل إضافة جداول أو خانات أو تغيير شكل البيانات تُرقّى هنا مرة واحدة (خارج أي معاملة)
     try {
-        $pdo->query('SELECT lang FROM push_subscriptions LIMIT 0');
+        $version = (int)$pdo->query("SELECT v FROM settings WHERE k = 'schema'")->fetchColumn();
     } catch (PDOException) {
-        ensure_schema($pdo);
+        $version = 0;
     }
+    if ($version < SCHEMA_VERSION) upgrade_schema($pdo);
     return $pdo;
+}
+
+/** الجداول الجديدة (سجل العمليات، ثم إشعارات السائقين ولغتها)، ثم ترحيل البيانات. طلب واحد يرقّي، والطلبات معه تنتظره. */
+function upgrade_schema(PDO $pdo): void
+{
+    $pdo->query("SELECT GET_LOCK('althumama_schema', 30)")->fetchColumn();
+    try {
+        ensure_schema($pdo);
+        $version = (int)$pdo->query("SELECT v FROM settings WHERE k = 'schema'")->fetchColumn();
+        if ($version < 2) migrate_drivers($pdo);
+        $pdo->prepare("INSERT INTO settings (k, v) VALUES ('schema', ?) ON DUPLICATE KEY UPDATE v = VALUES(v)")->execute([(string)SCHEMA_VERSION]);
+    } finally {
+        $pdo->query("SELECT RELEASE_LOCK('althumama_schema')")->fetchColumn();
+    }
 }
 
 function connect_db(array $db): PDO

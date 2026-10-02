@@ -100,9 +100,10 @@ export default function FleetDashboard({ canEdit = false, alerts = false, actor 
       const phase = trip ? tripPhase(requests.find((request) => request.id === trip.id)!, now, isLive(vehicle.plate)) : null;
       const location = mapLocations.find((item) => item.plate === vehicle.plate);
       // المتاحة: داخل المجمع، أو خارجه عائدة من وجهتها
-      const place = !vehicle.available || phase ? null
+      const place = !vehicle.available || !vehicle.driver || phase ? null
         : vehicleLocationState(vehicle.plate, requests, appointments, hospitals, now, location && isLive(vehicle.plate) ? { lat: location.lat, lng: location.lng } : null);
       const status = !vehicle.available ? "خارج الخدمة"
+        : !phase && !vehicle.driver ? "بلا سائق"
         : phase?.kind === "toDestination" ? `مع الضيف · تصل ${timeLabel(phase.etaAt)}`
           : phase?.kind === "toPickup" ? "في الطريق للاستلام"
             : place?.kind === "outside" ? `متاحة خارج المجمع · تصل المجمع ${timeLabel(place.backAt)}` : "متاحة داخل المجمع";
@@ -152,7 +153,7 @@ export default function FleetDashboard({ canEdit = false, alerts = false, actor 
                         >
                           <Dot tone={FRESH_TONE[fresh?.state ?? "offline"]} pulse={fresh?.state === "live"} />
                           <span className="min-w-0 flex-1">
-                            <span className="block truncate text-sm font-medium text-ink">{driverOf(vehicle.plate, vehicle.driver)} <span dir="ltr" className="text-xs font-normal text-slate-400">{vehicle.plate}</span></span>
+                            <span className="block truncate text-sm font-medium text-ink">{driverOf(vehicle.plate, vehicle.driver) || "بلا سائق"} <span dir="ltr" className="text-xs font-normal text-slate-400">{vehicle.plate}</span></span>
                             <span className="block truncate text-xs text-slate-500">{status}</span>
                           </span>
                           <span className={cx("shrink-0 text-xs", shown ? "text-slate-600" : "text-slate-400")}>{fresh ? fresh.label : "لا يوجد GPS"}</span>

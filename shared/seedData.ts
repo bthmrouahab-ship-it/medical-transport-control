@@ -160,3 +160,6 @@ export const FLEET_SEED: Vehicle[] = [
     "available": true
   }
 ];
+
+/** السائقون الأوليون: سائق كل سيارة في الورقة (D-1، D-2، ...)، والسيارة مخصصة له (DEFAULT_VEHICLES في transport.ts) */
+export const DRIVERS_SEED = FLEET_SEED.map((vehicle, index) => ({ id: `D-${index + 1}`, name: vehicle.driver, phone: vehicle.phone }));

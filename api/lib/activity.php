@@ -32,6 +32,8 @@ const APPOINTMENT_FIELD_LABELS = [
 
 const VEHICLE_FIELD_LABELS = ['plate' => 'رقم السيارة', 'driver' => 'السائق', 'phone' => 'الهاتف', 'kind' => 'النوع', 'busRole' => 'تخصيص الباص'];
 
+const DRIVER_FIELD_LABELS = ['name' => 'الاسم', 'phone' => 'رقم الموبايل'];
+
 const REQUEST_FIELD_LABELS = [
     'vehiclePlate' => 'السيارة',
     'driver' => 'السائق',
@@ -217,6 +219,14 @@ function describe_write(PDO $pdo, string $col, string $id, ?array $before, ?arra
             if ($after === null) {
                 return ['request', 'request.cancel', "إلغاء طلب السيارة ($direction) لـ $who" . ($plate ? " وكانت السيارة $plate قد أُرسلت" : ''), $details];
             }
+            // تغيير السيارة بعد إرسالها (عطل أو حادث أو تأخر)
+            if ($before !== null && !empty($before['vehiclePlate']) && in_array('vehiclePlate', $changed, true)) {
+                $details['previous'] = $before['vehiclePlate'];
+                $details['reason'] = $after['changeReason'] ?? '';
+                $stage = ($after['status'] ?? '') === 'تم استلام المريض' ? ' · الضيف في الطريق، تكمل السيارة الجديدة الرحلة' : '';
+                return ['request', 'request.change_car', "تغيير سيارة $who ($direction): {$before['vehiclePlate']} ← $plate (" . ($after['driver'] ?? '') . ')'
+                    . ($details['reason'] !== '' ? " · السبب: {$details['reason']}" : '') . $stage, $details];
+            }
             $status = $after['status'] ?? '';
             // «تم استلام المريض» تُعرض «تم استلام الضيف»
             $details['status'] = str_replace('المريض', 'الضيف', $status);
@@ -276,8 +286,20 @@ function describe_write(PDO $pdo, string $col, string $id, ?array $before, ?arra
             $vehicle = $after ?? $before;
             $plate = $vehicle['plate'] ?? $id;
             $details = ['plate' => $plate, 'driver' => $vehicle['driver'] ?? '', 'kind' => $vehicle['kind'] ?? ''];
-            if ($before === null) return ['vehicle', 'vehicle.create', "إضافة السيارة $plate (" . ($vehicle['driver'] ?? '') . '، ' . ($vehicle['kind'] ?? '') . ')', $details];
-            if ($after === null) return ['vehicle', 'vehicle.delete', "حذف السيارة $plate (" . ($before['driver'] ?? '') . ')', $details];
+            $with = fn(string ...$parts) => ($parts = array_filter($parts, fn($part) => trim($part) !== '')) ? ' (' . implode('، ', $parts) . ')' : '';
+            if ($before === null) return ['vehicle', 'vehicle.create', "إضافة السيارة $plate" . $with($vehicle['driver'] ?? '', $vehicle['kind'] ?? ''), $details];
+            if ($after === null) return ['vehicle', 'vehicle.delete', "حذف السيارة $plate" . $with($before['driver'] ?? ''), $details];
+            // السائق الذي يقود السيارة (يختاره مشرف السيارات في بداية الشفت)
+            if (in_array('driverId', $changed, true)) {
+                $stmt = $pdo->prepare("SELECT data FROM docs WHERE col = 'drivers' AND id = ?");
+                $stmt->execute([(string)($after['driverId'] ?? '')]);
+                $name = (string)(decode_doc($stmt->fetchColumn() ?: null)['name'] ?? '');
+                $old = trim((string)($before['driver'] ?? ''));
+                $details['driver'] = $name;
+                return ['vehicle', 'vehicle.driver', $name !== ''
+                    ? "تسليم السيارة $plate للسائق $name" . ($old !== '' && $old !== $name ? " (بدل $old)" : '')
+                    : "السيارة $plate بلا سائق" . ($old !== '' ? " (كان $old)" : ''), $details];
+            }
             if ($changed === ['available']) {
                 return ['vehicle', 'vehicle.availability', !empty($after['available']) ? "إتاحة السيارة $plate للخدمة" : "إيقاف السيارة $plate عن الخدمة", $details];
             }
@@ -294,6 +316,16 @@ function describe_write(PDO $pdo, string $col, string $id, ?array $before, ?arra
             $changes = field_changes($withRole($before), $withRole($after), VEHICLE_FIELD_LABELS);
             $details['changes'] = changes_text($changes);
             return ['vehicle', 'vehicle.update', "تعديل بيانات السيارة $plate: " . changes_text($changes), $details];
+
+        case 'drivers':
+            $name = ($after ?? $before)['name'] ?? $id;
+            $details = ['driver' => $name];
+            if ($before === null) return ['driver', 'driver.create', "إضافة السائق $name" . (isset($after['phone']) ? " ({$after['phone']})" : '') . ' إلى قائمة السائقين', $details];
+            if ($after === null) return ['driver', 'driver.delete', "حذف السائق $name من قائمة السائقين", $details];
+            $changes = changes_text(field_changes($before, $after, DRIVER_FIELD_LABELS));
+            if ($changes === '') return null;
+            $details['changes'] = $changes;
+            return ['driver', 'driver.update', "تعديل بيانات السائق {$before['name']}: $changes", $details];
 
         case 'hospitals':
             $name = ($after ?? $before)['name'] ?? $id;

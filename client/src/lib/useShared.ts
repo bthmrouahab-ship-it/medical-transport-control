@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { DEFAULT_HOSPITALS, type Hospital } from "@shared/hospitals";
 import type { Guest } from "@shared/guests";
+import type { Driver } from "@shared/drivers";
 import { loadState, subscribeState, type SharedKey } from "./appStore";
 import { locationFreshness, type VehicleLocation } from "./vehicleLocation";
 
@@ -28,6 +29,11 @@ export function useHospitals(): Hospital[] {
 /** قائمة ضيوف المجمع (تصل للمدير والعيادة فقط، بلا العمر والرقم الصحي). */
 export function useGuests(): Guest[] {
   return useSharedState<Guest[]>("fox_guests", []);
+}
+
+/** قائمة السائقين (تصل للمدير ومشرف السيارات): مستقلة عن السيارات. */
+export function useDrivers(): Driver[] {
+  return useSharedState<Driver[]>("fox_drivers", []);
 }
 
 /** الوقت الحالي، يتحدث كل فترة حتى تُغلق مهلة الطلب تلقائيًا على الشاشة. */

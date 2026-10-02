@@ -5,6 +5,7 @@ import {
   ClipboardList,
   Contact,
   Copy,
+  IdCard,
   KeyRound,
   Loader2,
   Map as MapIcon,
@@ -41,7 +42,10 @@ import {
   type UserProfile,
   type UserRole,
 } from "@shared/users";
-import { hasSharedState, loadState, saveState, subscribeState } from "@/lib/appStore";
+import { hasSharedState, loadState, saveState, saveStates, subscribeState } from "@/lib/appStore";
+import { useDrivers } from "@/lib/useShared";
+import { driverOfAccount, type Driver } from "@shared/drivers";
+import { DRIVERS_SEED } from "@shared/seedData";
 import AppHeader from "@/components/AppHeader";
 import ActivityLog from "@/components/ActivityLog";
 import { dayRange } from "@/lib/activity";
@@ -53,8 +57,9 @@ import { authErrorMessage, createUser, resetUserPassword, updateUser, watchUsers
 // الخريطة والإحصائيات تُحمَّل عند فتح تبويبها فقط
 const FleetDashboard = lazy(() => import("@/components/FleetDashboard"));
 const GuestManager = lazy(() => import("@/components/GuestManager"));
+const DriverManager = lazy(() => import("@/components/DriverManager"));
 
-type Tab = "dashboard" | "users" | "guests" | "vehicles" | "audit";
+type Tab = "dashboard" | "users" | "guests" | "vehicles" | "drivers" | "audit";
 
 function loadRequests() {
   return loadState<unknown[]>("fox_requests", [])
@@ -73,7 +78,14 @@ export default function AdminPanel({ profile, onLogout, onChangePassword }: {
 
   useEffect(() => {
     // البيانات الأولية: السيارات والإحصائيات السابقة، وتحديث مواقع المستشفيات غير المؤكدة من الدليل.
-    if (!hasSharedState("fox_fleet")) saveState("fox_fleet", DEFAULT_VEHICLES);
+    // السيارات الأولية مع سائقيها (قائمة السائقين منفصلة، وكل سيارة مخصصة لسائقها في الورقة)
+    if (!hasSharedState("fox_fleet")) {
+      const withDrivers = !hasSharedState("fox_drivers");
+      saveStates([
+        ...(withDrivers ? [{ key: "fox_drivers" as const, value: DRIVERS_SEED }] : []),
+        { key: "fox_fleet", value: withDrivers ? DEFAULT_VEHICLES : DEFAULT_VEHICLES.map(({ driverId: _id, ...vehicle }) => ({ ...vehicle, driver: "", phone: "" })) },
+      ]);
+    }
     if (!hasSharedState("fox_history")) saveState("fox_history", HISTORY_SEED);
     if (hasSharedState("fox_hospitals")) {
       const stored = loadState<Hospital[]>("fox_hospitals", []);
@@ -101,6 +113,7 @@ export default function AdminPanel({ profile, onLogout, onChangePassword }: {
     { value: "users", label: "المستخدمون", icon: UsersRound },
     { value: "guests", label: "الضيوف", icon: Contact },
     { value: "vehicles", label: "السيارات", icon: Truck },
+    { value: "drivers", label: "السائقون", icon: IdCard },
     { value: "audit", label: "سجل العمليات", icon: ClipboardList },
   ];
 
@@ -113,9 +126,10 @@ export default function AdminPanel({ profile, onLogout, onChangePassword }: {
           <Segmented label="أقسام لوحة المدير" value={tab} onChange={setTab} options={tabs} />
         </nav>
         {tab === "dashboard" && <Suspense fallback={<div className="flex min-h-64 items-center justify-center text-slate-400"><Loader2 className="h-6 w-6 animate-spin" /><span className="sr-only">جارٍ التحميل</span></div>}><FleetDashboard canEdit actor={profile.displayName} /></Suspense>}
-        {tab === "users" && <UsersTab profile={profile} vehicles={vehicles} />}
+        {tab === "users" && <UsersTab profile={profile} />}
         {tab === "guests" && <Suspense fallback={<div className="flex min-h-64 items-center justify-center text-slate-400"><Loader2 className="h-6 w-6 animate-spin" /><span className="sr-only">جارٍ التحميل</span></div>}><GuestManager /></Suspense>}
         {tab === "vehicles" && <VehiclesTab vehicles={vehicles} requests={requests} onChange={updateVehicles} />}
+        {tab === "drivers" && <Suspense fallback={<div className="flex min-h-64 items-center justify-center text-slate-400"><Loader2 className="h-6 w-6 animate-spin" /><span className="sr-only">جارٍ التحميل</span></div>}><DriverManager vehicles={vehicles} /></Suspense>}
         {tab === "audit" && <AuditTab />}
       </main>
     </div>
@@ -124,7 +138,8 @@ export default function AdminPanel({ profile, onLogout, onChangePassword }: {
 
 // ————— المستخدمون —————
 
-function UsersTab({ profile, vehicles }: { profile: UserProfile; vehicles: Vehicle[] }) {
+function UsersTab({ profile }: { profile: UserProfile }) {
+  const drivers = useDrivers();
   const [users, setUsers] = useState<UserProfile[] | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [issued, setIssued] = useState<{ username: string; password: string } | null>(null);
@@ -167,8 +182,8 @@ function UsersTab({ profile, vehicles }: { profile: UserProfile; vehicles: Vehic
         || (stateFilter === "active" && user.active)
         || (stateFilter === "inactive" && !user.active)
         || (stateFilter === "pending" && user.active && user.mustChangePassword))
-      && words.every((word) => `${user.displayName} ${user.username} ${user.vehiclePlate ?? ""} ${ROLE_LABELS[user.role]}`.toLowerCase().includes(word)));
-  }, [users, query, roleFilter, stateFilter]);
+      && words.every((word) => `${user.displayName} ${user.username} ${user.vehiclePlate ?? ""} ${driverOfAccount(drivers, user.uid)?.name ?? ""} ${ROLE_LABELS[user.role]}`.toLowerCase().includes(word)));
+  }, [users, drivers, query, roleFilter, stateFilter]);
   const roleCounts = new Map<UserRole, number>();
   for (const user of users ?? []) roleCounts.set(user.role, (roleCounts.get(user.role) ?? 0) + 1);
 
@@ -183,7 +198,7 @@ function UsersTab({ profile, vehicles }: { profile: UserProfile; vehicles: Vehic
       {issued && <IssuedPassword {...issued} onClose={() => setIssued(null)} />}
       {showForm && (
         <NewUserForm
-          vehicles={vehicles}
+          drivers={drivers}
           onCancel={() => setShowForm(false)}
           onCreate={async (input) => {
             await createUser(input, profile.username);
@@ -205,7 +220,7 @@ function UsersTab({ profile, vehicles }: { profile: UserProfile; vehicles: Vehic
           <label className="relative block">
             <span className="sr-only">بحث في المستخدمين</span>
             <Search className="pointer-events-none absolute start-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-            <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="بحث: الاسم، اسم الدخول، السيارة..." className={cx(inputClass, "h-10 ps-9")} />
+            <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="بحث: الاسم، اسم الدخول، السائق، السيارة..." className={cx(inputClass, "h-10 ps-9")} />
           </label>
           <select aria-label="الدور" value={roleFilter} onChange={(event) => setRoleFilter(event.target.value as UserRole | "all")} className={cx(inputClass, "h-10", roleFilter !== "all" && "border-brand-600 bg-brand-50 text-brand-700")}>
             <option value="all">كل الأدوار</option>
@@ -246,23 +261,22 @@ function UsersTab({ profile, vehicles }: { profile: UserProfile; vehicles: Vehic
                 <div className="grid gap-2">
                   <select aria-label="الدور" disabled={isSelf || busy} value={user.role} onChange={(event) => {
                     const role = event.target.value as UserRole;
-                    const vehiclePlate = role === "driver" ? user.vehiclePlate ?? vehicles[0]?.plate : undefined;
-                    if (role === "driver" && !vehiclePlate) {
-                      toast.error("أضف سيارة أولًا لربطها بالسائق");
-                      return;
-                    }
-                    run(user.uid, () => updateUser(user.uid, vehiclePlate ? { role, vehiclePlate } : { role }), "تم تغيير الدور");
+                    run(user.uid, () => updateUser(user.uid, { role }), "تم تغيير الدور");
                   }} className={cx(inputClass, "h-10 font-medium")}>
                     {USER_ROLES.map((role) => <option key={role} value={role}>{ROLE_LABELS[role]}</option>)}
                   </select>
                   {user.role === "driver" && (
-                    <select aria-label="سيارة السائق" disabled={busy} value={user.vehiclePlate ?? ""} onChange={(event) => {
-                      const vehiclePlate = event.target.value;
-                      run(user.uid, () => updateUser(user.uid, { vehiclePlate }), "تم ربط السائق بالسيارة");
-                    }} className={cx(inputClass, "h-10")}>
-                      {!user.vehiclePlate && <option value="">اختر السيارة</option>}
-                      {vehicles.map((vehicle) => <option key={vehicle.plate} value={vehicle.plate}>{vehicle.plate} · {vehicle.driver}</option>)}
-                    </select>
+                    <>
+                      {/* حساب التطبيق يُربط بسائق من قائمة السائقين، وسيارته يخصصها مشرف السيارات لسائقه في بداية الشفت */}
+                      <DriverSelect drivers={drivers} uid={user.uid} label={`سائق الحساب ${user.username}`} disabled={busy} value={driverOfAccount(drivers, user.uid)?.id ?? ""} onChange={(driverId) => {
+                        run(user.uid, () => updateUser(user.uid, { driverId }), driverId ? "تم ربط الحساب بالسائق" : "تم إلغاء ربط الحساب");
+                      }} />
+                      <p className="text-xs text-slate-500">
+                        {!driverOfAccount(drivers, user.uid) ? "اربط الحساب بسائق من قائمة السائقين"
+                          : user.vehiclePlate ? <>السيارة الآن: <span dir="ltr" className="font-semibold text-ink tabular">{user.vehiclePlate}</span> (يخصصها مشرف السيارات)</>
+                          : "بلا سيارة الآن · يخصصها مشرف السيارات في بداية الشفت"}
+                      </p>
+                    </>
                   )}
                 </div>
                 <div className="flex flex-wrap gap-2 lg:justify-end">
@@ -281,12 +295,32 @@ function UsersTab({ profile, vehicles }: { profile: UserProfile; vehicles: Vehic
   );
 }
 
-function NewUserForm({ vehicles, onCreate, onCancel }: {
-  vehicles: Vehicle[];
-  onCreate: (input: { username: string; displayName: string; role: UserRole; password: string; vehiclePlate?: string }) => Promise<void>;
+/** سائق من القائمة لحساب تطبيق السائق: السائق المرتبط بحساب آخر يظهر معطّلًا */
+function DriverSelect({ drivers, uid, value, onChange, label, disabled }: {
+  drivers: Driver[];
+  uid?: string;
+  value: string;
+  onChange: (driverId: string) => void;
+  label: string;
+  disabled?: boolean;
+}) {
+  return (
+    <select aria-label={label} disabled={disabled} value={value} onChange={(event) => onChange(event.target.value)} className={cx(inputClass, "h-10")}>
+      <option value="">{value ? "إلغاء ربط الحساب" : "اختر السائق"}</option>
+      {drivers.map((driver) => {
+        const taken = Boolean(driver.uid && driver.uid !== uid);
+        return <option key={driver.id} value={driver.id} disabled={taken}>{driver.name}{driver.phone ? ` · ${driver.phone}` : ""}{taken ? " (مرتبط بحساب آخر)" : ""}</option>;
+      })}
+    </select>
+  );
+}
+
+function NewUserForm({ drivers, onCreate, onCancel }: {
+  drivers: Driver[];
+  onCreate: (input: { username: string; displayName: string; role: UserRole; password: string; driverId?: string }) => Promise<void>;
   onCancel: () => void;
 }) {
-  const [form, setForm] = useState({ username: "", displayName: "", role: "clinic" as UserRole, password: generateTemporaryPassword(), vehiclePlate: vehicles[0]?.plate ?? "" });
+  const [form, setForm] = useState({ username: "", displayName: "", role: "clinic" as UserRole, password: generateTemporaryPassword(), driverId: "" });
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -295,7 +329,8 @@ function NewUserForm({ vehicles, onCreate, onCancel }: {
     setError("");
     setBusy(true);
     try {
-      await onCreate(form);
+      const { driverId, ...input } = form;
+      await onCreate(form.role === "driver" && driverId ? { ...input, driverId } : input);
     } catch (createError) {
       setError(authErrorMessage(createError, "تعذر إنشاء المستخدم"));
     } finally {
@@ -320,10 +355,11 @@ function NewUserForm({ vehicles, onCreate, onCancel }: {
           </div>
         </label>
         {form.role === "driver" && (
-          <label className="sm:col-span-2"><span className={labelClass}>السيارة (يرسل السائق موقعها عبر GPS الهاتف)</span>
-            <select value={form.vehiclePlate} onChange={(event) => setForm({ ...form, vehiclePlate: event.target.value })} className={cx(inputClass, "font-medium")}>
-              {vehicles.map((vehicle) => <option key={vehicle.plate} value={vehicle.plate}>{vehicle.plate} · {vehicle.driver} · {vehicle.kind}</option>)}
-            </select>
+          <label className="sm:col-span-2"><span className={labelClass}>السائق (من قائمة السائقين؛ سيارته يخصصها مشرف السيارات في بداية الشفت)</span>
+            <DriverSelect drivers={drivers} label="السائق" value={form.driverId} onChange={(driverId) => {
+              const driver = drivers.find((item) => item.id === driverId);
+              setForm({ ...form, driverId, displayName: form.displayName.trim() || !driver ? form.displayName : driver.name });
+            }} />
           </label>
         )}
         {error && <p role="alert" className="rounded-xl bg-red-50 p-3 text-sm font-medium text-red-700 ring-1 ring-inset ring-red-200 sm:col-span-2">{error}</p>}
@@ -352,7 +388,8 @@ function IssuedPassword({ username, password, onClose }: { username: string; pas
 
 // ————— السيارات —————
 
-type VehicleDraft = { plate: string; driver: string; phone: string; kind: VehicleKind };
+/** السيارة رقمها ونوعها فقط؛ السائق منفصل عنها (تبويب «السائقون»)، ويخصصه مشرف السيارات في بداية الشفت */
+type VehicleDraft = { plate: string; kind: VehicleKind };
 
 function VehiclesTab({ vehicles, requests, onChange }: {
   vehicles: Vehicle[];
@@ -377,8 +414,8 @@ function VehiclesTab({ vehicles, requests, onChange }: {
       onChange(vehicles.map((vehicle) => vehicle.plate === original.plate ? mergeVehicle(vehicle, result.vehicle) : vehicle));
       toast.success("تم تحديث بيانات السيارة");
     } else {
-      onChange([...vehicles, { ...result.vehicle, available: true }]);
-      toast.success("تمت إضافة السيارة");
+      onChange([...vehicles, { ...result.vehicle, driver: "", phone: "", available: true }]);
+      toast.success("تمت إضافة السيارة", { description: "يخصص لها مشرف السيارات سائقًا قبل إرسالها في الرحلات" });
     }
     setEditing(null);
   }
@@ -388,7 +425,7 @@ function VehiclesTab({ vehicles, requests, onChange }: {
       toast.error("لا يمكن حذف سيارة في رحلة جارية");
       return;
     }
-    if (!window.confirm(`حذف السيارة ${vehicle.plate} (${vehicle.driver})؟`)) return;
+    if (!window.confirm(`حذف السيارة ${vehicle.plate}${vehicle.driver ? ` (${vehicle.driver})` : ""}؟`)) return;
     onChange(vehicles.filter((item) => item.plate !== vehicle.plate));
     toast.success("تم حذف السيارة");
   }
@@ -397,8 +434,8 @@ function VehiclesTab({ vehicles, requests, onChange }: {
   return (
     <>
       <PageHeader
-        title="السيارات والسائقون"
-        subtitle={`${vehicles.length} سيارة · ${availableCount} متاحة للخدمة`}
+        title="السيارات"
+        subtitle={`${vehicles.length} سيارة · ${availableCount} متاحة للخدمة · السائقون في تبويب «السائقون»`}
         actions={<button onClick={() => setEditing("")} className={btn("primary")}><Plus className="h-4 w-4" /> إضافة سيارة</button>}
       />
       {editing === "" && <VehicleForm onSave={save} onCancel={() => setEditing(null)} />}
@@ -413,10 +450,11 @@ function VehiclesTab({ vehicles, requests, onChange }: {
                 <div className="flex min-w-0 flex-1 items-center gap-3">
                   <span className={cx("flex h-10 w-10 shrink-0 items-center justify-center rounded-xl", vehicle.available ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-400")}><Truck className="h-5 w-5" /></span>
                   <div className="min-w-0">
-                    <p className="font-semibold text-ink"><span dir="ltr" className="tabular">{vehicle.plate}</span> · {vehicle.driver}</p>
+                    <p className="font-semibold text-ink"><span dir="ltr" className="tabular">{vehicle.plate}</span> · {vehicle.kind}{busRoleOf(vehicle) ? ` · ${BUS_ROLE_LABELS[busRoleOf(vehicle)!]}` : ""}</p>
                     <p className="mt-0.5 flex flex-wrap items-center gap-x-2 text-xs text-slate-500">
-                      <span>{vehicle.kind}{busRoleOf(vehicle) ? ` · ${BUS_ROLE_LABELS[busRoleOf(vehicle)!]}` : ""}</span>
-                      {vehicle.phone && <><span className="text-slate-300">·</span><span dir="ltr">{vehicle.phone}</span></>}
+                      {vehicle.driver
+                        ? <><span>السائق الآن: {vehicle.driver}</span>{vehicle.phone && <><span className="text-slate-300">·</span><span dir="ltr">{vehicle.phone}</span></>}</>
+                        : <span className="font-medium text-amber-700">بلا سائق · يخصصه مشرف السيارات</span>}
                     </p>
                   </div>
                 </div>
@@ -437,22 +475,18 @@ function VehiclesTab({ vehicles, requests, onChange }: {
 function VehicleForm({ initial, onSave, onCancel }: { initial?: Vehicle; onSave: (draft: VehicleDraft) => void; onCancel: () => void }) {
   const [draft, setDraft] = useState<VehicleDraft>({
     plate: initial?.plate ?? "",
-    driver: initial?.driver ?? "",
-    phone: initial?.phone ?? "",
     kind: initial?.kind ?? "سيدان",
   });
 
   const form = (
-    <form onSubmit={(event) => { event.preventDefault(); onSave(draft); }} className="grid gap-5 p-5 sm:grid-cols-2 lg:grid-cols-4">
+    <form onSubmit={(event) => { event.preventDefault(); onSave(draft); }} className="grid gap-5 p-5 sm:grid-cols-2">
       <label><span className={labelClass}>رقم السيارة</span><input dir="ltr" value={draft.plate} onChange={(event) => setDraft({ ...draft, plate: event.target.value })} className={inputClass} /></label>
-      <label><span className={labelClass}>اسم السائق</span><input value={draft.driver} onChange={(event) => setDraft({ ...draft, driver: event.target.value })} className={inputClass} /></label>
-      <label><span className={labelClass}>هاتف السائق</span><input dir="ltr" type="tel" value={draft.phone} onChange={(event) => setDraft({ ...draft, phone: event.target.value })} className={inputClass} /></label>
       <label><span className={labelClass}>نوع السيارة</span>
         <select value={draft.kind} onChange={(event) => setDraft({ ...draft, kind: event.target.value as VehicleKind })} className={cx(inputClass, "font-medium")}>
           {VEHICLE_KINDS.map((kind) => <option key={kind} value={kind}>{kind}</option>)}
         </select>
       </label>
-      <div className="flex gap-3 sm:col-span-2 lg:col-span-4">
+      <div className="flex gap-3 sm:col-span-2">
         <button className={cx(btn("primary"), "flex-1 sm:flex-none")}><CheckCircle2 className="h-4 w-4" /> {initial ? "حفظ التعديلات" : "إضافة السيارة"}</button>
         <button type="button" onClick={onCancel} className={btn("secondary")}>إلغاء</button>
       </div>

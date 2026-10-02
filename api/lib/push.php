@@ -204,7 +204,14 @@ function queue_request_pushes(PDO $pdo, ?array $before, ?array $after): void
             return;
         }
     }
-    // إرسال السيارة (من بانتظار التوزيع، أو تغيير السيارة المرسلة)
+    // تغيير السيارة المرسلة: الرحلة تُلغى عند سائق السيارة السابقة وتصل إلى سائق الجديدة (ولو بعد استلام الضيف)
+    $previous = (string)($before['vehiclePlate'] ?? '');
+    if ($after && $previous !== '' && $previous !== $plate && in_array($before['status'] ?? null, DRIVER_ACTIVE_STATUSES, true)) {
+        push_queue(['plate' => $previous, 'type' => 'cancel', 'trip' => push_trip_text($pdo, $before)]);
+        if (in_array($after['status'] ?? null, DRIVER_ACTIVE_STATUSES, true)) push_queue(['plate' => $plate, 'type' => 'new', 'trip' => push_trip_text($pdo, $after)]);
+        return;
+    }
+    // إرسال السيارة (من بانتظار التوزيع)
     if ($after && ($after['status'] ?? null) === 'تم إرسال السيارة'
         && (($before['status'] ?? null) === 'بانتظار التوزيع' || ($before['vehiclePlate'] ?? null) !== $plate)) {
         push_queue(['plate' => $plate, 'type' => 'new', 'trip' => push_trip_text($pdo, $after)]);

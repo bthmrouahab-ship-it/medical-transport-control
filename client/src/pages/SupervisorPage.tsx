@@ -757,6 +757,10 @@ function GuestDetails({ appointment, request, driver, persons }: {
             {request.groupId && <Badge tone="violet" className="ms-1">رحلة مجمّعة</Badge>}
           </span>
         )}
+        {/* غيّر مشرف السيارات السيارة بعد إرسالها (عطل أو حادث أو تأخر) */}
+        {request?.previousPlate && request.status !== "وصلت الوجهة" && (
+          <span className="w-full font-medium text-amber-800">تغيّرت السيارة: بدل <span dir="ltr">{request.previousPlate}</span>{request.changeReason ? ` · ${request.changeReason}` : ""}</span>
+        )}
       </p>
     </div>
   );
@@ -916,6 +920,8 @@ function ProgressRow({ appointment, request, byOther = false, day, driver, phase
           status={<>
             {status}
             {request.vehiclePlate && <span className="inline-flex items-center gap-1 text-xs text-slate-500"><Truck className="h-3.5 w-3.5" /><span dir="ltr" className="font-semibold text-slate-700">{request.vehiclePlate}</span></span>}
+            {/* غيّر مشرف السيارات السيارة بعد إرسالها: السبب في التفاصيل */}
+            {request.previousPlate && <Badge tone="amber" icon={ArrowLeftRight}>تغيّرت السيارة</Badge>}
             {byOther && <Badge tone="violet" icon={Building2}>طلب مشرف مبنى آخر</Badge>}
           </>}
         />

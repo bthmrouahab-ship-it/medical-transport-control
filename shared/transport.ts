@@ -84,10 +84,14 @@ export const isPriority = (appointment: Pick<ClinicAppointment, "cancer">) => Bo
 
 export type Vehicle = {
   plate: string;
+  /** اسم السائق الذي يقودها الآن ورقمه: منسوخان من قائمة السائقين (driverId)، وفارغان للسيارة بلا سائق */
   driver: string;
   phone: string;
   kind: VehicleKind;
   available: boolean;
+  /** السائق المخصص لها من مشرف السيارات (Driver في shared/drivers.ts)، ومنذ متى */
+  driverId?: string;
+  driverSince?: string;
   /** للباص فقط: تخصيصه اليومي من مشرف السيارات (BusRole)، وبلا تخصيص باص عادي */
   busRole?: BusRole;
   /** للسيدان فقط: يشغّلها مشرف السيارات بطاقتها الكاملة (4 أشخاص بدل 3) */
@@ -108,6 +112,11 @@ export const BUS_ROLE_LABELS: Record<BusRole, string> = { shuttle: "باص ال�
  * تبقى كما هي حتى تعمل البيانات والصلاحيات القائمة.
  */
 export const statusText = (status: string) => status.replace("المريض", "الضيف");
+
+/** للسيارة سائق يقودها (يختاره مشرف السيارات في بداية الشفت) */
+export const hasDriver = (vehicle: Pick<Vehicle, "driver">) => Boolean(vehicle.driver?.trim());
+/** تُرسل في الرحلات: متاحة للخدمة ولها سائق */
+export const inService = (vehicle: Pick<Vehicle, "available" | "driver">) => vehicle.available && hasDriver(vehicle);
 
 export type RequestStatus = "بانتظار التوزيع" | "تم إرسال السيارة" | "وصلت السيارة" | "تم استلام المريض" | "وصلت الوجهة";
 /** كيف عُرف وصول السيارة إلى الوجهة: GPS السائق، أو انتهاء المدة التقديرية، أو تأكيد مشرف السيارات. */
@@ -161,6 +170,10 @@ export type VehicleRequest = {
   pickupCheck?: CheckReply;
   pickupCheckBy?: string;
   pickupCheckAt?: string;
+  /** تغيير السيارة بعد إرسالها (عطل أو حادث أو تأخر): السيارة السابقة، والسبب، ووقت التغيير (ISO) */
+  previousPlate?: string;
+  changeReason?: string;
+  changedAt?: string;
 };
 
 export type GpsPoint = { lat: number; lng: number; accuracy?: number | null };
@@ -530,8 +543,41 @@ export function migrateRequest(value: unknown): VehicleRequest | null {
     arrivalSource,
     fromAppointmentId: toText(raw.fromAppointmentId) || undefined,
     ...(raw.nurseOnly === true ? { nurseOnly: true } : {}),
+    previousPlate: toText(raw.previousPlate) || undefined,
+    changeReason: toText(raw.changeReason) || undefined,
+    changedAt: isoTime(raw.changedAt),
     // الخانات الفارغة لا تُضاف، حتى لا تظهر تغييرات وهمية عند المقارنة قبل الحفظ
     ...Object.fromEntries(Object.entries(check).filter(([, value]) => value !== undefined)),
+  };
+}
+
+/** أسباب تغيير السيارة بعد إرسالها (ومعها «أخرى» مكتوب) */
+export const CHANGE_VEHICLE_REASONS = ["عطل في السيارة", "حادث", "تأخر السيارة", "السائق لا يرد"] as const;
+/** السيارة السابقة لا تكمل الخدمة بعد هذين السببين (تُقترح إيقافها) */
+export const VEHICLE_FAULT_REASONS: readonly string[] = ["عطل في السيارة", "حادث"];
+
+/** يمكن تغيير سيارة الرحلة: أُرسلت ولم تصل إلى الوجهة بعد (قبل استلام الضيف أو بعده) */
+export const canChangeVehicle = (request: Pick<VehicleRequest, "status" | "vehiclePlate">) => Boolean(request.vehiclePlate)
+  && (request.status === "تم إرسال السيارة" || request.status === "وصلت السيارة" || request.status === "تم استلام المريض");
+
+/**
+ * سيارة أخرى لرحلة أُرسلت لها سيارة (عطل أو حادث أو تأخر): السيارة الجديدة وسائقها ووقت إرسالها، والسيارة السابقة والسبب.
+ * قبل استلام الضيف تعود الرحلة إلى «تم إرسال السيارة» ويُمحى ما سجّله سائق السيارة السابقة عند الاستلام.
+ * بعد الاستلام (الضيف في السيارة السابقة) تبقى «تم استلام المريض» والوقت المتوقع للوصول، وتكمل السيارة الجديدة الطريق.
+ */
+export function changeRequestVehicle(request: VehicleRequest, vehicle: Pick<Vehicle, "plate" | "driver">, reason: string, now = new Date()): VehicleRequest {
+  const beforePickup = request.status === "تم إرسال السيارة" || request.status === "وصلت السيارة";
+  const { driverArrivedAt: _at, arrivalGps: _gps, arrivalCheck: _check, arrivalCheckBy: _by, arrivalCheckAt: _checkAt, ...rest } = request;
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return {
+    ...(beforePickup ? rest : request),
+    vehiclePlate: vehicle.plate,
+    driver: vehicle.driver,
+    status: beforePickup ? "تم إرسال السيارة" : request.status,
+    notificationSentAt: `${pad(now.getHours())}:${pad(now.getMinutes())}`,
+    previousPlate: request.vehiclePlate,
+    changeReason: reason.trim(),
+    changedAt: now.toISOString(),
   };
 }
 
@@ -711,6 +757,7 @@ export function regularForSpecialWarning(vehicle: Pick<Vehicle, "kind">, appoint
 export function vehicleRestriction(vehicle: Vehicle, trip: TripLoad, rules: VehicleRules = {}): string | null {
   const now = rules.now ?? new Date();
   if (!vehicle.available) return "خارج الخدمة";
+  if (!hasDriver(vehicle)) return "بلا سائق";
   const role = busRoleOf(vehicle);
   if (role === "clinic") return "في خدمة العيادة";
   if (!rules.regularForSpecial && needsAccessibleVehicle(trip.appointments) && vehicle.kind !== "احتياجات خاصة") return "تحتاج سيارة احتياجات خاصة";
@@ -751,7 +798,7 @@ function pickVehicle(candidates: Candidate[], load: Map<string, number>, rank?: 
 export function assignVehicle(vehicles: Vehicle[], kind: AppointmentKind, load: Map<string, number> = new Map(), rank?: (vehicle: Vehicle) => number) {
   const candidates = vehicles
     .map((vehicle, index) => ({ vehicle, index }))
-    .filter(({ vehicle }) => vehicle.available && (kind !== "احتياجات خاصة" || vehicle.kind === "احتياجات خاصة"));
+    .filter(({ vehicle }) => inService(vehicle) && (kind !== "احتياجات خاصة" || vehicle.kind === "احتياجات خاصة"));
   return pickVehicle(candidates, load, rank);
 }
 
@@ -828,7 +875,7 @@ export function planDispatch(
   const byAppointment = new Map(trips.map((trip) => [trip.appointment.id, trip]));
   const personsOf = new Map(trips.map((trip) => [trip.request.id, trip.persons ?? tripPersons(trip.appointment, trip.request)]));
   const sum = (requestIds: string[]) => requestIds.reduce((total, id) => total + (personsOf.get(id) ?? 1), 0);
-  const free = vehicles.filter((vehicle) => vehicle.available);
+  const free = vehicles.filter(inService);
   const vehicleRules = { ...rules, hospitals };
   const units: PlannedTrip[] = [];
   const grouped = new Set<string>();
@@ -983,23 +1030,19 @@ export function suggestTripGroups(appointments: ClinicAppointment[], hospitals: 
 
 export const VEHICLE_KINDS: VehicleKind[] = ["سيدان", "احتياجات خاصة", "باص"];
 
-/** يتحقق من بيانات سيارة قبل الحفظ ويعيدها بصيغة موحدة، أو يعيد رسالة الخطأ. */
+/** يتحقق من بيانات سيارة قبل الحفظ (رقمها ونوعها؛ السائق منفصل عنها) ويعيدها بصيغة موحدة، أو يعيد رسالة الخطأ. */
 export function validateVehicle(
-  input: Pick<Vehicle, "plate" | "driver" | "phone" | "kind">,
+  input: Pick<Vehicle, "plate" | "kind">,
   vehicles: Vehicle[],
   originalPlate?: string,
-): { vehicle: Pick<Vehicle, "plate" | "driver" | "phone" | "kind"> } | { error: string } {
+): { vehicle: Pick<Vehicle, "plate" | "kind"> } | { error: string } {
   const plate = toWesternDigits(toText(input.plate)).replace(/\s+/g, "");
-  const driver = toText(input.driver).replace(/\s+/g, " ");
-  const phone = normalizeMobile(input.phone);
   if (!/^[0-9A-Za-z-]{2,12}$/.test(plate)) return { error: "رقم السيارة يجب أن يكون من 2 إلى 12 رقمًا أو حرفًا" };
-  if (driver.length < 2 || driver.length > 60) return { error: "اسم السائق يجب أن يكون من 2 إلى 60 حرفًا" };
-  if (!/^\+?\d{8,15}$/.test(phone)) return { error: "رقم هاتف السائق يجب أن يكون من 8 إلى 15 رقمًا" };
   if (!VEHICLE_KINDS.includes(input.kind)) return { error: "اختر نوع سيارة صحيحًا" };
   if (plate !== originalPlate && vehicles.some((vehicle) => vehicle.plate === plate)) {
     return { error: `رقم السيارة ${plate} مسجل مسبقًا` };
   }
-  return { vehicle: { plate, driver, phone, kind: input.kind } };
+  return { vehicle: { plate, kind: input.kind } };
 }
 
 /** تحديث بيانات سيارة (من لوحة المدير أو ملف Excel): تخصيص الباص للباص فقط، والطاقة الكاملة للسيدان فقط. */
@@ -1019,7 +1062,8 @@ export function vehicleHasActiveTrip(plate: string, requests: VehicleRequest[], 
 }
 
 /** قائمة السيارات الأولية (من ملف السائقين)؛ تُحفظ في قاعدة البيانات عند أول دخول للمدير ثم يعدّلها من لوحته. */
-export const DEFAULT_VEHICLES: Vehicle[] = FLEET_SEED;
+/** السيارات الأولية، وكل سيارة مخصصة لسائقها في الورقة (DRIVERS_SEED في seedData.ts) */
+export const DEFAULT_VEHICLES: Vehicle[] = FLEET_SEED.map((vehicle, index) => ({ ...vehicle, driverId: `D-${index + 1}` }));
 
 // ————— جمع الرحلات —————
 

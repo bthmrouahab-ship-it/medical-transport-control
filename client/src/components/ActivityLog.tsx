@@ -10,6 +10,7 @@ const TYPE_TONE: Record<string, Tone> = {
   appointment: "neutral",
   request: "blue",
   vehicle: "green",
+  driver: "green",
   hospital: "cyan",
   user: "violet",
   session: "neutral",
