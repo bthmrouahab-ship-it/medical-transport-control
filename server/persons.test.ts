@@ -87,7 +87,23 @@ describe("persons in the car", () => {
     const nurse = buildDriverMessage([{ appointment, request: ask(appointment, { direction: "عودة", nurseOnly: true }) }], { plate: "976004", driver: "رامش" });
     expect(nurse).toContain("الراكب: الـ Nurse مرافقة الضيف ضيف A (عودة الـ Nurse فقط)");
     expect(nurse).toContain("Nurse return only");
-    expect(nurse).not.toContain("عدد الأشخاص");
+    // عودة الـ Nurse فقط: شخص واحد
+    expect(nurse).toContain("السيارة: 976004\nعدد الأشخاص: 1");
+    expect(nurse).toContain("Vehicle: 976004\nPersons: 1");
+  });
+
+  it("always tells the driver the number of persons, and the total in a grouped trip", () => {
+    // الضيف وحده: شخص واحد
+    const alone = guest("A", "10:00");
+    const single = buildDriverMessage([{ appointment: alone, request: ask(alone) }], { plate: "111", driver: "علي" });
+    expect(single).toContain("السيارة: 111\nعدد الأشخاص: 1");
+    expect(single).toContain("Vehicle: 111\nPersons: 1");
+    // رحلة مجمّعة: ضيف وحده وضيف مع مرافقه = 3 أشخاص، وعدد كل ضيف تحته
+    const withEscort = guest("B", "10:10", [ESCORT]);
+    const group = buildDriverMessage([{ appointment: alone, request: ask(alone) }, { appointment: withEscort, request: ask(withEscort) }], { plate: "111", driver: "علي" });
+    expect(group).toContain("السيارة: 111\nمجموع الأشخاص في السيارة: 3");
+    expect(group).toContain("Total persons in the car: 3");
+    expect(group.split("—————")[0].match(/عدد الأشخاص: \d/g)).toEqual(["عدد الأشخاص: 1", "عدد الأشخاص: 2"]);
   });
 
   it("keeps the self-return record when appointments are normalized", () => {
