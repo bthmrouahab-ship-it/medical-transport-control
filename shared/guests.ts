@@ -19,6 +19,11 @@ export type Guest = {
   nurse?: true;
   /** جهة عمل الممرضة (الشركة) */
   organization?: string;
+  /**
+   * أقل من 18 سنة: يضيفها الخادم عند المزامنة بدل العمر (public_doc في api/lib/rules.php)، ولا تُحفظ.
+   * المرافق إلزامي في موعده إلا إن كان معه Nurse (withMinorEscort في shared/transport.ts).
+   */
+  minor?: true;
 };
 
 /** سكن الممرضات: كلهن في مبنى 03 شقة 001 (إلا إن ذكر الملف غير ذلك) */
@@ -26,6 +31,10 @@ export const NURSE_BUILDING = "03";
 export const NURSE_APARTMENT = "001";
 export const NURSE_LABEL = "ممرضة";
 export const isNurse = (guest?: Pick<Guest, "nurse"> | null) => guest?.nurse === true;
+
+/** الضيف أقل من 18 سنة (من علامة المزامنة، أو من عمره في الإحصائيات والاختبارات) */
+export const MINOR_AGE = 18;
+export const isMinor = (guest?: { minor?: boolean; age?: number } | null) => guest?.minor === true || (typeof guest?.age === "number" && guest.age < MINOR_AGE);
 
 /** بيانات لا تظهر عند طلب الموعد: في الإحصائيات فقط */
 export type GuestPrivate = { age?: number; healthNumber?: string };

@@ -167,6 +167,22 @@ function place_name(PDO $pdo, array $appointment, string $lang): string
     return $names[(string)($appointment['hospitalId'] ?? '')] ?? $clinic;
 }
 
+/** اسم الضيف: كما في الموعد بالعربية، وبالإنجليزية والأردية اسمه الإنجليزي من قائمة ضيوف المجمع إن وُجد. */
+function guest_name(PDO $pdo, array $appointment, string $lang): string
+{
+    $name = trim((string)($appointment['patientName'] ?? ''));
+    $guestId = (string)($appointment['guestId'] ?? '');
+    if ($lang === 'ar' || $guestId === '' || !valid_doc_id($guestId)) return $name;
+    static $english = [];
+    if (!array_key_exists($guestId, $english)) {
+        $stmt = $pdo->prepare("SELECT data FROM docs WHERE col = 'guests' AND id = ?");
+        $stmt->execute([$guestId]);
+        $guest = decode_doc($stmt->fetchColumn() ?: null);
+        $english[$guestId] = trim((string)($guest['nameEn'] ?? ''));
+    }
+    return $english[$guestId] !== '' ? $english[$guestId] : $name;
+}
+
 /** بيانات الرحلة في الإشعار (يُكتب نصها بلغة كل هاتف عند الإرسال). */
 function push_trip_text(PDO $pdo, array $request): array
 {
@@ -189,7 +205,7 @@ function push_trip_parts(PDO $pdo, array $trip, string $lang): array
     $route = $trip['from'] ? place_name($pdo, $trip['from'], $lang) . " ← $place" : ($trip['returning'] ? "$place ← $home" : "$home ← $place");
     if ($lang === 'en') $route = str_replace('←', '→', $route);
     // عودة الـ Nurse فقط: الراكب الـ Nurse مرافقة الضيف
-    $name = trim((string)($appointment['patientName'] ?? ''));
+    $name = guest_name($pdo, $appointment, $lang);
     if (!empty($trip['nurse'])) $name = "Nurse · $name";
     return ['name' => $name, 'time' => (string)($appointment['appointmentAt'] ?? ''), 'route' => $route];
 }

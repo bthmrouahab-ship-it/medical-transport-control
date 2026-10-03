@@ -33,9 +33,10 @@ const TRIPS_EVERY_MS = 8000;
 
 type Status = "idle" | "starting" | "sharing" | "error";
 type Position = { lat: number; lng: number; accuracy: number; at: number };
-type TripsResponse = { plate: string; requests: unknown[]; appointments: unknown[]; hospitals: Hospital[]; sharing: boolean; serverTime: string };
+/** namesEn: اسم الضيف الإنجليزي من قائمة ضيوف المجمع برقم الموعد (للإنجليزية والأردية) */
+type TripsResponse = { plate: string; requests: unknown[]; appointments: unknown[]; namesEn?: Record<string, unknown>; hospitals: Hospital[]; sharing: boolean; serverTime: string };
 /** nurseBack: طلبات عودة ضيوف عادت الـ Nurse قبلهم (لا تُحسب في عدد الأشخاص) */
-type Trips = { requests: VehicleRequest[]; appointments: ClinicAppointment[]; hospitals: Hospital[]; nurseBack: Set<string> };
+type Trips = { requests: VehicleRequest[]; appointments: ClinicAppointment[]; hospitals: Hospital[]; nurseBack: Set<string>; namesEn: Record<string, string> };
 /** سبب توقف الموقع، ويُعرض بلغة السائق الحالية */
 type LocationError = { key: "noGeolocation" | "timeout" | "unavailable" | "policyBlocked" | "permissionBlocked" | "notAllowed"; state?: string };
 
@@ -66,6 +67,8 @@ const ORDER: Record<string, number> = { "تم استلام المريض": 0, "و
 
 /** اسم الوجهة بلغة السائق: العربية، وإلا الإنجليزية (للإنجليزية والأردية). */
 const placeName = (appointment: ClinicAppointment, hospitals: Hospital[], lang: DriverLang) => destinationLabels(appointment, hospitals)[lang === "ar" ? "ar" : "en"];
+/** اسم الضيف: بالعربية كما في الموعد، وبالإنجليزية والأردية اسمه الإنجليزي من قائمة ضيوف المجمع إن وُجد */
+const guestName = (appointment: ClinicAppointment, namesEn: Record<string, string>, lang: DriverLang) => (lang === "ar" ? appointment.patientName : namesEn[appointment.id] || appointment.patientName);
 
 /**
  * تطبيق السائق بالعربية والإنجليزية والأردية: مشاركة موقع السيارة (GPS الهاتف) مع مشرف السيارات،
@@ -184,6 +187,7 @@ export default function DriverPage({ profile, onLogout, onChangePassword }: {
       }));
       const appointments = data.appointments.map((item, index) => migrateAppointment(item, index)).filter((item): item is ClinicAppointment => item !== null);
       const hospitals = data.hospitals.filter((item) => typeof item?.lat === "number" && typeof item?.lng === "number");
+      const namesEn = Object.fromEntries(Object.entries(data.namesEn ?? {}).filter((entry): entry is [string, string] => typeof entry[1] === "string" && entry[1].trim() !== ""));
       const active = new Set(requests.filter((request) => request.status in ORDER).map((request) => request.id));
       const denials = new Set(requests.flatMap((request) => [
         request.arrivalCheck === "denied" ? `${request.id}:arrival:${request.arrivalCheckAt}` : "",
@@ -202,7 +206,7 @@ export default function DriverPage({ profile, onLogout, onChangePassword }: {
         if (fresh.length || cancelled.length || denied.length) alertDevice();
       }
       known.current = { active, denials };
-      setTrips({ requests, appointments, hospitals: hospitals.length ? hospitals : DEFAULT_HOSPITALS, nurseBack });
+      setTrips({ requests, appointments, hospitals: hospitals.length ? hospitals : DEFAULT_HOSPITALS, nurseBack, namesEn });
       setLoadError(null);
     } catch (loadFailure) {
       setLoadError(loadFailure);
@@ -395,6 +399,7 @@ export default function DriverPage({ profile, onLogout, onChangePassword }: {
                   lang={lang}
                   request={request}
                   appointment={appointment}
+                  name={guestName(appointment, trips.namesEn, lang)}
                   from={request.fromAppointmentId ? trips.appointments.find((item) => item.id === request.fromAppointmentId) ?? null : null}
                   hospitals={trips.hospitals}
                   group={request.groupId ? trips.requests.filter((item) => item.groupId === request.groupId).length : 1}
@@ -420,7 +425,7 @@ export default function DriverPage({ profile, onLogout, onChangePassword }: {
                   {finished.map(({ request, phase, appointment }) => (
                     <li key={request.id} className="flex items-center justify-between gap-3 px-4 py-2.5 text-sm">
                       <span className="min-w-0 truncate">
-                        <span dir="ltr" className="tabular text-slate-500 dark:text-slate-400">{appointment!.appointmentAt}</span> · {request.nurseOnly ? t.nurseOf(appointment!.patientName) : appointment!.patientName} · {request.direction === "عودة" ? t.complex : placeName(appointment!, trips!.hospitals, lang)}
+                        <span dir="ltr" className="tabular text-slate-500 dark:text-slate-400">{appointment!.appointmentAt}</span> · {request.nurseOnly ? t.nurseOf(guestName(appointment!, trips!.namesEn, lang)) : guestName(appointment!, trips!.namesEn, lang)} · {request.direction === "عودة" ? t.complex : placeName(appointment!, trips!.hospitals, lang)}
                       </span>
                       {phase.kind === "arrived" && phase.at && <span className="shrink-0 text-xs text-emerald-700 dark:text-emerald-400">{t.arrived} <span dir="ltr" className="tabular">{timeLabel(phase.at)}</span></span>}
                     </li>
@@ -504,11 +509,13 @@ const mapsLink = (point: { lat: number; lng: number } | null, label: string) => 
 const wazeLink = (point: { lat: number; lng: number }) => `https://waze.com/ul?ll=${point.lat},${point.lng}&navigate=yes`;
 
 /** رحلة جارية للسائق: الضيف، ومن أين إلى أين، والملاحة، والاتصال بالضيف، وزر المرحلة التالية. */
-function TripCard({ t, lang, request, appointment, from, hospitals, group, persons, now, live, busy, onAction }: {
+function TripCard({ t, lang, request, appointment, name, from, hospitals, group, persons, now, live, busy, onAction }: {
   t: DriverText;
   lang: DriverLang;
   request: VehicleRequest;
   appointment: ClinicAppointment;
+  /** اسم الضيف بلغة السائق */
+  name: string;
   from: ClinicAppointment | null;
   hospitals: Hospital[];
   group: number;
@@ -550,7 +557,7 @@ function TripCard({ t, lang, request, appointment, from, hospitals, group, perso
           <TimeBlock time={appointment.appointmentAt} />
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-1.5">
-              <p className="font-bold text-ink dark:text-white">{request.nurseOnly ? t.nurseOf(appointment.patientName) : appointment.patientName}</p>
+              <p className="font-bold text-ink dark:text-white"><bdi>{request.nurseOnly ? t.nurseOf(name) : name}</bdi></p>
               {appointment.gender && !request.nurseOnly && <span className="text-xs text-slate-500 dark:text-slate-400">{t.gender[appointment.gender]}</span>}
             </div>
             <div className="mt-1 flex flex-wrap gap-1.5">

@@ -1,13 +1,26 @@
 import { DEFAULT_HOSPITALS, distanceKm, matchHospital, type Hospital } from "./hospitals";
 import { FLEET_SEED } from "./seedData";
 import { normalizeGender, normalizeMobile, readAliased, toText, toWesternDigits } from "./text";
-import { findGuestByName, guestIndex, type Guest } from "./guests";
+import { findGuestByName, guestIndex, guestOfAppointment, isMinor, type Guest } from "./guests";
 
 export type AppointmentKind = "عادي" | "احتياجات خاصة";
 export type VehicleKind = "سيدان" | "احتياجات خاصة" | "باص";
 export type AssistanceNeed = "يحتاج مرافق" | "يحتاج Nurse" | "كرسي متحرك";
 /** احتياجات الضيف بترتيب ظهورها في النماذج: مرافق وممرض (Nurse) خياران منفصلان. */
 export const ASSISTANCE_NEEDS: AssistanceNeed[] = ["يحتاج مرافق", "يحتاج Nurse", "كرسي متحرك"];
+export const ESCORT_NEED: AssistanceNeed = "يحتاج مرافق";
+export const NURSE_NEED: AssistanceNeed = "يحتاج Nurse";
+
+/**
+ * الضيف أقل من 18 سنة: المرافق إلزامي في السيارة، إلا إن كان معه Nurse. يعيد الاحتياجات ومعها المرافق إن لزم
+ * (بترتيب ASSISTANCE_NEEDS)، ونفس المصفوفة إن لم يتغير شيء. الخادم يرفض موعده بلا مرافق ولا Nurse (registry_error).
+ */
+export function withMinorEscort(assistance: AssistanceNeed[], minor: boolean): AssistanceNeed[] {
+  if (!minor || assistance.includes(ESCORT_NEED) || assistance.includes(NURSE_NEED)) return assistance;
+  return ASSISTANCE_NEEDS.filter((need) => need === ESCORT_NEED || assistance.includes(need));
+}
+/** خانة المرافق لا تُزال: الضيف أقل من 18 سنة وليس معه Nurse */
+export const escortLocked = (assistance: AssistanceNeed[], minor: boolean) => minor && !assistance.includes(NURSE_NEED);
 export type AppointmentStatus =
   | "بانتظار طلب السيارة"
   | "تم طلب السيارة"
@@ -64,7 +77,38 @@ export type ClinicAppointment = {
   returnOnly?: boolean;
   /** الراكبة ممرضة من قائمة الممرضات (مبنى 03 شقة 001)، يُطلب لها سيارة مثل الضيف */
   nurse?: boolean;
+  /** نوع الموعد (اختياري): من APPOINTMENT_TYPES بالعربية، أو مكتوب بعد «أخرى» */
+  appointmentType?: string;
 };
+
+/** أنواع المواعيد الجاهزة في نموذج العيادة (خانة اختيارية، ومعها «أخرى» تُكتب). تُحفظ بالعربية. */
+export const APPOINTMENT_TYPES: { ar: string; en: string }[] = [
+  { ar: "مراجعة", en: "Follow-up" },
+  { ar: "استشارة", en: "Consultation" },
+  { ar: "تحاليل", en: "Lab tests" },
+  { ar: "أشعة", en: "Radiology" },
+  { ar: "علاج طبيعي", en: "Physiotherapy" },
+  { ar: "غسيل كلى", en: "Dialysis" },
+  { ar: "علاج كيماوي", en: "Chemotherapy" },
+  { ar: "أسنان", en: "Dental" },
+  { ar: "عملية أو إجراء", en: "Surgery or procedure" },
+  { ar: "تطعيم", en: "Vaccination" },
+];
+export const APPOINTMENT_TYPE_MAX = 60;
+
+/** نوع الموعد من Excel أو النموذج: نوع من القائمة (بالعربية أو الإنجليزية) يُحفظ بالعربية، وغيره كما كُتب. */
+export function normalizeAppointmentType(value: unknown) {
+  const text = toText(value).replace(/\s+/g, " ").slice(0, APPOINTMENT_TYPE_MAX).trim();
+  if (!text || /^(n\s*\/?\s*a|-+|لا\s*يوجد|بدون)$/i.test(text)) return "";
+  const key = text.toLowerCase();
+  return APPOINTMENT_TYPES.find((type) => type.ar === text || type.en.toLowerCase() === key)?.ar ?? text;
+}
+
+/** نوع الموعد بلغة الواجهة: أنواع القائمة مترجمة، والمكتوب كما هو. */
+export function appointmentTypeText(value: string | undefined, lang: "ar" | "en") {
+  if (!value) return "";
+  return lang === "en" ? APPOINTMENT_TYPES.find((type) => type.ar === value)?.en ?? value : value;
+}
 
 /** طلب عودة فقط من المستشفى (بلا ذهاب) */
 export const isReturnOnly = (appointment: Pick<ClinicAppointment, "returnOnly">) => appointment.returnOnly === true;
@@ -343,6 +387,7 @@ export function migrateAppointment(value: unknown, index = 0): ClinicAppointment
     ...(raw.approval === "excluded" ? { approval: "excluded" as const, excludedBy: toText(raw.excludedBy) || undefined, excludedAt: toText(raw.excludedAt) || undefined } : {}),
     ...(raw.returnOnly === true ? { returnOnly: true } : {}),
     ...(raw.nurse === true ? { nurse: true } : {}),
+    ...(toText(raw.appointmentType) ? { appointmentType: toText(raw.appointmentType).slice(0, APPOINTMENT_TYPE_MAX) } : {}),
   };
 }
 
@@ -380,13 +425,15 @@ export function parseImportedAppointments(
     const rawDate = readAliased(row, ["تاريخ الموعد", "التاريخ", "appointment date", "date"]);
     const appointmentDate = rawDate === undefined || toText(rawDate) === "" ? today : normalizeDate(rawDate);
     const kind = normalizeKind(readAliased(row, ["نوع الرحلة", "نوع الخدمة", "النوع", "trip type"]));
-    const assistance = normalizeAssistance(readAliased(row, ["احتياجات الضيف", "احتياجات المريض", "المساعدة", "الاحتياج", "ملاحظات", "assistance"]));
+    let assistance = normalizeAssistance(readAliased(row, ["احتياجات الضيف", "احتياجات المريض", "المساعدة", "الاحتياج", "ملاحظات", "assistance"]));
     // ملف المواعيد المصدَّر: كل احتياج في عمود «نعم/لا»
     for (const need of ASSISTANCE_NEEDS) if (!assistance.includes(need) && isYes(readAliased(row, [need]))) assistance.push(need);
     let gender = normalizeGender(readAliased(row, ["الجنس", "gender", "sex"]));
     const cancer = isYes(readAliased(row, ["حالة سرطان", "سرطان", "cancer"]), /سرطان|cancer/);
     // طلب عودة فقط من المستشفى (عمود «عودة فقط»: نعم/لا)
     const returnOnly = isYes(readAliased(row, ["عودة فقط", "طلب عودة فقط", "return only"]), /عودة فقط|return only/i);
+    // نوع الموعد (اختياري)
+    const appointmentType = normalizeAppointmentType(readAliased(row, ["نوع الموعد", "appointment type"]));
 
     // مع قائمة الضيوف: الضيف منها (والمبنى والشقة والجنس منها، والهاتف إن لم يُكتب)، والوجهة من دليل المستشفيات
     let guestId: string | undefined;
@@ -405,6 +452,8 @@ export function parseImportedAppointments(
       apartmentNumber = guest.apartmentNumber;
       mobile = mobile || guest.mobile || "";
       gender = guest.gender ?? gender;
+      // أقل من 18 سنة: يُضاف المرافق تلقائيًا إلا إن كان معه Nurse
+      assistance = withMinorEscort(assistance, isMinor(guest));
     }
     const hospital = clinic ? matchHospital(clinic, hospitals) : null;
     if (index && clinic) {
@@ -456,6 +505,7 @@ export function parseImportedAppointments(
       ...(cancer ? { cancer: true } : {}),
       ...(returnOnly ? { returnOnly: true } : {}),
       ...(nurse ? { nurse: true } : {}),
+      ...(appointmentType ? { appointmentType } : {}),
     });
   });
 
@@ -1413,8 +1463,12 @@ export function buildDriverMessage(
   trips: { appointment: ClinicAppointment; request: VehicleRequest; from?: ClinicAppointment | null; persons?: number }[],
   vehicle: Pick<Vehicle, "plate" | "driver">,
   hospitals: Hospital[] = DEFAULT_HOSPITALS,
+  /** قائمة ضيوف المجمع: اسم الضيف الإنجليزي في النصف الإنجليزي من الرسالة (وإلا الاسم كما في الموعد) */
+  guests: Guest[] = [],
 ) {
   const sorted = [...trips].sort((a, b) => byTime(a.appointment, b.appointment));
+  const index = guestIndex(guests);
+  const englishName = (appointment: ClinicAppointment) => guestOfAppointment(index, appointment)?.nameEn || appointment.patientName;
   const returning = sorted[0]?.request.direction === "عودة";
   const transfer = Boolean(sorted[0]?.from);
   const nurseLeg = sorted.length > 0 && sorted.every((trip) => trip.request.nurseOnly);
@@ -1458,8 +1512,8 @@ export function buildDriverMessage(
     en.push(
       "",
       nurse
-        ? `${prefix}Passenger: Nurse escorting guest ${appointment.patientName} (nurse return only)`
-        : `${prefix}${rider.en}: ${appointment.patientName}${appointment.gender ? ` (${appointment.gender === "أنثى" ? "female" : "male"})` : ""}${isNonMedical(appointment) ? " (non-medical trip)" : ""}`,
+        ? `${prefix}Passenger: Nurse escorting guest ${englishName(appointment)} (nurse return only)`
+        : `${prefix}${rider.en}: ${englishName(appointment)}${appointment.gender ? ` (${appointment.gender === "أنثى" ? "female" : "male"})` : ""}${isNonMedical(appointment) ? " (non-medical trip)" : ""}`,
       returning ? `From: ${destination.en}` : `From: ${pickupEn}`,
       returning ? `To: ${pickupEn}` : `To: ${destination.en}`,
       `${isNonMedical(appointment) ? "Time" : "Appointment"}: ${appointment.appointmentDate} ${appointment.appointmentAt}`,

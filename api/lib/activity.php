@@ -28,6 +28,7 @@ const APPOINTMENT_FIELD_LABELS = [
     'assistance' => 'الاحتياجات',
     'gender' => 'الجنس',
     'cancer' => 'حالة سرطان',
+    'appointmentType' => 'نوع الموعد',
 ];
 
 const VEHICLE_FIELD_LABELS = ['plate' => 'رقم السيارة', 'driver' => 'السائق', 'phone' => 'الهاتف', 'kind' => 'النوع', 'busRole' => 'تخصيص الباص'];

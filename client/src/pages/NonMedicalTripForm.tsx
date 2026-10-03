@@ -6,18 +6,18 @@ import {
   REQUEST_GRACE_MINUTES,
   requestWindow,
   type AppointmentKind,
-  ASSISTANCE_NEEDS,
   type AssistanceNeed,
   GENDERS,
   type ClinicAppointment,
   type Gender,
   type VehicleRequest,
+  withMinorEscort,
 } from "@shared/transport";
-import { guestIndex, isNurse, type Guest } from "@shared/guests";
+import { guestIndex, isMinor, isNurse, type Guest } from "@shared/guests";
 import { CLINIC_TEXT } from "@/lib/i18n";
 import { useGuests } from "@/lib/useShared";
 import { DateChooser, Field, Panel, btn, choiceClass, cx, inputClass, labelClass, timeLabel } from "@/components/ui-kit";
-import { GuestPicker } from "./ClinicPages";
+import { GuestPicker, NeedsField } from "./ClinicPages";
 
 const OTHER = "أخرى";
 
@@ -51,7 +51,8 @@ export default function NonMedicalTripForm({ defaultDate, onSave, onCancel }: {
       const previous = current.guestId ? index.byId.get(current.guestId) : undefined;
       // هاتف الضيف من القائمة، إلا إذا كتب المشرف رقمًا آخر
       const mobile = !current.mobile || current.mobile === previous?.mobile ? next?.mobile ?? "" : current.mobile;
-      return { ...current, guestId: next?.id ?? "", mobile, gender: next?.gender ?? (next ? current.gender : undefined) };
+      // الضيف أقل من 18 سنة: المرافق إلزامي إلا مع Nurse
+      return { ...current, guestId: next?.id ?? "", mobile, gender: next?.gender ?? (next ? current.gender : undefined), assistance: withMinorEscort(current.assistance, isMinor(next)) };
     });
   }
 
@@ -95,7 +96,7 @@ export default function NonMedicalTripForm({ defaultDate, onSave, onCancel }: {
       appointmentAt: form.appointmentAt,
       category: "غير طبية",
       kind: form.kind,
-      assistance: form.assistance,
+      assistance: withMinorEscort(form.assistance, isMinor(guest)),
       status: "تم طلب السيارة",
     };
     onSave(appointment, {
@@ -157,20 +158,7 @@ export default function NonMedicalTripForm({ defaultDate, onSave, onCancel }: {
           </div>
         </fieldset>
 
-        <fieldset className="sm:col-span-2">
-          <legend className={labelClass}>الاحتياجات</legend>
-          <div className="grid gap-2 sm:grid-cols-2">
-            {ASSISTANCE_NEEDS.map((need) => {
-              const selected = form.assistance.includes(need);
-              return (
-                <label key={need} className={cx(choiceClass(selected), "cursor-pointer")}>
-                  <input type="checkbox" checked={selected} onChange={() => setForm({ ...form, assistance: selected ? form.assistance.filter((item) => item !== need) : [...form.assistance, need] })} className="h-4 w-4 accent-brand-600" />
-                  {need}
-                </label>
-              );
-            })}
-          </div>
-        </fieldset>
+        <NeedsField t={CLINIC_TEXT.ar} value={form.assistance} minor={isMinor(guest)} onChange={(assistance) => setForm((current) => ({ ...current, assistance }))} />
 
         <div className="flex gap-3 border-t border-slate-100 pt-5 sm:col-span-2">
           <button className={cx(btn("primary", "lg"), "flex-1")}><CheckCircle2 className="h-4 w-4" /> إضافة الرحلة</button>

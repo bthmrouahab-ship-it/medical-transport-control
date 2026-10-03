@@ -392,11 +392,14 @@ function route_write(PDO $pdo, array $body): array
             if ($kind === 'set') {
                 $after = $op['data'] ?? null;
                 if (!is_array($after) || ($after && array_is_list($after))) throw new ApiException(400, 'بيانات غير صالحة', 'bad_request');
+                // علامة «أقل من 18 سنة» تضيفها المزامنة من العمر (public_doc) ولا تُحفظ
+                if ($col === 'guests') unset($after['minor']);
             } elseif ($kind === 'update') {
                 if ($before === null) throw new ApiException(409, 'تغيّر هذا العنصر أو حُذف من مستخدم آخر. حدّث الصفحة وحاول مرة أخرى.', 'conflict');
                 $after = $before;
                 foreach ((array)($op['set'] ?? []) as $field => $value) $after[(string)$field] = $value;
                 foreach ((array)($op['unset'] ?? []) as $field) unset($after[(string)$field]);
+                if ($col === 'guests') unset($after['minor']);
             } elseif ($kind === 'delete') {
                 if ($before === null) continue;
                 $after = null;
@@ -454,6 +457,7 @@ function route_guests_import(PDO $pdo, array $body): array
         $seen = [];
         foreach ($guests as $index => $guest) {
             $id = is_array($guest) ? (string)($guest['id'] ?? '') : '';
+            if (is_array($guest)) unset($guest['minor']);
             if (!valid_doc_id($id) || isset($seen[$id]) || !valid_guest($guest, $id)) {
                 throw new ApiException(400, 'بيانات الضيف رقم ' . ($index + 1) . ' في الملف غير صالحة', 'invalid');
             }

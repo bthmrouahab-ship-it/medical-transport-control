@@ -764,6 +764,7 @@ function GuestDetails({ appointment, request, driver, persons, onEditMobile }: {
           </div>
         )}
       <p className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-500">
+        {appointment.appointmentType && <span>نوع الموعد: <span className="font-medium text-slate-700">{appointment.appointmentType}</span></span>}
         {appointment.gender && <span>{appointment.gender}</span>}
         {assistance && !request?.nurseOnly && <span className="inline-flex items-center gap-1"><Accessibility className="h-3.5 w-3.5" />{assistance}</span>}
         <span className="inline-flex items-center gap-1"><Users className="h-3.5 w-3.5" />{personsText(count)}</span>

@@ -90,6 +90,7 @@ export function AppointmentsOverview({ appointments, requests, date, now }: {
     { key: "apartment", label: "الشقة", value: (a) => a.apartmentNumber, cell: (a) => <span className="tabular">{a.apartmentNumber}</span> },
     { key: "mobile", label: "الموبايل", value: (a) => (a.mobile === "-" ? "" : a.mobile), cell: (a) => (a.mobile && a.mobile !== "-" ? <span className="whitespace-nowrap text-xs"><GuestContact mobile={a.mobile} /></span> : <span className="text-slate-300">—</span>) },
     { key: "destination", label: "الوجهة", value: (a) => a.clinic, cell: (a) => <span className="block max-w-[200px] whitespace-normal">{a.clinic}</span> },
+    { key: "appointmentType", label: "نوع الموعد", value: (a) => a.appointmentType ?? "", cell: (a) => (a.appointmentType ? <span className="block max-w-[150px] whitespace-normal">{a.appointmentType}</span> : <span className="text-slate-300">—</span>) },
     {
       // طبية (موعد)، أو طلب عودة فقط من المستشفى، أو غير طبية
       key: "category",
