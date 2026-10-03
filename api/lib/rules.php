@@ -76,8 +76,13 @@ const APPOINTMENT_GUEST_FIELDS = ['guestId', 'patientName', 'buildingNumber', 'a
  */
 const PRIVATE_CAR_FIELDS = ['id', 'name', 'plate', 'buildingNumber', 'apartmentNumber', '_o'];
 const PRIVATE_CAR_MESSAGE = 'هذا الشخص يمتلك سيارة خاصة ولا يمكنه استخدام سيارات المجمع';
+/**
+ * ذوو الاحتياجات الخاصة (يرفعهم المدير، مثل قائمة مستخدمي الكرسي المتحرك): يُستثنى الشخص نفسه من منع السيارات الخاصة،
+ * وتظهر ملاحظة «احتياجات خاصة» عند تسجيل موعده. الضيف برقم guestId المطابق، أو برقمه الصحي. القائمة للمدير فقط.
+ */
+const SPECIAL_NEED_FIELDS = ['id', 'name', 'gender', 'healthNumber', 'buildingNumber', 'apartmentNumber', 'mobile', 'guestId', '_o'];
 /** المجموعات التي تُزامن مع موظفي المكتب */
-const SYNC_COLLECTIONS = ['appointments', 'requests', 'fleet', 'hospitals', 'vehicleLocations', 'meta', 'guests', 'drivers', 'privateCars'];
+const SYNC_COLLECTIONS = ['appointments', 'requests', 'fleet', 'hospitals', 'vehicleLocations', 'meta', 'guests', 'drivers', 'privateCars', 'specialNeeds'];
 
 /**
  * مجموعات المزامنة لهذا المستخدم: قائمة الضيوف للمدير والعيادة ومشرف السيارات، وقائمة السائقين للمدير ومشرف السيارات،
@@ -87,7 +92,7 @@ function sync_collections(array $user): array
 {
     return array_values(array_filter(SYNC_COLLECTIONS, fn(string $col) => ($col !== 'guests' || in_array($user['role'], GUEST_LIST_ROLES, true))
         && ($col !== 'drivers' || in_array($user['role'], DRIVER_LIST_ROLES, true))
-        && ($col !== 'privateCars' || $user['role'] === 'admin')));
+        && (!in_array($col, ['privateCars', 'specialNeeds'], true) || $user['role'] === 'admin')));
 }
 
 /** المبنى والشقة للمطابقة: بأحرف كبيرة وبلا أصفار في البداية (03 = 3، و001 = 1) — نفس unitKey في shared/guests.ts */
@@ -110,12 +115,73 @@ function private_car_units(bool $refresh = false): array
     return $units;
 }
 
-/** الضيف يسكن في شقة لها سيارة خاصة (الممرضات خارج هذا الشرط: سكنهن مشترك) */
-function guest_has_private_car(?array $guest, ?array $units = null): bool
+/** الرقم الصحي للمطابقة: الأرقام فقط بلا أصفار في البداية */
+function health_key($value): string
+{
+    return ltrim((string)preg_replace('/\D+/', '', (string)$value), '0');
+}
+
+/** ذوو الاحتياجات الخاصة: أرقام الضيوف المطابقين، وأرقامهم الصحية (لمن أُضيف إلى قائمة الضيوف بعدها) */
+function special_needs_index(bool $refresh = false): array
+{
+    static $index = null;
+    if ($index !== null && !$refresh) return $index;
+    $index = ['ids' => [], 'health' => []];
+    foreach (db()->query("SELECT data FROM docs WHERE col = 'specialNeeds' AND data IS NOT NULL") as $row) {
+        $entry = decode_doc($row['data']);
+        if (!$entry) continue;
+        if (!empty($entry['guestId'])) $index['ids'][(string)$entry['guestId']] = true;
+        $health = health_key($entry['healthNumber'] ?? '');
+        if ($health !== '') $index['health'][$health] = true;
+    }
+    return $index;
+}
+
+/** الضيف في قائمة ذوي الاحتياجات الخاصة (بالرقم المطابق أو الرقم الصحي) */
+function guest_special_needs(?array $guest, ?array $index = null): bool
+{
+    if (!$guest) return false;
+    $index ??= special_needs_index();
+    if (isset($index['ids'][(string)($guest['id'] ?? '')])) return true;
+    $health = health_key($guest['healthNumber'] ?? '');
+    return $health !== '' && isset($index['health'][$health]);
+}
+
+/**
+ * الضيف يسكن في شقة لها سيارة خاصة (الممرضات خارج هذا الشرط: سكنهن مشترك). صاحب الاحتياجات الخاصة نفسه مستثنى
+ * (ويبقى المنع لباقي من يسكن معه).
+ */
+function guest_has_private_car(?array $guest, ?array $units = null, ?array $special = null): bool
 {
     if (!$guest || ($guest['nurse'] ?? null) === true) return false;
+    if (guest_special_needs($guest, $special)) return false;
     $units ??= private_car_units();
     return isset($units[unit_key($guest['buildingNumber'] ?? '', $guest['apartmentNumber'] ?? '')]);
+}
+
+/** شخص من ذوي الاحتياجات الخاصة: الاسم أو الرقم الصحي أو الضيف المطابق، وبقية الخانات نصوص قصيرة */
+function valid_special_need(array $data, string $id): bool
+{
+    $text = fn(string $field, int $max) => !array_key_exists($field, $data) || is_text($data[$field], $max);
+    return only(array_keys($data), SPECIAL_NEED_FIELDS)
+        && ($data['id'] ?? null) === $id
+        && $text('name', 120) && $text('healthNumber', 30) && $text('buildingNumber', 20) && $text('apartmentNumber', 20) && $text('mobile', 20)
+        && in_array($data['gender'] ?? 'ذكر', ['ذكر', 'أنثى'], true)
+        && (!array_key_exists('guestId', $data) || (is_string($data['guestId']) && valid_doc_id($data['guestId'])))
+        && (trim((string)($data['name'] ?? '')) !== '' || health_key($data['healthNumber'] ?? '') !== '' || !empty($data['guestId']));
+}
+
+/** يعيد إرسال ضيوف بأرقامهم أو أرقامهم الصحية في المزامنة القادمة (تغيّرت علامة الاحتياجات الخاصة) */
+function touch_guests(PDO $pdo, array $ids, array $health, int $rev): void
+{
+    if (!$ids && !$health) return;
+    $update = $pdo->prepare("UPDATE docs SET rev = ? WHERE col = 'guests' AND id = ?");
+    foreach ($pdo->query("SELECT id, data FROM docs WHERE col = 'guests' AND data IS NOT NULL") as $row) {
+        $guest = decode_doc($row['data']);
+        if (!$guest) continue;
+        $key = health_key($guest['healthNumber'] ?? '');
+        if (isset($ids[(string)$row['id']]) || ($key !== '' && isset($health[$key]))) $update->execute([$rev, $row['id']]);
+    }
 }
 
 /** سيارة خاصة لشقة: المبنى والشقة إلزاميان، واسم المالك ورقم المركبة اختياريان */
@@ -170,10 +236,15 @@ function public_doc(string $col, ?array $data, ?array $privateUnits = null): ?ar
 {
     if ($col !== 'guests' || $data === null) return $data;
     $minor = guest_is_minor($data);
+    // قبل حذف الرقم الصحي: به يُعرف صاحب الاحتياجات الخاصة
+    $special = guest_special_needs($data);
+    $privateCar = !$special && guest_has_private_car($data, $privateUnits);
     foreach (GUEST_PRIVATE_FIELDS as $field) unset($data[$field]);
     if ($minor) $data['minor'] = true;
+    // صاحب احتياجات خاصة: ملاحظة عند تسجيل الموعد، ومستثنى من منع السيارات الخاصة
+    if ($special) $data['specialNeeds'] = true;
     // يسكن في شقة لها سيارة خاصة: لا يُضاف له موعد
-    if (guest_has_private_car($data, $privateUnits)) $data['privateCar'] = true;
+    if ($privateCar) $data['privateCar'] = true;
     return $data;
 }
 
@@ -702,6 +773,11 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
             // السيارات الخاصة: المدير يضيف شقة ويحذفها (أو يرفع القائمة كاملة: private-cars.import)
             if ($role !== 'admin') return $denied;
             return $after === null || valid_private_car($after, $id) ? null : 'بيانات السيارة الخاصة غير صالحة';
+
+        case 'specialNeeds':
+            // ذوو الاحتياجات الخاصة: المدير يربط الشخص بضيف ويحذفه (أو يرفع القائمة كاملة: special-needs.import)
+            if ($role !== 'admin') return $denied;
+            return $after === null || valid_special_need($after, $id) ? null : 'بيانات صاحب الاحتياجات الخاصة غير صالحة';
 
         case 'vehicleLocations':
             // السائق يرسل موقعه من صفحة السائق فقط؛ هنا الحذف للمدير

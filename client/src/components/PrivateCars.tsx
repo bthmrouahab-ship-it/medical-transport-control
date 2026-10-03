@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { CarFront, Check, Loader2, Plus, Trash2, X } from "lucide-react";
-import { isNurse, normalizeUnit, planPrivateCars, unitKey, type Guest, type PrivateCar } from "@shared/guests";
+import { hasSpecialNeeds, isNurse, normalizeUnit, planPrivateCars, unitKey, type Guest, type PrivateCar } from "@shared/guests";
 import { saveState } from "@/lib/appStore";
 import { api } from "@/lib/api";
 import { authErrorMessage } from "@/lib/auth";
@@ -83,7 +83,8 @@ export function PrivateCarsPanel({ cars, guests }: { cars: PrivateCar[]; guests:
   const family = useMemo(() => {
     const count = new Map<string, number>();
     for (const guest of guests) {
-      if (isNurse(guest)) continue;
+      // الممرضات وصاحب الاحتياجات الخاصة خارج المنع
+      if (isNurse(guest) || hasSpecialNeeds(guest)) continue;
       const key = unitKey(guest.buildingNumber, guest.apartmentNumber);
       count.set(key, (count.get(key) ?? 0) + 1);
     }

@@ -26,6 +26,8 @@ const COLLECTIONS: Partial<Record<SharedKey, { col: string; idField: string; sor
   fox_drivers: { col: "drivers", idField: "id", sort: (a, b) => String(a.name ?? "").localeCompare(String(b.name ?? ""), "ar") },
   // السيارات الخاصة (للمدير فقط): ضيوف كل شقة فيها لا يُضاف لهم موعد
   fox_private_cars: { col: "privateCars", idField: "id" },
+  // ذوو الاحتياجات الخاصة (للمدير فقط): مستثنون من منع السيارات الخاصة
+  fox_special_needs: { col: "specialNeeds", idField: "id" },
 };
 /** قيم تُحفظ كمستند واحد: ملخص الإحصائيات القديم. (سجل العمليات يكتبه الخادم في جدول مستقل.) */
 const SINGLE_DOCS: Partial<Record<SharedKey, { col: string; id: string; field: string }>> = {

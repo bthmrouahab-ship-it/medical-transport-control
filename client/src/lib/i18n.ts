@@ -247,6 +247,10 @@ const ar = {
   privateCar: "هذا الشخص يمتلك سيارة خاصة ولا يمكنه استخدام سيارات المجمع",
   privateCarBadge: "سيارة خاصة",
   privateCarHint: "يسكن في شقة لها سيارة خاصة (صاحبها أو أحد أفراد عائلته)",
+  // قائمة ذوي الاحتياجات الخاصة: مستثنون من منع السيارات الخاصة
+  specialNeedsBadge: "احتياجات خاصة",
+  specialNeedsNote: "احتياجات خاصة: الضيف في قائمة ذوي الاحتياجات الخاصة (الكرسي المتحرك).",
+  specialNeedsChosen: "اختير نوع الرحلة «احتياجات خاصة» و«كرسي متحرك» تلقائيًا، ويمكن تغييرهما.",
 };
 
 export type ClinicText = typeof ar;
@@ -441,6 +445,9 @@ const en: ClinicText = {
   privateCar: "This person has a private car and cannot use the complex cars",
   privateCarBadge: "Private car",
   privateCarHint: "Lives in an apartment with a private car (the owner or a family member)",
+  specialNeedsBadge: "Special needs",
+  specialNeedsNote: "Special needs: the guest is on the special needs (wheelchair) list.",
+  specialNeedsChosen: "The trip type «Special needs» and «Wheelchair» were selected automatically and can be changed.",
 };
 
 
