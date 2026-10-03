@@ -96,6 +96,12 @@ describe("short driver name in the vehicle list and on the map", () => {
     expect(shortDriverName("  سائق   تجربة  أول ")).toBe("سائق");
     expect(shortDriverName("عبد الله محمد")).toBe("عبد الله");
     expect(shortDriverName("Abu Bakr Saleh")).toBe("Abu Bakr");
+    // الكلمة الأقصر من ثلاثة أحرف تأخذ التالية معها (ومعها بداية الاسم المركب)
+    expect(shortDriverName("Md Rahim Uddin")).toBe("Md Rahim");
+    expect(shortDriverName("Md abu bokor")).toBe("Md abu bokor");
+    expect(shortDriverName("M. Ali Khan")).toBe("M. Ali");
+    expect(shortDriverName("Al Amin Hossain")).toBe("Al Amin");
+    expect(shortDriverName("Md")).toBe("Md");
     expect(shortDriverName("علي")).toBe("علي");
     expect(shortDriverName("")).toBe("");
     expect(shortDriverName(undefined)).toBe("");
