@@ -7,6 +7,19 @@ import type { Vehicle } from "./transport";
  */
 export type Driver = { id: string; name: string; phone?: string; uid?: string };
 
+/** بداية الاسم المركب: «عبد الله» و«أبو بكر» كلمة واحدة في الاسم المختصر */
+const COMPOUND_PREFIXES = new Set(["عبد", "ابو", "أبو", "abd", "abdul", "abu"]);
+
+/**
+ * اسم السائق المختصر في قائمة «السيارات» وعلى الخريطة: أول كلمة من اسمه (والاسم المركب مثل «عبد الله» كاملًا).
+ * الاسم الكامل يظهر عند المرور على السيارة وفي تفاصيلها.
+ */
+export function shortDriverName(name?: string) {
+  const words = (name ?? "").trim().split(/\s+/).filter(Boolean);
+  if (words.length > 1 && COMPOUND_PREFIXES.has(words[0].toLowerCase())) return `${words[0]} ${words[1]}`;
+  return words[0] ?? "";
+}
+
 /** يتحقق من بيانات سائق قبل الحفظ (المدير) ويعيدها بصيغة موحدة، أو رسالة الخطأ. */
 export function validateDriver(
   input: { name: string; phone: string },

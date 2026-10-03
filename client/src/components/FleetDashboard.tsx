@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { BarChart3, CarFront, EyeOff, FilterX, Hospital as HospitalIcon, Loader2, Map as MapIcon, Radio, Search, Truck } from "lucide-react";
 import type { Hospital } from "@shared/hospitals";
+import { shortDriverName } from "@shared/drivers";
 import type { HistorySummary } from "@shared/history";
 import { DEFAULT_VEHICLES, localDateString, migrateAppointment, migrateRequest, type ClinicAppointment, type Vehicle, type VehicleRequest } from "@shared/transport";
 import { arrivalsOn, tripEndpoints, tripPhase, vehicleLocationState } from "@shared/trips";
@@ -227,7 +228,8 @@ export default function FleetDashboard({ canEdit = false, alerts = false, actor,
                         >
                           <Dot tone={FRESH_TONE[fresh?.state ?? "offline"]} pulse={fresh?.state === "live"} />
                           <span className="min-w-0 flex-1">
-                            <span className="block truncate text-sm font-medium text-ink">{driverOf(vehicle.plate, vehicle.driver) || "بلا سائق"} <span dir="ltr" className="text-xs font-normal text-slate-400">{vehicle.plate}</span></span>
+                            {/* أول كلمة من اسم السائق، والاسم الكامل عند المرور */}
+                            <span title={driverOf(vehicle.plate, vehicle.driver) || undefined} className="block truncate text-sm font-medium text-ink">{shortDriverName(driverOf(vehicle.plate, vehicle.driver)) || "بلا سائق"} <span dir="ltr" className="text-xs font-normal text-slate-400">{vehicle.plate}</span></span>
                             <span className="block truncate text-xs text-slate-500">{status}</span>
                           </span>
                           <span className={cx("flex shrink-0 items-center gap-1 text-xs", shown ? "text-slate-600" : "text-slate-400")}>

@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { DOHA_CENTER, ORIGIN, QATAR_BOUNDS, type Hospital } from "@shared/hospitals";
+import { shortDriverName } from "@shared/drivers";
 import { MAP_COLORS, ageText, hiddenOnMap, locationFreshness, type MapTrip, type VehicleLocation } from "@/lib/vehicleLocation";
 
 const escapeHtml = (value: string) => value.replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]!);
@@ -137,8 +138,8 @@ export default function LiveMap({ hospitals, locations, trips = [], tripCounts, 
     }
   }, [trips, locations]);
 
-  // السيارات: بطاقة باسم السائق الذي يقودها فقط (بلا رقم اللوحة)، ولون النقطة حسب إشارة GPS. آخر موقع قديم
-  // (يظهر بالبحث عنه فقط) يذكر منذ متى وصل.
+  // السيارات: بطاقة بأول كلمة من اسم السائق الذي يقودها فقط (بلا رقم اللوحة)، ولون النقطة حسب إشارة GPS، والاسم
+  // الكامل ورقم اللوحة عند المرور عليها. آخر موقع قديم (يظهر بالبحث عنه فقط) يذكر منذ متى وصل.
   useEffect(() => {
     const group = layers.current?.vehicles;
     if (!group) return;
@@ -146,6 +147,7 @@ export default function LiveMap({ hospitals, locations, trips = [], tripCounts, 
     for (const location of locations) {
       const fresh = locationFreshness(location);
       const name = location.driver?.trim() || "سائق";
+      const short = shortDriverName(name);
       const old = hiddenOnMap(location) ? ageText(fresh.ageMinutes) : "";
       const gps = fresh.state === "offline" ? `غير متصل · آخر موقع ${ageText(fresh.ageMinutes)}` : fresh.label;
       const trip = trips.find((item) => item.plate === location.plate);
@@ -153,7 +155,7 @@ export default function LiveMap({ hospitals, locations, trips = [], tripCounts, 
         className: "vehicle-pin",
         iconSize: [0, 0],
         html: `<div class="vehicle-pin__body${fresh.state === "offline" ? " is-offline" : ""}" data-plate="${escapeHtml(location.plate)}">`
-          + `<div class="vehicle-pin__label"><b>${escapeHtml(name)}</b>${old ? `<span>${old}</span>` : ""}</div>`
+          + `<div class="vehicle-pin__label"><b>${escapeHtml(short)}</b>${old ? `<span>${old}</span>` : ""}</div>`
           + `<span class="vehicle-pin__dot" style="background:${fresh.color}"></span></div>`,
       });
       L.marker([location.lat, location.lng], { icon, zIndexOffset: fresh.state === "offline" ? 500 : 1000, keyboard: false })

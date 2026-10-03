@@ -7,7 +7,7 @@ import {
   type ClinicAppointment,
   type Vehicle,
 } from "../shared/transport";
-import { assignDrivers, driverOfAccount, newDriverId, validateDriver, vehicleOfDriver, type Driver } from "../shared/drivers";
+import { assignDrivers, driverOfAccount, newDriverId, shortDriverName, validateDriver, vehicleOfDriver, type Driver } from "../shared/drivers";
 import { DRIVERS_SEED } from "../shared/seedData";
 
 const drivers: Driver[] = [
@@ -87,5 +87,17 @@ describe("drivers separate from vehicles", () => {
       expect(vehicle.phone).toBe(DRIVERS_SEED[index].phone);
     });
     expect(new Set(DRIVERS_SEED.map((driver) => driver.id)).size).toBe(DRIVERS_SEED.length);
+  });
+});
+
+describe("short driver name in the vehicle list and on the map", () => {
+  it("keeps the first word only, and a compound first name whole", () => {
+    expect(shortDriverName("sohail Abbas")).toBe("sohail");
+    expect(shortDriverName("  سائق   تجربة  أول ")).toBe("سائق");
+    expect(shortDriverName("عبد الله محمد")).toBe("عبد الله");
+    expect(shortDriverName("Abu Bakr Saleh")).toBe("Abu Bakr");
+    expect(shortDriverName("علي")).toBe("علي");
+    expect(shortDriverName("")).toBe("");
+    expect(shortDriverName(undefined)).toBe("");
   });
 });
