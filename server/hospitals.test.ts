@@ -36,6 +36,11 @@ describe("hospital catalog", () => {
     expect(matchHospital("Haemodialysis and Physiotherapy Center")?.id).toBe("wakra-dialysis");
     expect(matchHospital("العلاج الطبيعي بن عمران")?.id).toBe("qri-bin-omran");
     expect(matchHospital("مركز فهد بن جاسم للكلى")?.id).toBe("kidney");
+    // سباركل لطب الأسنان: ليس اكسبرت ولا اللؤلؤة
+    expect(matchHospital("سباركل لطب الأسنان")?.id).toBe("sparkle-dental");
+    expect(matchHospital("Sparkle Dental Center")?.id).toBe("sparkle-dental");
+    expect(matchHospital("مركز اكسبرت لطب الأسنان")?.id).toBe("expert-dental");
+    expect(matchHospital("Pearl Dental Center")?.id).toBe("pearl-dental");
     // وجهة الرحلة غير الطبية «أنصار جاليري المطار القديم» ليست المركز الصحي
     expect(matchHospital("أنصار جاليري المطار القديم")).toBeNull();
   });
@@ -52,6 +57,8 @@ describe("hospital catalog", () => {
     expect(syncHospitals(withoutWakraHc).some((hospital) => hospital.id === "wakra-hc")).toBe(true);
     const withoutDialysis = DEFAULT_HOSPITALS.filter((hospital) => hospital.id !== "wakra-dialysis");
     expect(syncHospitals(withoutDialysis).find((hospital) => hospital.id === "wakra-dialysis")).toMatchObject({ lat: 25.172663, lng: 51.595984 });
+    const withoutSparkle = DEFAULT_HOSPITALS.filter((hospital) => hospital.id !== "sparkle-dental");
+    expect(syncHospitals(withoutSparkle).find((hospital) => hospital.id === "sparkle-dental")).toMatchObject({ lat: 25.372562, lng: 51.472437 });
   });
 
   it("finds hospitals on the same campus", () => {
