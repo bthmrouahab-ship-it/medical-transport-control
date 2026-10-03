@@ -1057,12 +1057,12 @@ export const NEARBY_KM = 3;
 export const SAME_DIRECTION_KM = 8;
 
 function hospitalFor(appointment: ClinicAppointment, hospitals: Hospital[]) {
-  if (isNonMedical(appointment)) return null;
+  if (isNonMedical(appointment)) return nonMedicalPlace(appointment);
   return (appointment.hospitalId && hospitals.find((hospital) => hospital.id === appointment.hospitalId))
     || matchHospital(appointment.clinic, hospitals);
 }
 
-/** مستشفى الموعد من الدليل (null للرحلات غير الطبية أو الوجهات غير المعروفة). */
+/** مستشفى الموعد من الدليل، أو موقع وجهة الرحلة غير الطبية (null للوجهات غير المعروفة). */
 export function appointmentHospital(appointment: ClinicAppointment, hospitals: Hospital[] = DEFAULT_HOSPITALS) {
   return hospitalFor(appointment, hospitals) || null;
 }
@@ -1082,6 +1082,7 @@ export function calculateTripGroupingScore(first: ClinicAppointment, second: Cli
   const [firstAt, secondAt] = times ?? [appointmentDateTime(first), appointmentDateTime(second)];
   const timeGapMinutes = Math.round(Math.abs(firstAt.getTime() - secondAt.getTime()) / 60000);
   const sameBuilding = first.buildingNumber.trim().toLowerCase() === second.buildingNumber.trim().toLowerCase();
+  // الرحلة غير الطبية ذات الموقع تُقارن بالمستشفيات مثل أي وجهة: تُجمع مع موعد طبي قريب منها
   const firstHospital = hospitalFor(first, hospitals);
   const secondHospital = hospitalFor(second, hospitals);
   const sameDestination = firstHospital && secondHospital
@@ -1440,14 +1441,29 @@ const byTime = (a: ClinicAppointment, b: ClinicAppointment) => appointmentDateTi
 const KIND_EN: Record<AppointmentKind, string> = { "عادي": "Regular", "احتياجات خاصة": "Special needs" };
 const NEED_EN: Record<AssistanceNeed, string> = { "يحتاج مرافق": "Needs escort", "يحتاج Nurse": "Needs nurse", "كرسي متحرك": "Wheelchair" };
 
-/** وجهات الرحلات غير الطبية (مع «أخرى» تُكتب يدويًا). */
-export const NON_MEDICAL_DESTINATIONS: { ar: string; en: string }[] = [
+/**
+ * وجهات الرحلات غير الطبية (مع «أخرى» تُكتب يدويًا). الوجهة التي لها موقع (من خرائط جوجل، ورمز Plus Code بجانبها)
+ * يُحسب لها الوصول المتوقع والوصول بالـ GPS والملاحة للسائق مثل المستشفى (nonMedicalPlace).
+ */
+export const NON_MEDICAL_DESTINATIONS: { ar: string; en: string; place?: Pick<Hospital, "id" | "zone" | "lat" | "lng"> }[] = [
   { ar: "الجامعة", en: "University" },
   { ar: "المدرسة", en: "School" },
   { ar: "أنصار جاليري المطار القديم", en: "Ansar Gallery, Old Airport" },
+  { ar: "جامعة الدوحة للعلوم والتكنولوجيا", en: "University of Doha for Science and Technology", place: { id: "nm-udst", zone: "الدوحة", lat: 25.360687, lng: 51.481062 } }, // 9F6J+7C الدوحة
+  { ar: "جامعة أوريكس", en: "Oryx University (Liverpool John Moores University)", place: { id: "nm-oryx", zone: "الدوحة", lat: 25.270562, lng: 51.492187 } }, // 7FCR+6V الدوحة
+  { ar: "جامعة لوسيل", en: "Lusail University", place: { id: "nm-lusail-university", zone: "لوسيل", lat: 25.402188, lng: 51.512937 } }, // CG27+V5 الدوحة
+  { ar: "المدرسة الفلسطينية", en: "Palestinian School", place: { id: "nm-palestinian-school", zone: "الدوحة", lat: 25.222313, lng: 51.495812 } }, // 6FCW+W8 الدوحة
+  { ar: "معهد النور", en: "Al Noor Center", place: { id: "nm-al-noor", zone: "الدوحة", lat: 25.340688, lng: 51.465203 } }, // 8FR8+73G الدوحة
 ];
 
 export const isNonMedical = (appointment: Pick<ClinicAppointment, "category">) => appointment.category === "غير طبية";
+
+/** موقع وجهة الرحلة غير الطبية (بشكل مستشفى من الدليل)، أو null للوجهة بلا موقع («الجامعة» أو «أخرى» مكتوبة). */
+export function nonMedicalPlace(appointment: Pick<ClinicAppointment, "category" | "clinic">): Hospital | null {
+  if (!isNonMedical(appointment)) return null;
+  const destination = NON_MEDICAL_DESTINATIONS.find((item) => item.ar === appointment.clinic.trim());
+  return destination?.place ? { ...destination.place, name: destination.ar, nameEn: destination.en, aliases: [], verified: true } : null;
+}
 
 /** اسم الوجهة بالعربية والإنجليزية (من دليل المستشفيات، أو قائمة الرحلات غير الطبية). */
 export function destinationLabels(appointment: ClinicAppointment, hospitals: Hospital[]) {

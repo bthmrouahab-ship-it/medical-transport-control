@@ -148,14 +148,19 @@ const PUSH_TEXT = [
     ],
 ];
 /** وجهات الرحلات غير الطبية بالإنجليزية (نفس NON_MEDICAL_DESTINATIONS في shared/transport.ts) */
-const NON_MEDICAL_EN = ['الجامعة' => 'University', 'المدرسة' => 'School', 'أنصار جاليري المطار القديم' => 'Ansar Gallery, Old Airport'];
+const NON_MEDICAL_EN = [
+    'الجامعة' => 'University', 'المدرسة' => 'School', 'أنصار جاليري المطار القديم' => 'Ansar Gallery, Old Airport',
+    'جامعة الدوحة للعلوم والتكنولوجيا' => 'University of Doha for Science and Technology',
+    'جامعة أوريكس' => 'Oryx University (Liverpool John Moores University)', 'جامعة لوسيل' => 'Lusail University',
+    'المدرسة الفلسطينية' => 'Palestinian School', 'معهد النور' => 'Al Noor Center',
+];
 
 /** اسم الوجهة: كما كتبته العيادة بالعربية، وبالإنجليزية من دليل المستشفيات (للإنجليزية والأردية). */
 function place_name(PDO $pdo, array $appointment, string $lang): string
 {
     $clinic = (string)($appointment['clinic'] ?? '');
     if ($lang === 'ar') return $clinic;
-    if (isset(NON_MEDICAL_EN[$clinic])) return NON_MEDICAL_EN[$clinic];
+    if (isset(NON_MEDICAL_EN[trim($clinic)])) return NON_MEDICAL_EN[trim($clinic)];
     static $names = null;
     if ($names === null) {
         $names = [];

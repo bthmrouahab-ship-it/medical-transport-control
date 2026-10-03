@@ -139,7 +139,7 @@ export default function NonMedicalTripForm({ defaultDate, onSave, onCancel }: {
 
         <fieldset className="sm:col-span-2">
           <legend className={labelClass}>الوجهة</legend>
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
             {[...NON_MEDICAL_DESTINATIONS.map((item) => item.ar), OTHER].map((destination) => (
               <button key={destination} type="button" aria-pressed={form.destination === destination} onClick={() => setForm({ ...form, destination })} className={cx(choiceClass(form.destination === destination), "justify-center text-center")}>{destination}</button>
             ))}
