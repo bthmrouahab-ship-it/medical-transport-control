@@ -83,6 +83,7 @@ import {
   type VehicleRules,
 } from "@shared/transport";
 import type { Hospital } from "@shared/hospitals";
+import { shortDriverName } from "@shared/drivers";
 import { LATE_MINUTES, arrivalsOn, minutesSince, neededAt, returningText, suggestReturnPickups, suggestReturnRedirects, tripEndpoints, tripPhase, vehicleAvailability, vehicleLocationState, type TripPhase, type VehicleLocationState } from "@shared/trips";
 import {
   Badge,
@@ -854,6 +855,7 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
               {shownVehicles.map((vehicle) => {
                 const state = availabilityText(vehicle);
                 const live = liveGps.get(vehicle.plate);
+                const driverName = live?.driver ?? vehicle.driver;
                 return (
                   <li key={vehicle.plate} data-target={`vehicle:${vehicle.plate}`} className="flex items-center gap-2 px-3 py-2.5">
                     <div className="min-w-0 flex-1">
@@ -869,7 +871,8 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
                         <div className="min-w-0 flex-1">
                           <p className="flex items-center gap-1.5 text-sm font-medium text-ink">
                             <KindIcon vehicle={vehicle} size="sm" />
-                            <span className="truncate"><span dir="ltr" className="font-semibold">{vehicle.plate}</span> · {live?.driver ?? (vehicle.driver || <span className="text-amber-700">بلا سائق</span>)}</span>
+                            {/* أول كلمة من اسم السائق، والاسم الكامل عند المرور وفي تفاصيل السيارة */}
+                            <span className="truncate" title={driverName || undefined}><span dir="ltr" className="font-semibold">{vehicle.plate}</span> · {driverName ? shortDriverName(driverName) : <span className="text-amber-700">بلا سائق</span>}</span>
                           </p>
                           <p className="text-xs leading-5 text-slate-500"><KindLabel vehicle={vehicle} extra={roleOf(vehicle)} /> · {state.text}{live ? " · GPS مباشر" : ""}</p>
                         </div>

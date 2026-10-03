@@ -1475,22 +1475,29 @@ export function buildDriverMessage(
   const leg = nurseLeg
     ? { ar: "عودة الـ Nurse فقط", en: "Nurse return only" }
     : { ar: transfer ? "نقل بين موعدين" : returning ? "عودة" : "ذهاب", en: transfer ? "Transfer between appointments" : returning ? "Return" : "Outbound" };
+  // عدد الأشخاص دائمًا بجانب رقم السيارة: الضيف ومرافقه والـ Nurse (وفي الرحلة المجمّعة مجموعهم، وعدد كل ضيف تحته)
+  const grouped = sorted.length > 1;
+  const peopleOf = (trip: (typeof sorted)[number]) => trip.persons ?? tripPersons(trip.appointment, trip.request);
+  const totalPeople = sorted.reduce((sum, trip) => sum + peopleOf(trip), 0);
   const ar: string[] = [
-    sorted.length > 1 ? `رحلة مجمّعة (${sorted.length} ضيوف) — ${leg.ar}` : `رحلة جديدة — ${leg.ar}`,
+    grouped ? `رحلة مجمّعة (${sorted.length} ضيوف) — ${leg.ar}` : `رحلة جديدة — ${leg.ar}`,
     `السيارة: ${vehicle.plate}`,
+    grouped ? `مجموع الأشخاص في السيارة: ${totalPeople}` : `عدد الأشخاص: ${totalPeople}`,
   ];
   const en: string[] = [
-    sorted.length > 1 ? `Grouped trip (${sorted.length} guests) — ${leg.en}` : `New trip — ${leg.en}`,
+    grouped ? `Grouped trip (${sorted.length} guests) — ${leg.en}` : `New trip — ${leg.en}`,
     `Vehicle: ${vehicle.plate}`,
+    grouped ? `Total persons in the car: ${totalPeople}` : `Persons: ${totalPeople}`,
   ];
-  sorted.forEach(({ appointment, request, from, persons }, index) => {
+  sorted.forEach((trip, index) => {
+    const { appointment, request, from } = trip;
     const destination = destinationLabels(appointment, hospitals);
     const prefix = sorted.length > 1 ? `${index + 1}) ` : "";
     // الممرضة من قائمة الممرضات تُذكر باسم وظيفتها
     const rider = isNonMedical(appointment) ? { ar: "الراكب", en: "Passenger" } : appointment.nurse ? { ar: "الممرضة", en: "Nurse" } : { ar: "الضيف", en: "Guest" };
     // عودة الـ Nurse فقط: الراكب هو الـ Nurse ويبقى الضيف في موعده
     const nurse = Boolean(request.nurseOnly);
-    const people = persons ?? tripPersons(appointment, request);
+    const people = peopleOf(trip);
     const needsAr = nurse ? "" : appointment.assistance.join("، ");
     const needsEn = nurse ? "" : appointment.assistance.map((need) => NEED_EN[need]).join(", ");
     // في النقل بين موعدين يُستلم الضيف من مستشفى موعده الأول
@@ -1507,7 +1514,7 @@ export function buildDriverMessage(
       `${isNonMedical(appointment) ? "الوقت" : "الموعد"}: ${appointment.appointmentDate} ${appointment.appointmentAt}`,
       `جوال ${rider.ar}: ${appointment.mobile}`,
       `نوع الرحلة: ${appointment.kind}${needsAr ? ` · ${needsAr}` : ""}`,
-      ...(people > 1 ? [`عدد الأشخاص: ${people}`] : []),
+      ...(grouped ? [`عدد الأشخاص: ${people}`] : []),
     );
     en.push(
       "",
@@ -1519,7 +1526,7 @@ export function buildDriverMessage(
       `${isNonMedical(appointment) ? "Time" : "Appointment"}: ${appointment.appointmentDate} ${appointment.appointmentAt}`,
       `${rider.en} mobile: ${appointment.mobile}`,
       `Trip type: ${KIND_EN[appointment.kind]}${needsEn ? ` · ${needsEn}` : ""}`,
-      ...(people > 1 ? [`Persons: ${people}`] : []),
+      ...(grouped ? [`Persons: ${people}`] : []),
     );
   });
   return [...ar, "", "—————", "", ...en].join("\n");
