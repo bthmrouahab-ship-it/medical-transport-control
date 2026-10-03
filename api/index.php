@@ -52,6 +52,7 @@ try {
         'POST push-unsubscribe' => 'route_push_unsubscribe',
         'POST guests.import' => 'route_guests_import',
         'POST private-cars.import' => 'route_private_cars_import',
+        'POST special-needs.import' => 'route_special_needs_import',
         'GET guests-stats' => 'route_guests_stats',
     ];
     $handler = $handlers["$method $route"] ?? null;
@@ -396,13 +397,13 @@ function route_write(PDO $pdo, array $body): array
                 $after = $op['data'] ?? null;
                 if (!is_array($after) || ($after && array_is_list($after))) throw new ApiException(400, 'بيانات غير صالحة', 'bad_request');
                 // علامتا «أقل من 18 سنة» و«سيارة خاصة» تضيفهما المزامنة (public_doc) ولا تُحفظان
-                if ($col === 'guests') unset($after['minor'], $after['privateCar']);
+                if ($col === 'guests') unset($after['minor'], $after['privateCar'], $after['specialNeeds']);
             } elseif ($kind === 'update') {
                 if ($before === null) throw new ApiException(409, 'تغيّر هذا العنصر أو حُذف من مستخدم آخر. حدّث الصفحة وحاول مرة أخرى.', 'conflict');
                 $after = $before;
                 foreach ((array)($op['set'] ?? []) as $field => $value) $after[(string)$field] = $value;
                 foreach ((array)($op['unset'] ?? []) as $field) unset($after[(string)$field]);
-                if ($col === 'guests') unset($after['minor'], $after['privateCar']);
+                if ($col === 'guests') unset($after['minor'], $after['privateCar'], $after['specialNeeds']);
             } elseif ($kind === 'delete') {
                 if ($before === null) continue;
                 $after = null;
@@ -422,6 +423,17 @@ function route_write(PDO $pdo, array $body): array
                 $units = [];
                 foreach ([$before, $after] as $car) if ($car) $units[unit_key($car['buildingNumber'] ?? '', $car['apartmentNumber'] ?? '')] = true;
                 touch_unit_guests($pdo, $units, $rev);
+            }
+            // ربط صاحب احتياجات خاصة بضيف أو حذفه: يُعاد إرسال الضيف بالعلامة الجديدة
+            if ($col === 'specialNeeds') {
+                special_needs_index(true);
+                $ids = $health = [];
+                foreach ([$before, $after] as $entry) {
+                    if (!$entry) continue;
+                    if (!empty($entry['guestId'])) $ids[(string)$entry['guestId']] = true;
+                    foreach (health_keys($entry['healthNumber'] ?? '') as $key) $health[$key] = true;
+                }
+                touch_guests($pdo, $ids, $health, $rev);
             }
         }
         // اسم السائق ورقمه في السيارات، والسائق في سيارة واحدة، وحسابات السائقين تتبع سياراتهم
@@ -467,7 +479,7 @@ function route_guests_import(PDO $pdo, array $body): array
         $seen = [];
         foreach ($guests as $index => $guest) {
             $id = is_array($guest) ? (string)($guest['id'] ?? '') : '';
-            if (is_array($guest)) unset($guest['minor'], $guest['privateCar']);
+            if (is_array($guest)) unset($guest['minor'], $guest['privateCar'], $guest['specialNeeds']);
             if (!valid_doc_id($id) || isset($seen[$id]) || !valid_guest($guest, $id)) {
                 throw new ApiException(400, 'بيانات الضيف رقم ' . ($index + 1) . ' في الملف غير صالحة', 'invalid');
             }
@@ -548,6 +560,104 @@ function route_private_cars_import(PDO $pdo, array $body): array
         throw $error;
     }
     return ['cars' => count($entries), 'units' => count($added), 'guests' => $guests];
+}
+
+/** الاسم الأول بالإنجليزية للمطابقة (ثلاثة أحرف فأكثر، وإلا لا شيء) */
+function first_name_key($name): string
+{
+    $words = preg_split('/[^a-z]+/', strtolower((string)$name), -1, PREG_SPLIT_NO_EMPTY) ?: [];
+    return strlen($words[0] ?? '') >= 3 ? $words[0] : '';
+}
+
+/**
+ * ضيف القائمة لصاحب الاحتياجات الخاصة: بأحد أرقامه الصحية، وإلا بالاسم الأول الإنجليزي نفسه في نفس المبنى والشقة
+ * (ضيف واحد فقط). اسم العائلة واسم الأب وحدهما لا يكفيان: يشترك فيهما أفراد العائلة في الشقة.
+ * يعيد [رقم الضيف، طريقة المطابقة] أو [null، null].
+ */
+function match_special_need(array $entry, array $guests): array
+{
+    $health = array_flip(health_keys($entry['healthNumber'] ?? ''));
+    if ($health) {
+        foreach ($guests as $guest) {
+            foreach (health_keys($guest['healthNumber'] ?? '') as $key) if (isset($health[$key])) return [(string)$guest['id'], 'health'];
+        }
+    }
+    $unit = unit_key($entry['buildingNumber'] ?? '', $entry['apartmentNumber'] ?? '');
+    $first = first_name_key($entry['name'] ?? '');
+    if ($first === '' || $unit === '/') return [null, null];
+    $found = [];
+    foreach ($guests as $guest) {
+        if (unit_key($guest['buildingNumber'] ?? '', $guest['apartmentNumber'] ?? '') !== $unit) continue;
+        if (in_array($first, [first_name_key($guest['nameEn'] ?? ''), first_name_key($guest['name'] ?? '')], true)) $found[] = (string)$guest['id'];
+    }
+    return count($found) === 1 ? [$found[0], 'name'] : [null, null];
+}
+
+/**
+ * رفع قائمة ذوي الاحتياجات الخاصة (المدير): تحل محل القائمة الحالية كلها، ويُطابق كل شخص بضيف من القائمة (الرقم الصحي
+ * ثم الاسم والشقة). dryRun: المراجعة فقط بلا حفظ. صاحب الاحتياجات الخاصة مستثنى من منع السيارات الخاصة.
+ */
+function route_special_needs_import(PDO $pdo, array $body): array
+{
+    $user = current_user($pdo);
+    require_role($user, ['admin']);
+    $entries = $body['entries'] ?? null;
+    if (!is_array($entries) || !array_is_list($entries) || count($entries) > 5000) throw new ApiException(400, 'بيانات غير صالحة', 'bad_request');
+    $dryRun = ($body['dryRun'] ?? false) === true;
+    $guests = [];
+    foreach ($pdo->query("SELECT id, data FROM docs WHERE col = 'guests' AND data IS NOT NULL") as $row) {
+        $guest = decode_doc($row['data']);
+        if ($guest && ($guest['nurse'] ?? null) !== true) $guests[(string)$row['id']] = ['id' => (string)$row['id']] + $guest;
+    }
+    $units = private_car_units();
+    $stamp = base_convert((string)time(), 10, 36);
+    $docs = [];
+    $rows = [];
+    $counts = ['health' => 0, 'name' => 0, 'unmatched' => 0, 'privateCar' => 0];
+    foreach ($entries as $index => $entry) {
+        $id = "SN-$stamp-" . ($index + 1);
+        $doc = is_array($entry) ? array_intersect_key($entry, array_flip(['name', 'gender', 'healthNumber', 'buildingNumber', 'apartmentNumber', 'mobile'])) : [];
+        foreach ($doc as $field => $value) if (is_string($value)) $doc[$field] = trim($value);
+        $doc = array_filter($doc, fn($value) => $value !== '' && $value !== null);
+        [$guestId, $how] = match_special_need($doc, $guests);
+        $doc = ['id' => $id] + $doc + ($guestId ? ['guestId' => $guestId] : []) + ['_o' => $index];
+        if (!valid_special_need($doc, $id)) throw new ApiException(400, 'بيانات الشخص رقم ' . ($index + 1) . ' في الملف غير صالحة', 'invalid');
+        $guest = $guestId ? $guests[$guestId] : null;
+        $counts[$how ?? 'unmatched'] += 1;
+        // يسكن في شقة لها سيارة خاصة: يُستثنى من المنع
+        if ($guest && isset($units[unit_key($guest['buildingNumber'] ?? '', $guest['apartmentNumber'] ?? '')])) $counts['privateCar'] += 1;
+        $docs[$id] = $doc;
+        $rows[] = ['row' => $index, 'match' => $how, 'guestId' => $guestId, 'guestName' => $guest['name'] ?? null,
+            'guestUnit' => $guest ? ($guest['buildingNumber'] ?? '') . '/' . ($guest['apartmentNumber'] ?? '') : null];
+    }
+    if ($dryRun) return ['rows' => $rows, 'counts' => $counts];
+    $pdo->beginTransaction();
+    try {
+        $rev = next_revision($pdo);
+        $ids = $health = [];
+        foreach ($pdo->query("SELECT id, data FROM docs WHERE col = 'specialNeeds' AND data IS NOT NULL FOR UPDATE") as $row) {
+            $old = decode_doc($row['data']);
+            if (!empty($old['guestId'])) $ids[(string)$old['guestId']] = true;
+            foreach (health_keys($old['healthNumber'] ?? '') as $key) $health[$key] = true;
+            save_doc($pdo, 'specialNeeds', (string)$row['id'], null, $rev);
+        }
+        foreach ($docs as $id => $doc) {
+            save_doc($pdo, 'specialNeeds', $id, $doc, $rev);
+            if (!empty($doc['guestId'])) $ids[$doc['guestId']] = true;
+            foreach (health_keys($doc['healthNumber'] ?? '') as $key) $health[$key] = true;
+        }
+        // ضيوف القائمة القديمة والجديدة يُعاد إرسالهم بالعلامة الصحيحة
+        special_needs_index(true);
+        touch_guests($pdo, $ids, $health, $rev);
+        $matched = $counts['health'] + $counts['name'];
+        $summary = 'رفع قائمة ذوي الاحتياجات الخاصة: ' . count($docs) . " شخصًا، طوبق منهم $matched بضيوف القائمة" . ($counts['privateCar'] ? "، ويُستثنى {$counts['privateCar']} يسكنون في شقق لها سيارة خاصة" : '');
+        log_activity($pdo, $user, 'guest', 'guest.special_needs', $summary, '', ['changes' => count($docs) . ' شخصًا']);
+        $pdo->commit();
+    } catch (Throwable $error) {
+        $pdo->rollBack();
+        throw $error;
+    }
+    return ['rows' => $rows, 'counts' => $counts, 'saved' => count($docs)];
 }
 
 /** قائمة الضيوف كاملة مع العمر والرقم الصحي: للإحصائيات فقط (المدير ومشرف السيارات). */

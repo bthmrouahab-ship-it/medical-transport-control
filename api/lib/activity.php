@@ -380,6 +380,15 @@ function describe_write(PDO $pdo, string $col, string $id, ?array $before, ?arra
             if ($after === null) return ['guest', 'guest.private_car', "حذف السيارة الخاصة لـ$place" . ($owner ? " ($owner)" : '') . ' · يُسمح لضيوفها بسيارات المجمع', $details];
             return ['guest', 'guest.private_car', "تعديل السيارة الخاصة لـ$place", $details];
 
+        case 'specialNeeds':
+            // ذوو الاحتياجات الخاصة: مستثنون من منع السيارات الخاصة
+            $entry = $after ?? $before;
+            $name = $entry['name'] ?? $id;
+            if ($before === null) return ['guest', 'guest.special_need', "إضافة $name إلى قائمة ذوي الاحتياجات الخاصة", ['patient' => $name]];
+            if ($after === null) return ['guest', 'guest.special_need', "حذف $name من قائمة ذوي الاحتياجات الخاصة", ['patient' => $name]];
+            $guest = empty($after['guestId']) ? 'إلغاء الربط' : 'ربطه بضيف من القائمة';
+            return ['guest', 'guest.special_need', "تعديل $name في قائمة ذوي الاحتياجات الخاصة: $guest", ['patient' => $name]];
+
         case 'vehicleLocations':
             return ['location', 'location.delete', "حذف آخر موقع للسيارة $id", ['plate' => $id]];
 

@@ -62,7 +62,7 @@ import {
   type VehicleRequest,
 } from "@shared/transport";
 import { matchHospital, normalizePlaceName, type Hospital } from "@shared/hospitals";
-import { guestIndex, guestOfAppointment, hasPrivateCar, isMinor, isNurse, searchGuests, type Guest } from "@shared/guests";
+import { guestIndex, guestOfAppointment, hasPrivateCar, hasSpecialNeeds, isMinor, isNurse, searchGuests, type Guest } from "@shared/guests";
 import { Badge, DateChooser, EmptyState, Field, Panel, PageHeader, Segmented, Stat, StatusBadge, StatusBar, btn, choiceClass, cx, formatDay, inputClass, labelClass, longDate } from "@/components/ui-kit";
 import { FILTER_LABELS_AR, FILTER_LABELS_EN, FilterTable, useColumnFilters, type FilterColumn } from "@/components/ExcelFilter";
 import { cancelReasonText, enableTranslation, hasArabic, useCancelReason } from "@/lib/translate";
@@ -591,12 +591,16 @@ export function ClinicForm({ t, lang, initial, defaultDate, returnOnly = false, 
       const previous = current.guestId ? index.byId.get(current.guestId) : undefined;
       // هاتف الضيف من القائمة، إلا إذا كتبت العيادة رقمًا آخر
       const mobile = !current.mobile || current.mobile === previous?.mobile ? next?.mobile ?? "" : current.mobile;
+      // من ذوي الاحتياجات الخاصة (موعد جديد): نوع الرحلة «احتياجات خاصة» و«كرسي متحرك»، ويمكن تغييرهما
+      const special = !initial && hasSpecialNeeds(next);
+      const assistance = withMinorEscort(current.assistance, isMinor(next));
       return {
         ...current,
         guestId: next?.id ?? "",
         mobile,
         gender: next?.gender ?? (next ? current.gender : undefined),
-        assistance: withMinorEscort(current.assistance, isMinor(next)),
+        kind: special ? "احتياجات خاصة" as AppointmentKind : current.kind,
+        assistance: special && !assistance.includes("كرسي متحرك") ? [...assistance, "كرسي متحرك" as AssistanceNeed] : assistance,
       };
     });
   }
@@ -703,6 +707,7 @@ export function ClinicForm({ t, lang, initial, defaultDate, returnOnly = false, 
             </p>
           )}
           <GuestPicker t={t} guests={guests} guest={guest} onSelect={selectGuest} notListed={notListed} />
+          {hasSpecialNeeds(guest) && <SpecialNeedsNote t={t} chosen={!initial} />}
           <HospitalSelect id="hospital-first" label={returnOnly ? t.returnHospital : t.hospital} value={form.hospitalId} onChange={(hospitalId) => setForm({ ...form, hospitalId })} hospitals={hospitals} lang={lang} placeholder={t.hospitalChoose} noMatch={t.hospitalNoMatch} wide />
           <Field label={t.mobile} value={form.mobile} onChange={(value) => setForm({ ...form, mobile: value })} type="tel" dir="ltr" wide />
           {!guest?.gender && <fieldset className="sm:col-span-2">
@@ -760,6 +765,16 @@ export function ClinicForm({ t, lang, initial, defaultDate, returnOnly = false, 
         </form>
       </Panel>
     </div>
+  );
+}
+
+/** ملاحظة «احتياجات خاصة» عند تسجيل موعد لضيف من قائمة ذوي الاحتياجات الخاصة */
+export function SpecialNeedsNote({ t, chosen }: { t: ClinicText; chosen: boolean }) {
+  return (
+    <p role="note" className="flex items-start gap-2.5 rounded-xl bg-violet-50 px-4 py-3 text-sm leading-6 text-violet-900 ring-1 ring-inset ring-violet-200 sm:col-span-2">
+      <Accessibility className="mt-1 h-4 w-4 shrink-0" />
+      <span><span className="font-semibold">{t.specialNeedsNote}</span>{chosen ? ` ${t.specialNeedsChosen}` : ""}</span>
+    </p>
   );
 }
 
@@ -926,6 +941,7 @@ export function GuestPicker({ t, guests, guest, onSelect, notListed }: {
               {guest.gender && <Badge tone="neutral">{t.genderLabel(guest.gender)}</Badge>}
               {isMinor(guest) && <Badge tone="amber" icon={Baby}>{t.minor}</Badge>}
               {hasPrivateCar(guest) && <Badge tone="red" icon={CarFront}>{t.privateCarBadge}</Badge>}
+              {hasSpecialNeeds(guest) && <Badge tone="violet" icon={Accessibility}>{t.specialNeedsBadge}</Badge>}
             </div>
             {/* موعد سابق لضيف أُضيفت شقته إلى السيارات الخاصة */}
             {hasPrivateCar(guest) && privateCarAlert(guest)}
@@ -1016,6 +1032,7 @@ export function GuestPicker({ t, guests, guest, onSelect, notListed }: {
                     <span className="truncate"><bdi>{mainName(item)}</bdi></span>
                     {isNurse(item) && <Badge tone="violet" icon={BriefcaseMedical} className="shrink-0">{t.nurse}</Badge>}
                     {hasPrivateCar(item) && <Badge tone="red" icon={CarFront} className="shrink-0" title={t.privateCarHint}>{t.privateCarBadge}</Badge>}
+                    {hasSpecialNeeds(item) && <Badge tone="violet" icon={Accessibility} className="shrink-0">{t.specialNeedsBadge}</Badge>}
                   </span>
                   {otherName(item) && <span className="block truncate text-xs text-slate-500"><bdi>{otherName(item)}</bdi></span>}
                 </span>

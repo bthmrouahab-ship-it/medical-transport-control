@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { PRIVATE_CAR_NAME_HEADERS, hasPrivateCar, parsePrivateCarRows, planPrivateCars, tableRows, unitKey, type Guest } from "../shared/guests";
+import { PRIVATE_CAR_NAME_HEADERS, SPECIAL_NEED_HEADERS, hasPrivateCar, hasSpecialNeeds, parsePrivateCarRows, parseSpecialNeedsRows, planPrivateCars, tableRows, unitKey, type Guest } from "../shared/guests";
 import { parseImportedAppointments } from "../shared/transport";
 import { DEFAULT_HOSPITALS } from "../shared/hospitals";
 
@@ -55,5 +55,43 @@ describe("private cars: the owner's whole apartment cannot use the complex cars"
     const { appointments, errors } = parseImportedAppointments([row("ابن صاحب السيارة"), row("ضيف بلا سيارة")], [], 1, "2026-10-04", DEFAULT_HOSPITALS, guests);
     expect(appointments.map((appointment) => appointment.guestId)).toEqual(["G-2"]);
     expect(errors).toEqual(["الصف 2: «ابن صاحب السيارة»: هذا الشخص يمتلك سيارة خاصة ولا يمكنه استخدام سيارات المجمع"]);
+  });
+});
+
+describe("special needs list: the person is exempt from the private car ban", () => {
+  const wheelchair: unknown[][] = [
+    ["PATIENT'S on WHEEL CHAIR (test)", "", "", "", "", "", "", "", ""],
+    ["", "", "", "", "", "", "", "", ""],
+    ["#", "NAME", "gender", "age", "DATE OF BIRTH", "HC", "building", "ROOM", "contact number"],
+    ["", "", "", "", "", "", "", "", ""],
+    ["1", "TEST PERSON ONE", "M", "14", "2012-01-01", "08770001", "21", "109", "33400001"],
+    ["2", "TEST PERSON TWO", "F", "70", "1956-01-01", "", "5", "002", ""],
+    ["3", "", "", "", "", "", "9", "101", ""],
+  ];
+
+  it("reads the wheelchair file under its title (name, gender, health number, unit, phone)", () => {
+    const table = tableRows(wheelchair, SPECIAL_NEED_HEADERS);
+    expect(table.firstRow).toBe(4);
+    const { people, errors } = parseSpecialNeedsRows(table.rows, table.firstRow);
+    expect(people).toEqual([
+      { name: "TEST PERSON ONE", gender: "ذكر", healthNumber: "08770001", buildingNumber: "21", apartmentNumber: "109", mobile: "33400001" },
+      { name: "TEST PERSON TWO", gender: "أنثى", buildingNumber: "5", apartmentNumber: "002" },
+    ]);
+    // صف فيه المبنى والشقة فقط بلا اسم ولا رقم صحي
+    expect(errors).toEqual(["الصف 7: الاسم والرقم الصحي ناقصان"]);
+  });
+
+  it("the special-needs person is not counted among those blocked by the private car", () => {
+    const guests: Guest[] = [
+      { id: "G-1", name: "ضيف على كرسي متحرك", buildingNumber: "18", apartmentNumber: "209", specialNeeds: true },
+      { id: "G-2", name: "أخوه", buildingNumber: "18", apartmentNumber: "209" },
+    ];
+    expect(hasSpecialNeeds(guests[0])).toBe(true);
+    expect(hasPrivateCar(guests[0])).toBe(false);
+    expect(planPrivateCars([{ buildingNumber: "18", apartmentNumber: "209" }], guests).blocked).toBe(1);
+    // شقة صاحب الاحتياجات الخاصة وحده: لا يُمنع أحد، وليست «بلا ضيوف»
+    const alone = planPrivateCars([{ buildingNumber: "18", apartmentNumber: "209" }], [guests[0]]);
+    expect(alone.blocked).toBe(0);
+    expect(alone.unlisted).toEqual([]);
   });
 });

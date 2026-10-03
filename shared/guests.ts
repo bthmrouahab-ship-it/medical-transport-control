@@ -29,6 +29,25 @@ export type Guest = {
    * (public_doc)، ولا تُحفظ. لا يُضاف له موعد ولا رحلة.
    */
   privateCar?: true;
+  /**
+   * من ذوي الاحتياجات الخاصة (قائمة يرفعها المدير، مثل مستخدمي الكرسي المتحرك): يضيفها الخادم عند المزامنة ولا تُحفظ.
+   * مستثنى من منع السيارات الخاصة، وتظهر ملاحظة «احتياجات خاصة» عند تسجيل موعده.
+   */
+  specialNeeds?: true;
+};
+
+export const hasSpecialNeeds = (guest?: Pick<Guest, "specialNeeds"> | null) => guest?.specialNeeds === true;
+
+/** شخص من قائمة ذوي الاحتياجات الخاصة (للمدير): guestId ضيف القائمة المطابق (بالرقم الصحي أو الاسم والشقة، أو يربطه المدير) */
+export type SpecialNeed = {
+  id: string;
+  name?: string;
+  gender?: Gender;
+  healthNumber?: string;
+  buildingNumber?: string;
+  apartmentNumber?: string;
+  mobile?: string;
+  guestId?: string;
 };
 
 /** سيارة خاصة لشقة (يرفعها المدير): ضيوف الشقة كلهم لا يستخدمون سيارات المجمع */
@@ -183,11 +202,53 @@ export function parsePrivateCarRows(rows: Record<string, unknown>[], firstRow = 
   return { cars, errors };
 }
 
+/** أعمدة قائمة ذوي الاحتياجات الخاصة (مثل PATIENT'S on WHEEL CHAIR): NAME، gender، HC، building، ROOM، contact number */
+const SPECIAL_NEED_COLUMNS = {
+  name: ["name", "الاسم", "اسم الضيف", ...COLUMNS.nameEn, ...COLUMNS.name],
+  gender: COLUMNS.gender,
+  healthNumber: ["hc", ...COLUMNS.healthNumber],
+  building: COLUMNS.building,
+  apartment: ["room", "room number", ...COLUMNS.apartment],
+  mobile: ["contact number", "contact", ...COLUMNS.mobile],
+};
+export const SPECIAL_NEED_HEADERS = ["name", "hc", "الاسم", "الرقم الصحي"];
+
+/** يقرأ قائمة ذوي الاحتياجات الخاصة: يكفي الاسم أو الرقم الصحي (المطابقة بقائمة الضيوف في الخادم). */
+export function parseSpecialNeedsRows(rows: Record<string, unknown>[], firstRow = 2): { people: Omit<SpecialNeed, "id" | "guestId">[]; errors: string[] } {
+  const people: Omit<SpecialNeed, "id" | "guestId">[] = [];
+  const errors: string[] = [];
+  rows.forEach((row, index) => {
+    const excelRow = firstRow + index;
+    const name = spaced(readAliased(row, SPECIAL_NEED_COLUMNS.name)).slice(0, GUEST_NAME_MAX);
+    const healthNumber = normalizeHealthNumber(readAliased(row, SPECIAL_NEED_COLUMNS.healthNumber));
+    const buildingNumber = normalizeUnit(readAliased(row, SPECIAL_NEED_COLUMNS.building)).slice(0, 20);
+    const apartmentNumber = normalizeUnit(readAliased(row, SPECIAL_NEED_COLUMNS.apartment)).slice(0, 20);
+    if (!name && !healthNumber) {
+      // صف فارغ أو فيه رقم التسلسل فقط لا يُعدّ خطأ
+      if (buildingNumber || apartmentNumber) errors.push(`الصف ${excelRow}: الاسم والرقم الصحي ناقصان`);
+      return;
+    }
+    const gender = normalizeGender(readAliased(row, SPECIAL_NEED_COLUMNS.gender));
+    const mobile = normalizeGuestMobile(readAliased(row, SPECIAL_NEED_COLUMNS.mobile));
+    people.push({
+      ...(name ? { name } : {}),
+      ...(gender ? { gender } : {}),
+      ...(healthNumber ? { healthNumber } : {}),
+      ...(buildingNumber ? { buildingNumber } : {}),
+      ...(apartmentNumber ? { apartmentNumber } : {}),
+      ...(mobile ? { mobile: mobile.slice(0, 20) } : {}),
+    });
+  });
+  return { people, errors };
+}
+
 /** مراجعة القائمة قبل الحفظ: عدد الشقق، والضيوف الذين يُمنعون (بلا الممرضات)، والشقق غير الموجودة في قائمة الضيوف. */
 export function planPrivateCars(cars: Pick<PrivateCar, "buildingNumber" | "apartmentNumber">[], guests: Guest[]) {
   const units = new Set(cars.map((car) => unitKey(car.buildingNumber, car.apartmentNumber)));
-  const blocked = guests.filter((guest) => !isNurse(guest) && units.has(unitKey(guest.buildingNumber, guest.apartmentNumber)));
-  const listed = new Set(blocked.map((guest) => unitKey(guest.buildingNumber, guest.apartmentNumber)));
+  const residents = guests.filter((guest) => !isNurse(guest) && units.has(unitKey(guest.buildingNumber, guest.apartmentNumber)));
+  // صاحب الاحتياجات الخاصة مستثنى من المنع (وشقته ليست بلا ضيوف)
+  const blocked = residents.filter((guest) => !hasSpecialNeeds(guest));
+  const listed = new Set(residents.map((guest) => unitKey(guest.buildingNumber, guest.apartmentNumber)));
   return { units: units.size, blocked: blocked.length, unlisted: cars.filter((car) => !listed.has(unitKey(car.buildingNumber, car.apartmentNumber))) };
 }
 

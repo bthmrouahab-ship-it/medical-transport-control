@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { DEFAULT_HOSPITALS, type Hospital } from "@shared/hospitals";
-import type { Guest, PrivateCar } from "@shared/guests";
+import type { Guest, PrivateCar, SpecialNeed } from "@shared/guests";
 import type { Driver } from "@shared/drivers";
 import { loadState, subscribeState, type SharedKey } from "./appStore";
 import { locationFreshness, type VehicleLocation } from "./vehicleLocation";
@@ -34,6 +34,11 @@ export function useGuests(): Guest[] {
 /** السيارات الخاصة (تصل للمدير فقط): ضيوف كل شقة فيها لا يُضاف لهم موعد. */
 export function usePrivateCars(): PrivateCar[] {
   return useSharedState<PrivateCar[]>("fox_private_cars", []);
+}
+
+/** ذوو الاحتياجات الخاصة (تصل للمدير فقط): مستثنون من منع السيارات الخاصة. */
+export function useSpecialNeeds(): SpecialNeed[] {
+  return useSharedState<SpecialNeed[]>("fox_special_needs", []);
 }
 
 /** قائمة السائقين (تصل للمدير ومشرف السيارات): مستقلة عن السيارات. */

@@ -13,11 +13,11 @@ import {
   type VehicleRequest,
   withMinorEscort,
 } from "@shared/transport";
-import { PRIVATE_CAR_MESSAGE, guestIndex, hasPrivateCar, isMinor, isNurse, type Guest } from "@shared/guests";
+import { PRIVATE_CAR_MESSAGE, guestIndex, hasPrivateCar, hasSpecialNeeds, isMinor, isNurse, type Guest } from "@shared/guests";
 import { CLINIC_TEXT } from "@/lib/i18n";
 import { useGuests } from "@/lib/useShared";
 import { DateChooser, Field, Panel, btn, choiceClass, cx, inputClass, labelClass, timeLabel } from "@/components/ui-kit";
-import { GuestPicker, NeedsField } from "./ClinicPages";
+import { GuestPicker, NeedsField, SpecialNeedsNote } from "./ClinicPages";
 
 const OTHER = "أخرى";
 
@@ -52,7 +52,17 @@ export default function NonMedicalTripForm({ defaultDate, onSave, onCancel }: {
       // هاتف الضيف من القائمة، إلا إذا كتب المشرف رقمًا آخر
       const mobile = !current.mobile || current.mobile === previous?.mobile ? next?.mobile ?? "" : current.mobile;
       // الضيف أقل من 18 سنة: المرافق إلزامي إلا مع Nurse
-      return { ...current, guestId: next?.id ?? "", mobile, gender: next?.gender ?? (next ? current.gender : undefined), assistance: withMinorEscort(current.assistance, isMinor(next)) };
+      const assistance = withMinorEscort(current.assistance, isMinor(next));
+      // من ذوي الاحتياجات الخاصة: «احتياجات خاصة» و«كرسي متحرك»، ويمكن تغييرهما
+      const special = hasSpecialNeeds(next);
+      return {
+        ...current,
+        guestId: next?.id ?? "",
+        mobile,
+        gender: next?.gender ?? (next ? current.gender : undefined),
+        kind: special ? "احتياجات خاصة" as AppointmentKind : current.kind,
+        assistance: special && !assistance.includes("كرسي متحرك") ? [...assistance, "كرسي متحرك" as AssistanceNeed] : assistance,
+      };
     });
   }
 
@@ -125,6 +135,7 @@ export default function NonMedicalTripForm({ defaultDate, onSave, onCancel }: {
     >
       <form onSubmit={submit} className="grid gap-5 p-5 sm:grid-cols-2 sm:p-6">
         <GuestPicker t={CLINIC_TEXT.ar} guests={guests} guest={guest} onSelect={selectGuest} />
+        {hasSpecialNeeds(guest) && <SpecialNeedsNote t={CLINIC_TEXT.ar} chosen />}
 
         <fieldset className="sm:col-span-2">
           <legend className={labelClass}>الوجهة</legend>
