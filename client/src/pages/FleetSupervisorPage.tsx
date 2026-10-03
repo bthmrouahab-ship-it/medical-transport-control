@@ -219,8 +219,8 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
   /** ضم ضيف ينتظر السيارة إلى رحلة جارية (استلمه السائق أو سيستلمه). يعيد رسالة السائق */
   onAddToTrip: (requestId: string, tripRequestIds: string[], vehicle: Vehicle, pickedUp: boolean) => DriverMessage[];
   onExport: () => void;
-  /** رحلة غير طبية (أو رحلات متكررة) مع طلب سيارة كل منها، في حفظ واحد */
-  onAddTrips: (trips: { appointment: ClinicAppointment; request: VehicleRequest }[]) => void;
+  /** رحلة غير طبية مع طلب سيارتها، أو رحلات متكررة بلا طلب (يطلبها مشرف المبنى في يومها)، في حفظ واحد */
+  onAddTrips: (trips: { appointment: ClinicAppointment; request?: VehicleRequest }[]) => void;
   /** إيقاف رحلات متكررة قادمة لم تُرسل سيارتها: تُلغى بالسبب ويُحذف طلبها */
   onStopSeries: (appointmentIds: string[], reason: string) => void;
 }) {
@@ -240,7 +240,7 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
   /** إزالة ضيف من رحلة جارية، وإضافة ضيف إليها */
   const [removing, setRemoving] = useState<{ trip: Trip; alone: boolean } | null>(null);
   // إيقاف رحلة متكررة: هذه الرحلة وحدها، أو هي وما بعدها
-  const [stopping, setStopping] = useState<Trip | null>(null);
+  const [stopping, setStopping] = useState<ClinicAppointment | null>(null);
   const [adding, setAdding] = useState<Trip[] | null>(null);
   /** نافذة السائقين في السيارات (بداية الشفت)، ومعها نص البحث الأول (رقم سيارة من تفاصيلها) */
   const [assigning, setAssigning] = useState<string | null>(null);
@@ -586,7 +586,7 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
 
       {addingTrip && <NonMedicalTripForm defaultDate={date} onCancel={() => setAddingTrip(false)} onSave={(trips) => { onAddTrips(trips); setAddingTrip(false); }} />}
 
-      {view === "appointments" ? <AppointmentsOverview appointments={appointments} requests={requests} date={date} now={now} /> : (<>
+      {view === "appointments" ? <AppointmentsOverview appointments={appointments} requests={requests} date={date} now={now} onStopSeries={setStopping} /> : (<>
       {/* شريط الحالة: عدادات حية ملونة، والضغط ينقل إلى القسم */}
       <div className="mb-6">
         <StatusBar
@@ -683,7 +683,7 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
                             </p>
                           )}
                           {trip.appointment.seriesId && (
-                            <button type="button" onClick={() => setStopping(trip)} className="mt-1.5 inline-flex items-center gap-1 text-xs font-medium text-slate-500 underline-offset-2 hover:text-red-700 hover:underline">
+                            <button type="button" onClick={() => setStopping(trip.appointment)} className="mt-1.5 inline-flex items-center gap-1 text-xs font-medium text-slate-500 underline-offset-2 hover:text-red-700 hover:underline">
                               <Repeat className="h-3.5 w-3.5" /> إيقاف الرحلات المتكررة…
                             </button>
                           )}
@@ -986,8 +986,8 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
       )}
       {stopping && (
         <StopSeriesDialog
-          trip={stopping}
-          trips={stoppableSeriesTrips(appointments, requests, stopping.appointment.seriesId!, stopping.appointment.appointmentDate).map((item) => item.appointment)}
+          appointment={stopping}
+          trips={stoppableSeriesTrips(appointments, requests, stopping.seriesId!, stopping.appointmentDate).map((item) => item.appointment)}
           onConfirm={(appointmentIds, reason) => {
             onStopSeries(appointmentIds, reason);
             setStopping(null);
@@ -1302,10 +1302,10 @@ function ReasonChoice({ reasons, value, other, onChange, onOther, legend }: {
  * إيقاف رحلة غير طبية متكررة: هذه الرحلة وحدها، أو هي وكل ما بعدها مما لم تُرسل سيارته، بسبب إلزامي.
  * trips: رحلات السلسلة القابلة للإيقاف من يوم هذه الرحلة فصاعدًا (stoppableSeriesTrips).
  */
-function StopSeriesDialog({ trip, trips, onConfirm, onClose }: { trip: Trip; trips: ClinicAppointment[]; onConfirm: (appointmentIds: string[], reason: string) => void; onClose: () => void }) {
+function StopSeriesDialog({ appointment, trips, onConfirm, onClose }: { appointment: ClinicAppointment; trips: ClinicAppointment[]; onConfirm: (appointmentIds: string[], reason: string) => void; onClose: () => void }) {
   const [scope, setScope] = useState<"one" | "rest">("rest");
   const [reason, setReason] = useState("");
-  const chosen = scope === "one" ? trips.filter((item) => item.id === trip.appointment.id) : trips;
+  const chosen = scope === "one" ? trips.filter((item) => item.id === appointment.id) : trips;
   const last = trips[trips.length - 1];
   const day = (date: string) => `${date.slice(8, 10)}-${date.slice(5, 7)}`;
   return (
@@ -1313,7 +1313,7 @@ function StopSeriesDialog({ trip, trips, onConfirm, onClose }: { trip: Trip; tri
       tone="red"
       icon={Repeat}
       title="إيقاف الرحلات المتكررة"
-      description={<>{trip.appointment.patientName} · {trip.appointment.clinic} · {trip.appointment.appointmentAt}</>}
+      description={<>{appointment.patientName} · {appointment.clinic} · {appointment.appointmentAt}</>}
       onClose={onClose}
       footer={(
         <>
@@ -1328,13 +1328,14 @@ function StopSeriesDialog({ trip, trips, onConfirm, onClose }: { trip: Trip; tri
         <legend className="sr-only">ما يُلغى</legend>
         <label className={cx(choiceClass(scope === "one"), "cursor-pointer")}>
           <input type="radio" name="series-scope" checked={scope === "one"} onChange={() => setScope("one")} className="h-4 w-4 accent-brand-600" />
-          هذه الرحلة فقط ({day(trip.appointment.appointmentDate)})
+          هذه الرحلة فقط ({day(appointment.appointmentDate)})
         </label>
         <label className={cx(choiceClass(scope === "rest"), "cursor-pointer")}>
           <input type="radio" name="series-scope" checked={scope === "rest"} onChange={() => setScope("rest")} className="h-4 w-4 accent-brand-600" />
-          هذه الرحلة وكل ما بعدها ({trips.length.toLocaleString("en")} رحلة{last && last.id !== trip.appointment.id ? ` حتى ${day(last.appointmentDate)}` : ""})
+          هذه الرحلة وكل ما بعدها ({trips.length.toLocaleString("en")} رحلة{last && last.id !== appointment.id ? ` حتى ${day(last.appointmentDate)}` : ""})
         </label>
       </fieldset>
+      {!chosen.length && <p className="mt-3 text-sm text-red-700">هذه الرحلة أُرسلت سيارتها أو انتهت، فلا تُلغى من هنا.</p>}
       <p className="mt-3 text-xs leading-5 text-slate-500">الرحلات التي أُرسلت سيارتها لا تُلغى من هنا. تبقى الرحلات الملغاة في «كل المواعيد» بحالة «ملغي» مع السبب.</p>
       <label className="mt-4 block">
         <span className={labelClass}>السبب</span>

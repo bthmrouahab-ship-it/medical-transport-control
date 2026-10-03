@@ -33,12 +33,13 @@ const dayText = (date: string) => `${WEEKDAY_NAMES[new Date(`${date}T00:00:00Z`)
 /**
  * رحلة غير طبية يضيفها مشرف السيارات: تُنشأ مباشرة كطلب بانتظار التوزيع. الضيف من قائمة ضيوف المجمع
  * (بنفس طريقة موعد العيادة): المبنى والشقة والجنس من القائمة، والهاتف منها ويمكن تغييره.
- * «رحلة متكررة»: نفس الرحلة في أيام محددة (الأحد إلى الخميس افتراضيًا) حتى تاريخ، رحلة وطلب لكل يوم في حفظ واحد،
- * بنفس رقم السلسلة (seriesId). الطلب المحجوز ليوم قادم فيه يوم الحجز (requestedOn).
+ * «رحلة متكررة»: نفس الرحلة في أيام محددة (الأحد إلى الخميس افتراضيًا) حتى تاريخ، بنفس رقم السلسلة (seriesId)،
+ * بلا طلب سيارة: كل رحلة «بانتظار طلب السيارة» تظهر لمشرف المبنى في يومها، ولا تصل إلى مشرف السيارات حتى يطلبها.
+ * الرحلة الواحدة مع طلب سيارتها مباشرة، وطلبها ليوم قادم فيه يوم الحجز (requestedOn).
  */
 export default function NonMedicalTripForm({ defaultDate, onSave, onCancel }: {
   defaultDate: string;
-  onSave: (trips: { appointment: ClinicAppointment; request: VehicleRequest }[]) => void;
+  onSave: (trips: { appointment: ClinicAppointment; request?: VehicleRequest }[]) => void;
   onCancel: () => void;
 }) {
   const guests = useGuests();
@@ -156,7 +157,8 @@ export default function NonMedicalTripForm({ defaultDate, onSave, onCancel }: {
         category: "غير طبية",
         kind: form.kind,
         assistance: withMinorEscort(form.assistance, isMinor(guest)),
-        status: "تم طلب السيارة",
+        // المتكررة: ينتظر طلب مشرف المبنى في يومها
+        status: repeat.enabled ? "بانتظار طلب السيارة" : "تم طلب السيارة",
         ...series,
         ...(autoReturn.enabled ? { returnAt: autoReturn.at } : {}),
       };
@@ -170,7 +172,7 @@ export default function NonMedicalTripForm({ defaultDate, onSave, onCancel }: {
         // حجز ليوم قادم: السيارة مطلوبة من وقت الانطلاق في يومه
         ...(appointmentDate !== today ? { requestedOn: today } : {}),
       };
-      return { appointment, request };
+      return repeat.enabled ? { appointment } : { appointment, request };
     }));
   }
 
@@ -246,7 +248,7 @@ export default function NonMedicalTripForm({ defaultDate, onSave, onCancel }: {
                   ? "لا توجد رحلات في هذه الأيام والمدة"
                   : <><span className="font-semibold">{seriesDates.length.toLocaleString("en")} رحلة</span> · {seriesDates.slice(0, 5).map(dayText).join("، ")}{seriesDates.length > 5 ? ` … آخرها ${dayText(seriesDates[seriesDates.length - 1])}` : ""}</>}
             </p>
-            <p className="text-xs leading-5 text-slate-500">كل رحلة تظهر في يومها بانتظار التوزيع، ويمكن إيقاف الرحلات القادمة منها من بطاقتها.</p>
+            <p className="text-xs leading-5 text-slate-500">كل رحلة تظهر لمشرف المبنى في يومها في «تحتاج طلب سيارة»، ولا تصل إلى مشرف السيارات حتى يطلبها. ويمكن إيقاف الرحلات القادمة من «كل المواعيد».</p>
           </div>
         )}
 
