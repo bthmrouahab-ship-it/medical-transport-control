@@ -79,6 +79,13 @@ export type ClinicAppointment = {
   nurse?: boolean;
   /** نوع الموعد (اختياري): من APPOINTMENT_TYPES بالعربية، أو مكتوب بعد «أخرى» */
   appointmentType?: string;
+  /** رحلة غير طبية متكررة: رقم السلسلة نفسه لكل أيامها (يضيفها مشرف السيارات معًا، ويوقف القادم منها معًا) */
+  seriesId?: string;
+  /**
+   * العودة التلقائية للرحلة غير الطبية («HH:MM» بعد وقت الذهاب): الخادم ينشئ طلب سيارة العودة قبلها بـ 30 دقيقة
+   * بعد تسجيل استلام الضيف في الذهاب (auto_returns في api/index.php)، بدل أن يطلبها مشرف المبنى.
+   */
+  returnAt?: string;
 };
 
 /** أنواع المواعيد الجاهزة في نموذج العيادة (خانة اختيارية، ومعها «أخرى» تُكتب). تُحفظ بالعربية. */
@@ -175,6 +182,13 @@ export type VehicleRequest = {
   status: RequestStatus;
   notificationMethod: "whatsapp" | "call";
   createdAt: string;
+  /**
+   * يوم الطلب (YYYY-MM-DD) إن كان قبل يوم الرحلة (حجز مسبق، مثل الرحلة المتكررة): createdAt وقته في ذلك اليوم،
+   * والسيارة مطلوبة من وقت الانطلاق لا من وقت الحجز (requestedAt).
+   */
+  requestedOn?: string;
+  /** طلب العودة التلقائي (أنشأه الخادم في وقت returnAt للرحلة غير الطبية)؛ createdAt وقت العودة */
+  autoReturn?: true;
   groupId?: string;
   notificationSentAt?: string;
   /** رقم حساب مشرف المبنى الذي طلب السيارة: هو وحده يتابع الطلب (الطلبات القديمة بلا مالك يتابعها الجميع) */
@@ -388,6 +402,8 @@ export function migrateAppointment(value: unknown, index = 0): ClinicAppointment
     ...(raw.returnOnly === true ? { returnOnly: true } : {}),
     ...(raw.nurse === true ? { nurse: true } : {}),
     ...(toText(raw.appointmentType) ? { appointmentType: toText(raw.appointmentType).slice(0, APPOINTMENT_TYPE_MAX) } : {}),
+    ...(toText(raw.seriesId) ? { seriesId: toText(raw.seriesId) } : {}),
+    ...(/^\d{2}:\d{2}$/.test(toText(raw.returnAt)) ? { returnAt: toText(raw.returnAt) } : {}),
   };
 }
 
@@ -591,6 +607,8 @@ export function migrateRequest(value: unknown): VehicleRequest | null {
     status,
     notificationMethod: raw.notificationMethod === "call" ? "call" : "whatsapp",
     createdAt: toText(raw.createdAt),
+    ...(/^\d{4}-\d{2}-\d{2}$/.test(toText(raw.requestedOn)) ? { requestedOn: toText(raw.requestedOn) } : {}),
+    ...(raw.autoReturn === true ? { autoReturn: true as const } : {}),
     groupId: toText(raw.groupId) || undefined,
     notificationSentAt: toText(raw.notificationSentAt) || undefined,
     requestedBy: toText(raw.requestedBy) || undefined,
@@ -1457,6 +1475,45 @@ export const NON_MEDICAL_DESTINATIONS: { ar: string; en: string; place?: Pick<Ho
 ];
 
 export const isNonMedical = (appointment: Pick<ClinicAppointment, "category">) => appointment.category === "غير طبية";
+
+// ————— الرحلة غير الطبية المتكررة —————
+
+/** أيام الأسبوع (0 الأحد … 6 السبت، مثل getUTCDay) */
+export const WEEKDAY_NAMES = ["الأحد", "الإثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت"] as const;
+/** أيام التكرار الافتراضية: الأحد إلى الخميس */
+export const RECURRING_DEFAULT_DAYS = [0, 1, 2, 3, 4];
+/** أطول مدة للتكرار في المرة الواحدة (3 أشهر تقريبًا)، حتى لا تمتلئ القوائم برحلات بعيدة */
+export const RECURRING_MAX_DAYS = 92;
+
+const dayOf = (date: string) => new Date(`${date}T00:00:00Z`);
+/** اليوم بعد عدد من الأيام (YYYY-MM-DD) */
+export function addDays(date: string, days: number) {
+  const next = dayOf(date);
+  next.setUTCDate(next.getUTCDate() + days);
+  return next.toISOString().slice(0, 10);
+}
+
+/**
+ * أيام الرحلة المتكررة من start إلى end (مع الطرفين) التي يقع يومها في days. null إن كانت النهاية قبل البداية
+ * أو أبعد من RECURRING_MAX_DAYS يومًا.
+ */
+export function recurringDates(start: string, end: string, days: readonly number[]): string[] | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(start) || !/^\d{4}-\d{2}-\d{2}$/.test(end) || end < start) return null;
+  if (end > addDays(start, RECURRING_MAX_DAYS)) return null;
+  const wanted = new Set(days);
+  const dates: string[] = [];
+  for (let date = start; date <= end; date = addDays(date, 1)) if (wanted.has(dayOf(date).getUTCDay())) dates.push(date);
+  return dates;
+}
+
+/** رحلات السلسلة القادمة التي يمكن إيقافها: من يوم from فصاعدًا، ولم تُلغَ، وطلبها بانتظار التوزيع (لم تُرسل سيارتها) */
+export function stoppableSeriesTrips(appointments: ClinicAppointment[], requests: VehicleRequest[], seriesId: string, from: string) {
+  return appointments
+    .filter((appointment) => appointment.seriesId === seriesId && appointment.appointmentDate >= from && appointment.status === "تم طلب السيارة")
+    .map((appointment) => ({ appointment, requests: requests.filter((request) => request.appointmentId === appointment.id) }))
+    .filter((trip) => trip.requests.every((request) => request.status === "بانتظار التوزيع"))
+    .sort((a, b) => byTime(a.appointment, b.appointment));
+}
 
 /** موقع وجهة الرحلة غير الطبية (بشكل مستشفى من الدليل)، أو null للوجهة بلا موقع («الجامعة» أو «أخرى» مكتوبة). */
 export function nonMedicalPlace(appointment: Pick<ClinicAppointment, "category" | "clinic">): Hospital | null {

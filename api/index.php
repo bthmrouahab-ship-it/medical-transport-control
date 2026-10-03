@@ -26,6 +26,8 @@ const INVALID_LOGIN = 'اسم المستخدم أو كلمة المرور غير
 const ARRIVAL_RADIUS_M = 300;
 /** موقع بدقة أسوأ من هذه (مثل تحديد الموقع من الشبكة بدل GPS) لا يُعتمد لاكتشاف الوصول. */
 const ARRIVAL_MAX_ACCURACY_M = 200;
+/** طلب العودة التلقائي للرحلة غير الطبية يُنشأ قبل وقت العودة بهذه الدقائق (حتى تصل السيارة في وقتها) */
+const AUTO_RETURN_LEAD_MINUTES = 30;
 
 try {
     $route = (string)($_GET['r'] ?? '');
@@ -340,10 +342,71 @@ function save_doc(PDO $pdo, string $col, string $id, ?array $data, int $rev): vo
  * السائق لا يرى بيانات المرضى، لذلك المزامنة لموظفي المكتب فقط، وقائمة الضيوف للمدير والعيادة
  * بلا العمر والرقم الصحي (sync_collections وpublic_doc في rules.php).
  */
+/**
+ * العودة التلقائية للرحلة غير الطبية (returnAt في الموعد): قبل وقت العودة بـ AUTO_RETURN_LEAD_MINUTES، وبعد تسجيل
+ * استلام الضيف في رحلة الذهاب، ينشئ الخادم طلب سيارة العودة (RET-<رقم الموعد>، بلا مالك فيتابعه كل مشرفي المباني،
+ * والسيارة مطلوبة من وقت العودة) ويصبح الموعد «طلب عودة»، كما لو طلبها مشرف المبنى. لا يُنشأ إن طُلبت العودة قبله
+ * (أو حُذف طلبها التلقائي). يعمل مع المزامنة مرة كل 30 ثانية على الأكثر، ولا يوقفها خطؤه.
+ */
+function auto_returns(PDO $pdo): int
+{
+    $last = (int)$pdo->query("SELECT v FROM settings WHERE k = 'auto_returns'")->fetchColumn();
+    if ($last && time() - $last < 30) return 0;
+    $pdo->prepare("INSERT INTO settings (k, v) VALUES ('auto_returns', ?) ON DUPLICATE KEY UPDATE v = VALUES(v)")->execute([(string)time()]);
+    $qatar = new DateTimeZone('Asia/Qatar');
+    $now = new DateTimeImmutable('now', $qatar);
+    $like = fn(string $text) => '%' . addcslashes($text, '%_\\') . '%';
+    $candidates = $pdo->prepare("SELECT id FROM docs WHERE col = 'appointments' AND data LIKE ? AND data LIKE ? AND data LIKE ?");
+    $candidates->execute([$like('"returnAt":"'), $like('"appointmentDate":"' . $now->format('Y-m-d') . '"'), $like('"status":"تم استلام المريض"')]);
+    $created = 0;
+    foreach ($candidates->fetchAll(PDO::FETCH_COLUMN) as $id) {
+        $id = (string)$id;
+        $requestId = "RET-$id";
+        if (!valid_doc_id($requestId)) continue;
+        $pdo->beginTransaction();
+        try {
+            $lock = $pdo->prepare("SELECT data FROM docs WHERE col = 'appointments' AND id = ? FOR UPDATE");
+            $lock->execute([$id]);
+            $appointment = decode_doc($lock->fetchColumn() ?: null);
+            $returnAt = (string)($appointment['returnAt'] ?? '');
+            $due = $appointment && preg_match('/^\d{2}:\d{2}$/', $returnAt)
+                ? DateTimeImmutable::createFromFormat('Y-m-d H:i', ($appointment['appointmentDate'] ?? '') . " $returnAt", $qatar) : false;
+            $ready = $due && ($appointment['category'] ?? '') === 'غير طبية' && ($appointment['status'] ?? null) === 'تم استلام المريض'
+                && ($appointment['appointmentDate'] ?? '') === $now->format('Y-m-d')
+                && $now >= $due->modify('-' . AUTO_RETURN_LEAD_MINUTES . ' minutes');
+            // طلب عودة موجود: التلقائي (ولو حُذف) أو من مشرف المبنى
+            $exists = $pdo->prepare("SELECT COUNT(*) FROM docs WHERE col = 'requests' AND (id = ? OR (data LIKE ? AND data LIKE ?))");
+            $exists->execute([$requestId, $like('"appointmentId":' . json_encode($id, JSON_UNESCAPED_UNICODE)), $like('"direction":"عودة"')]);
+            if (!$ready || (int)$exists->fetchColumn() > 0) {
+                $pdo->rollBack();
+                continue;
+            }
+            $rev = next_revision($pdo);
+            $request = ['id' => $requestId, 'appointmentId' => $id, 'direction' => 'عودة', 'status' => 'بانتظار التوزيع',
+                'notificationMethod' => 'whatsapp', 'createdAt' => $returnAt, 'autoReturn' => true];
+            save_doc($pdo, 'requests', $requestId, $request, $rev);
+            save_doc($pdo, 'appointments', $id, ['status' => 'طلب عودة'] + $appointment, $rev);
+            $entry = describe_write($pdo, 'requests', $requestId, null, $request);
+            if ($entry) log_activity($pdo, null, $entry[0], $entry[1], $entry[2], $requestId, $entry[3]);
+            $pdo->commit();
+            $created += 1;
+        } catch (Throwable $error) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            error_log('[auto_returns] ' . $error->getMessage());
+        }
+    }
+    return $created;
+}
+
 function route_sync(PDO $pdo): array
 {
     $user = current_user($pdo);
     require_role($user, OFFICE_ROLES);
+    try {
+        auto_returns($pdo);
+    } catch (Throwable $error) {
+        error_log('[auto_returns] ' . $error->getMessage());
+    }
     $since = max(0, (int)($_GET['since'] ?? 0));
     $rev = current_revision($pdo);
     if ($since > $rev) $since = 0;

@@ -1120,6 +1120,8 @@ function AtAppointmentRow({ appointment, request, day, driver, phase, next, nurs
                 : <Badge tone="cyan" icon={CheckCircle2}>تم استلام الضيف</Badge>}
             {nurseTrip && <Badge tone={nurseWaiting ? "amber" : "green"} icon={Stethoscope}>{nurseTripText(nurseTrip)}</Badge>}
             {next && <Badge tone="cyan" icon={ArrowLeftRight}>موعد آخر <span dir="ltr" className="tabular">{next.appointmentAt}</span></Badge>}
+            {/* رحلة غير طبية بعودة تلقائية: تُطلب سيارتها وحدها قبل وقتها بنصف ساعة */}
+            {appointment.returnAt && !overdue && <Badge tone="blue" icon={RotateCcw}>عودة تلقائية <span dir="ltr" className="tabular">{appointment.returnAt}</span></Badge>}
           </>}
         />
       )}

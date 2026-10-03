@@ -102,8 +102,12 @@ export function minutesSince(time: string | undefined, now = new Date()) {
   return minutes <= 12 * 60 ? minutes : null;
 }
 
-/** وقت طلب السيارة (createdAt «HH:MM») في يوم الموعد، أو null لطلب قديم بلا وقت. */
-export function requestedAt(request: Pick<VehicleRequest, "createdAt">, appointment: Pick<ClinicAppointment, "appointmentDate">) {
+/**
+ * وقت طلب السيارة (createdAt «HH:MM») في يوم الموعد، أو null لطلب قديم بلا وقت، أو لطلب حُجز في يوم قبل الرحلة
+ * (requestedOn): السيارة مطلوبة عندها من وقت الانطلاق.
+ */
+export function requestedAt(request: Pick<VehicleRequest, "createdAt" | "requestedOn">, appointment: Pick<ClinicAppointment, "appointmentDate">) {
+  if (request.requestedOn && request.requestedOn < appointment.appointmentDate) return null;
   const match = /^(\d{1,2}):(\d{2})$/.exec(request.createdAt ?? "");
   return match ? appointmentDateTime({ appointmentDate: appointment.appointmentDate, appointmentAt: `${match[1].padStart(2, "0")}:${match[2]}` }) : null;
 }

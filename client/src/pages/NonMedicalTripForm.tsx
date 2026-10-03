@@ -1,9 +1,15 @@
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
-import { Accessibility, CheckCircle2, MapPin, Truck, X } from "lucide-react";
+import { Accessibility, CheckCircle2, MapPin, Repeat, Truck, X } from "lucide-react";
 import {
   NON_MEDICAL_DESTINATIONS,
+  RECURRING_DEFAULT_DAYS,
+  RECURRING_MAX_DAYS,
   REQUEST_GRACE_MINUTES,
+  WEEKDAY_NAMES,
+  addDays,
+  localDateString,
+  recurringDates,
   requestWindow,
   type AppointmentKind,
   type AssistanceNeed,
@@ -21,13 +27,18 @@ import { GuestPicker, NeedsField, SpecialNeedsNote } from "./ClinicPages";
 
 const OTHER = "أخرى";
 
+/** «الأحد 04-10» */
+const dayText = (date: string) => `${WEEKDAY_NAMES[new Date(`${date}T00:00:00Z`).getUTCDay()]} ${date.slice(8, 10)}-${date.slice(5, 7)}`;
+
 /**
  * رحلة غير طبية يضيفها مشرف السيارات: تُنشأ مباشرة كطلب بانتظار التوزيع. الضيف من قائمة ضيوف المجمع
  * (بنفس طريقة موعد العيادة): المبنى والشقة والجنس من القائمة، والهاتف منها ويمكن تغييره.
+ * «رحلة متكررة»: نفس الرحلة في أيام محددة (الأحد إلى الخميس افتراضيًا) حتى تاريخ، رحلة وطلب لكل يوم في حفظ واحد،
+ * بنفس رقم السلسلة (seriesId). الطلب المحجوز ليوم قادم فيه يوم الحجز (requestedOn).
  */
 export default function NonMedicalTripForm({ defaultDate, onSave, onCancel }: {
   defaultDate: string;
-  onSave: (appointment: ClinicAppointment, request: VehicleRequest) => void;
+  onSave: (trips: { appointment: ClinicAppointment; request: VehicleRequest }[]) => void;
   onCancel: () => void;
 }) {
   const guests = useGuests();
@@ -45,6 +56,20 @@ export default function NonMedicalTripForm({ defaultDate, onSave, onCancel }: {
   });
 
   const guest = form.guestId ? index.byId.get(form.guestId) : undefined;
+  // رحلة متكررة: الأيام وتاريخ النهاية (4 أسابيع افتراضيًا)
+  const [repeat, setRepeat] = useState({ enabled: false, days: RECURRING_DEFAULT_DAYS, until: addDays(defaultDate, 27) });
+  // العودة التلقائية بوقت ثابت (تُختار مع الرحلة المتكررة)، وإلا يطلبها مشرف المبنى
+  const [autoReturn, setAutoReturn] = useState({ enabled: false, at: "" });
+  // أيام الرحلة المتكررة (بلا يوم اليوم إن مضى وقته)، أو null لمدة غير صالحة
+  const seriesDates = useMemo(() => {
+    if (!repeat.enabled) return null;
+    const dates = recurringDates(form.appointmentDate, repeat.until, repeat.days);
+    return dates && dates.filter((appointmentDate) => requestWindow({ appointmentDate, appointmentAt: form.appointmentAt }).open);
+  }, [repeat, form.appointmentDate, form.appointmentAt]);
+  const toggleDay = (day: number) => setRepeat((current) => ({
+    ...current,
+    days: current.days.includes(day) ? current.days.filter((item) => item !== day) : [...current.days, day].sort(),
+  }));
 
   function selectGuest(next: Guest | undefined) {
     setForm((current) => {
@@ -91,37 +116,62 @@ export default function NonMedicalTripForm({ defaultDate, onSave, onCancel }: {
       toast.error("أدخل رقم موبايل صحيحًا من 8 إلى 15 رقمًا");
       return;
     }
-    if (!requestWindow(form).open) {
+    if (repeat.enabled) {
+      if (!seriesDates) {
+        toast.error(`تاريخ النهاية بعد تاريخ البداية وخلال ${RECURRING_MAX_DAYS} يومًا (3 أشهر)`);
+        return;
+      }
+      if (!seriesDates.length) {
+        toast.error("لا توجد رحلات في هذه الأيام والمدة", { description: "اختر أيام التكرار أو مدّ تاريخ النهاية" });
+        return;
+      }
+    } else if (!requestWindow(form).open) {
       toast.error(`الوقت مضى عليه أكثر من ${REQUEST_GRACE_MINUTES} دقيقة`);
       return;
     }
+    if (autoReturn.enabled && !(autoReturn.at > form.appointmentAt)) {
+      toast.error("وقت العودة بعد وقت الذهاب في نفس اليوم");
+      return;
+    }
     const stamp = Date.now();
-    const appointment: ClinicAppointment = {
-      id: `TRP-${String(stamp).slice(-6)}`,
-      guestId: guest.id,
-      patientName: guest.name,
-      clinic: destination,
-      buildingNumber: guest.buildingNumber,
-      apartmentNumber: guest.apartmentNumber,
-      mobile,
-      gender: form.gender,
-      // ممرضة من قائمة الممرضات
-      ...(isNurse(guest) ? { nurse: true } : {}),
-      appointmentDate: form.appointmentDate,
-      appointmentAt: form.appointmentAt,
-      category: "غير طبية",
-      kind: form.kind,
-      assistance: withMinorEscort(form.assistance, isMinor(guest)),
-      status: "تم طلب السيارة",
-    };
-    onSave(appointment, {
-      id: `REQ-${stamp}-${Math.random().toString(36).slice(2, 6)}`,
-      appointmentId: appointment.id,
-      direction: "ذهاب",
-      status: "بانتظار التوزيع",
-      notificationMethod: "whatsapp",
-      createdAt: timeLabel(new Date()),
-    });
+    const base = stamp.toString(36);
+    const today = localDateString();
+    const createdAt = timeLabel(new Date());
+    const dates = repeat.enabled && seriesDates ? seriesDates : [form.appointmentDate];
+    const series = repeat.enabled ? { seriesId: `SER-${base}` } : {};
+    onSave(dates.map((appointmentDate, index) => {
+      const appointment: ClinicAppointment = {
+        id: repeat.enabled ? `TRP-${base}-${index + 1}` : `TRP-${String(stamp).slice(-6)}`,
+        guestId: guest.id,
+        patientName: guest.name,
+        clinic: destination,
+        buildingNumber: guest.buildingNumber,
+        apartmentNumber: guest.apartmentNumber,
+        mobile,
+        gender: form.gender,
+        // ممرضة من قائمة الممرضات
+        ...(isNurse(guest) ? { nurse: true } : {}),
+        appointmentDate,
+        appointmentAt: form.appointmentAt,
+        category: "غير طبية",
+        kind: form.kind,
+        assistance: withMinorEscort(form.assistance, isMinor(guest)),
+        status: "تم طلب السيارة",
+        ...series,
+        ...(autoReturn.enabled ? { returnAt: autoReturn.at } : {}),
+      };
+      const request: VehicleRequest = {
+        id: `REQ-${stamp}-${index + 1}-${Math.random().toString(36).slice(2, 6)}`,
+        appointmentId: appointment.id,
+        direction: "ذهاب",
+        status: "بانتظار التوزيع",
+        notificationMethod: "whatsapp",
+        createdAt,
+        // حجز ليوم قادم: السيارة مطلوبة من وقت الانطلاق في يومه
+        ...(appointmentDate !== today ? { requestedOn: today } : {}),
+      };
+      return { appointment, request };
+    }));
   }
 
   return (
@@ -160,8 +210,63 @@ export default function NonMedicalTripForm({ defaultDate, onSave, onCancel }: {
             </div>
           </fieldset>
         )}
-        <div className="sm:col-span-2"><DateChooser label="التاريخ" value={form.appointmentDate} onChange={(value) => setForm({ ...form, appointmentDate: value })} /></div>
+        <div className="sm:col-span-2"><DateChooser label={repeat.enabled ? "من تاريخ" : "التاريخ"} value={form.appointmentDate} onChange={(value) => setForm({ ...form, appointmentDate: value })} /></div>
         <Field label="الوقت" value={form.appointmentAt} onChange={(value) => setForm({ ...form, appointmentAt: value })} type="time" />
+
+        <label className={cx(choiceClass(repeat.enabled), "cursor-pointer sm:col-span-2")}>
+          <input type="checkbox" checked={repeat.enabled} onChange={(event) => {
+            const enabled = event.target.checked;
+            setRepeat((current) => ({ ...current, enabled }));
+            // الرحلة المتكررة: العودة تلقائية افتراضيًا
+            if (enabled) setAutoReturn((current) => ({ ...current, enabled: true }));
+          }} className="h-4 w-4 accent-brand-600" />
+          <Repeat className="h-4 w-4" /> رحلة متكررة
+          <span className="text-xs font-normal text-slate-500">· نفس الرحلة في أيام محددة حتى تاريخ</span>
+        </label>
+        {repeat.enabled && (
+          <div className="space-y-4 rounded-xl bg-slate-50 p-4 ring-1 ring-inset ring-slate-200 sm:col-span-2">
+            <fieldset>
+              <legend className={labelClass}>أيام التكرار</legend>
+              <div className="flex flex-wrap gap-2">
+                {WEEKDAY_NAMES.map((name, day) => (
+                  <button key={name} type="button" aria-pressed={repeat.days.includes(day)} onClick={() => toggleDay(day)} className={cx(choiceClass(repeat.days.includes(day)), "min-h-9 px-3")}>{name}</button>
+                ))}
+              </div>
+            </fieldset>
+            <label className="block">
+              <span className={labelClass}>حتى تاريخ</span>
+              <input type="date" value={repeat.until} min={form.appointmentDate} max={addDays(form.appointmentDate, RECURRING_MAX_DAYS)}
+                onChange={(event) => setRepeat((current) => ({ ...current, until: event.target.value }))} className={cx(inputClass, "sm:max-w-xs")} />
+            </label>
+            {/* معاينة: كم رحلة ستُضاف وأيامها */}
+            <p role="status" className={cx("text-sm leading-6", seriesDates?.length ? "text-slate-700" : "text-red-700")}>
+              {!seriesDates
+                ? `تاريخ النهاية بعد تاريخ البداية وخلال ${RECURRING_MAX_DAYS} يومًا (حتى ${addDays(form.appointmentDate, RECURRING_MAX_DAYS)})`
+                : !seriesDates.length
+                  ? "لا توجد رحلات في هذه الأيام والمدة"
+                  : <><span className="font-semibold">{seriesDates.length.toLocaleString("en")} رحلة</span> · {seriesDates.slice(0, 5).map(dayText).join("، ")}{seriesDates.length > 5 ? ` … آخرها ${dayText(seriesDates[seriesDates.length - 1])}` : ""}</>}
+            </p>
+            <p className="text-xs leading-5 text-slate-500">كل رحلة تظهر في يومها بانتظار التوزيع، ويمكن إيقاف الرحلات القادمة منها من بطاقتها.</p>
+          </div>
+        )}
+
+        <div className="grid gap-3 sm:col-span-2 sm:grid-cols-2">
+          <label className={cx(choiceClass(autoReturn.enabled), "cursor-pointer")}>
+            <input type="checkbox" checked={autoReturn.enabled} onChange={(event) => setAutoReturn((current) => ({ ...current, enabled: event.target.checked }))} className="h-4 w-4 accent-brand-600" />
+            عودة تلقائية في وقت محدد
+          </label>
+          {autoReturn.enabled && (
+            <label className="block">
+              <span className="sr-only">وقت العودة</span>
+              <input type="time" aria-label="وقت العودة" value={autoReturn.at} onChange={(event) => setAutoReturn((current) => ({ ...current, at: event.target.value }))} className={inputClass} />
+            </label>
+          )}
+        </div>
+        <p className="-mt-3 text-xs leading-5 text-slate-500 sm:col-span-2">
+          {autoReturn.enabled
+            ? "يُطلب له سيارة العودة تلقائيًا قبل وقتها بنصف ساعة، بعد تسجيل استلامه في الذهاب، ويتابعها مشرفو المباني."
+            : "العودة يطلبها مشرف المبنى عند انتهاء الضيف."}
+        </p>
 
         <fieldset className="sm:col-span-2">
           <legend className={labelClass}>نوع الرحلة</legend>
@@ -177,7 +282,7 @@ export default function NonMedicalTripForm({ defaultDate, onSave, onCancel }: {
         <NeedsField t={CLINIC_TEXT.ar} value={form.assistance} minor={isMinor(guest)} onChange={(assistance) => setForm((current) => ({ ...current, assistance }))} />
 
         <div className="flex gap-3 border-t border-slate-100 pt-5 sm:col-span-2">
-          <button className={cx(btn("primary", "lg"), "flex-1")}><CheckCircle2 className="h-4 w-4" /> إضافة الرحلة</button>
+          <button className={cx(btn("primary", "lg"), "flex-1")}><CheckCircle2 className="h-4 w-4" /> {repeat.enabled && seriesDates?.length ? `إضافة ${seriesDates.length.toLocaleString("en")} رحلة` : "إضافة الرحلة"}</button>
           <button type="button" onClick={onCancel} className={btn("secondary", "lg")}>إلغاء</button>
         </div>
       </form>

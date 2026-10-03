@@ -136,7 +136,11 @@ export function AppointmentsOverview({ appointments, requests, date, now }: {
               <li key={request.id} className="flex flex-wrap items-center gap-1.5 text-xs text-slate-600">
                 <Badge tone={request.nurseOnly || request.direction === "عودة" ? "amber" : request.fromAppointmentId ? "cyan" : "neutral"} icon={request.nurseOnly ? Stethoscope : request.fromAppointmentId ? ArrowLeftRight : undefined}>{requestKind(request)}</Badge>
                 <StatusBadge status={request.status} />
-                {request.createdAt && <span className="text-slate-400">طُلبت {request.createdAt}</span>}
+                {request.createdAt && (
+                  <span className="text-slate-400">
+                    {request.autoReturn ? `عودة تلقائية ${request.createdAt}` : request.requestedOn ? `حُجزت مسبقًا ${request.requestedOn.slice(8, 10)}-${request.requestedOn.slice(5, 7)} ${request.createdAt}` : `طُلبت ${request.createdAt}`}
+                  </span>
+                )}
                 {request.arrivedAt && !Number.isNaN(Date.parse(request.arrivedAt)) && <span>وصلت <span dir="ltr" className="tabular">{timeLabel(new Date(request.arrivedAt))}</span></span>}
               </li>
             ))}
