@@ -1453,7 +1453,7 @@ export const NON_MEDICAL_DESTINATIONS: { ar: string; en: string; place?: Pick<Ho
   { ar: "جامعة أوريكس", en: "Oryx University (Liverpool John Moores University)", place: { id: "nm-oryx", zone: "الدوحة", lat: 25.270562, lng: 51.492187 } }, // 7FCR+6V الدوحة
   { ar: "جامعة لوسيل", en: "Lusail University", place: { id: "nm-lusail-university", zone: "لوسيل", lat: 25.402188, lng: 51.512937 } }, // CG27+V5 الدوحة
   { ar: "المدرسة الفلسطينية", en: "Palestinian School", place: { id: "nm-palestinian-school", zone: "الدوحة", lat: 25.222313, lng: 51.495812 } }, // 6FCW+W8 الدوحة
-  { ar: "مركز النور للمكفوفين", en: "Al Noor Center For The Blind", place: { id: "nm-al-noor", zone: "لوسيل", lat: 25.390563, lng: 51.513312 } }, // 9GR7+68 الدوحة
+  { ar: "معهد النور", en: "Al Noor Center", place: { id: "nm-al-noor", zone: "الدوحة", lat: 25.340688, lng: 51.465203 } }, // 8FR8+73G الدوحة
 ];
 
 export const isNonMedical = (appointment: Pick<ClinicAppointment, "category">) => appointment.category === "غير طبية";

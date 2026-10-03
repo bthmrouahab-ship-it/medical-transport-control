@@ -10,7 +10,7 @@ const trip = (id: string, clinic: string, extra: Partial<ClinicAppointment> = {}
 
 describe("non-medical destinations with a location", () => {
   it("the new places have their location; the old ones and «أخرى» stay without", () => {
-    for (const name of ["جامعة الدوحة للعلوم والتكنولوجيا", "جامعة أوريكس", "جامعة لوسيل", "المدرسة الفلسطينية", "مركز النور للمكفوفين"]) {
+    for (const name of ["جامعة الدوحة للعلوم والتكنولوجيا", "جامعة أوريكس", "جامعة لوسيل", "المدرسة الفلسطينية", "معهد النور"]) {
       expect(nonMedicalPlace(trip("N1", name)), name).not.toBeNull();
       // ليست مستشفيات في الدليل
       expect(matchHospital(name), name).toBeNull();
@@ -39,22 +39,24 @@ describe("non-medical destinations with a location", () => {
   });
 
   it("near places group together, non-medical with medical too", () => {
-    const lusail = trip("N1", "جامعة لوسيل");
-    const noor = trip("N2", "مركز النور للمكفوفين", { appointmentAt: "10:10" });
-    expect(calculateTripGroupingScore(lusail, noor)).toMatchObject({ sameDestination: false, nearbyDestination: true });
-    expect(calculateTripGroupingScore(lusail, trip("N3", "جامعة لوسيل")).sameDestination).toBe(true);
-    // الشفلح (موعد طبي) بجانب مركز النور: يُجمعان
-    const shafallah = trip("A1", "مركز الشفلح", { category: undefined, hospitalId: "shafallah", appointmentAt: "10:05" });
-    expect(calculateTripGroupingScore(noor, shafallah)).toMatchObject({ sameDestination: false, nearbyDestination: true });
-    expect(buildTripGroups([noor, shafallah].map((appointment) => ({ appointment, direction: "ذهاب" as const })))).toHaveLength(1);
-    // بعيدة: لا تُجمع (المدرسة الفلسطينية ومستشفى الشفلح)
-    expect(buildTripGroups([trip("N4", "المدرسة الفلسطينية"), shafallah].map((appointment) => ({ appointment, direction: "ذهاب" as const })))).toHaveLength(0);
+    const udst = trip("N1", "جامعة الدوحة للعلوم والتكنولوجيا");
+    const noor = trip("N2", "معهد النور", { appointmentAt: "10:10" });
+    // معهد النور وجامعة الدوحة للعلوم والتكنولوجيا: 2.7 كم
+    expect(calculateTripGroupingScore(udst, noor)).toMatchObject({ sameDestination: false, nearbyDestination: true });
+    expect(calculateTripGroupingScore(udst, trip("N3", "جامعة الدوحة للعلوم والتكنولوجيا")).sameDestination).toBe(true);
+    // غاردينيا (موعد طبي) بجانب معهد النور (1.2 كم): يُجمعان
+    const gardenia = trip("A1", "مجمع غاردينيا الطبي", { category: undefined, hospitalId: "gardenia", appointmentAt: "10:05" });
+    expect(calculateTripGroupingScore(noor, gardenia)).toMatchObject({ sameDestination: false, nearbyDestination: true });
+    expect(buildTripGroups([noor, gardenia].map((appointment) => ({ appointment, direction: "ذهاب" as const })))).toHaveLength(1);
+    // بعيدة: لا تُجمع (المدرسة الفلسطينية وغاردينيا)
+    expect(buildTripGroups([trip("N4", "المدرسة الفلسطينية"), gardenia].map((appointment) => ({ appointment, direction: "ذهاب" as const })))).toHaveLength(0);
     // الوجهة بلا موقع («الجامعة») لا تُجمع مع موعد طبي
-    expect(buildTripGroups([trip("N5", "الجامعة"), shafallah].map((appointment) => ({ appointment, direction: "ذهاب" as const })))).toHaveLength(0);
+    expect(buildTripGroups([trip("N5", "الجامعة"), gardenia].map((appointment) => ({ appointment, direction: "ذهاب" as const })))).toHaveLength(0);
   });
 
   it("the driver sees the English name", () => {
     expect(destinationLabels(trip("N1", "جامعة أوريكس"), DEFAULT_HOSPITALS).en).toBe("Oryx University (Liverpool John Moores University)");
-    expect(destinationLabels(trip("N1", "مركز النور للمكفوفين"), DEFAULT_HOSPITALS).en).toBe("Al Noor Center For The Blind");
+    expect(destinationLabels(trip("N1", "معهد النور"), DEFAULT_HOSPITALS).en).toBe("Al Noor Center");
+    expect(nonMedicalPlace(trip("N1", "معهد النور"))).toMatchObject({ lat: 25.340688, lng: 51.465203 });
   });
 });

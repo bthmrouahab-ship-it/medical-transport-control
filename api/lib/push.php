@@ -152,7 +152,7 @@ const NON_MEDICAL_EN = [
     'الجامعة' => 'University', 'المدرسة' => 'School', 'أنصار جاليري المطار القديم' => 'Ansar Gallery, Old Airport',
     'جامعة الدوحة للعلوم والتكنولوجيا' => 'University of Doha for Science and Technology',
     'جامعة أوريكس' => 'Oryx University (Liverpool John Moores University)', 'جامعة لوسيل' => 'Lusail University',
-    'المدرسة الفلسطينية' => 'Palestinian School', 'مركز النور للمكفوفين' => 'Al Noor Center For The Blind',
+    'المدرسة الفلسطينية' => 'Palestinian School', 'معهد النور' => 'Al Noor Center',
 ];
 
 /** اسم الوجهة: كما كتبته العيادة بالعربية، وبالإنجليزية من دليل المستشفيات (للإنجليزية والأردية). */
