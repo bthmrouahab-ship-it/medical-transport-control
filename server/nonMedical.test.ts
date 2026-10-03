@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_HOSPITALS, ORIGIN, matchHospital } from "../shared/hospitals";
-import { NON_MEDICAL_DESTINATIONS, calculateTripGroupingScore, destinationLabels, nonMedicalPlace, type ClinicAppointment } from "../shared/transport";
+import { NON_MEDICAL_DESTINATIONS, buildTripGroups, calculateTripGroupingScore, destinationLabels, nonMedicalPlace, type ClinicAppointment } from "../shared/transport";
 import { pickupDetails, tripEndpoints, UNKNOWN_TRAVEL_MINUTES } from "../shared/trips";
 
 const trip = (id: string, clinic: string, extra: Partial<ClinicAppointment> = {}) => ({
@@ -38,14 +38,19 @@ describe("non-medical destinations with a location", () => {
     expect(unknown.destLat).toBeUndefined();
   });
 
-  it("near non-medical places group together, but never with a medical appointment", () => {
+  it("near places group together, non-medical with medical too", () => {
     const lusail = trip("N1", "جامعة لوسيل");
     const noor = trip("N2", "مركز النور للمكفوفين", { appointmentAt: "10:10" });
     expect(calculateTripGroupingScore(lusail, noor)).toMatchObject({ sameDestination: false, nearbyDestination: true });
     expect(calculateTripGroupingScore(lusail, trip("N3", "جامعة لوسيل")).sameDestination).toBe(true);
-    // الشفلح بجانب مركز النور، لكنه موعد طبي
+    // الشفلح (موعد طبي) بجانب مركز النور: يُجمعان
     const shafallah = trip("A1", "مركز الشفلح", { category: undefined, hospitalId: "shafallah", appointmentAt: "10:05" });
-    expect(calculateTripGroupingScore(noor, shafallah)).toMatchObject({ sameDestination: false, nearbyDestination: false, sameDirection: false, destinationKm: null });
+    expect(calculateTripGroupingScore(noor, shafallah)).toMatchObject({ sameDestination: false, nearbyDestination: true });
+    expect(buildTripGroups([noor, shafallah].map((appointment) => ({ appointment, direction: "ذهاب" as const })))).toHaveLength(1);
+    // بعيدة: لا تُجمع (المدرسة الفلسطينية ومستشفى الشفلح)
+    expect(buildTripGroups([trip("N4", "المدرسة الفلسطينية"), shafallah].map((appointment) => ({ appointment, direction: "ذهاب" as const })))).toHaveLength(0);
+    // الوجهة بلا موقع («الجامعة») لا تُجمع مع موعد طبي
+    expect(buildTripGroups([trip("N5", "الجامعة"), shafallah].map((appointment) => ({ appointment, direction: "ذهاب" as const })))).toHaveLength(0);
   });
 
   it("the driver sees the English name", () => {

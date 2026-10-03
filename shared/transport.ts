@@ -1082,11 +1082,10 @@ export function calculateTripGroupingScore(first: ClinicAppointment, second: Cli
   const [firstAt, secondAt] = times ?? [appointmentDateTime(first), appointmentDateTime(second)];
   const timeGapMinutes = Math.round(Math.abs(firstAt.getTime() - secondAt.getTime()) / 60000);
   const sameBuilding = first.buildingNumber.trim().toLowerCase() === second.buildingNumber.trim().toLowerCase();
-  // الرحلة غير الطبية لا تُجمع مع موعد طبي (ولو تجاورت الوجهتان)
-  const mixed = isNonMedical(first) !== isNonMedical(second);
-  const firstHospital = mixed ? null : hospitalFor(first, hospitals);
-  const secondHospital = mixed ? null : hospitalFor(second, hospitals);
-  const sameDestination = mixed ? false : firstHospital && secondHospital
+  // الرحلة غير الطبية ذات الموقع تُقارن بالمستشفيات مثل أي وجهة: تُجمع مع موعد طبي قريب منها
+  const firstHospital = hospitalFor(first, hospitals);
+  const secondHospital = hospitalFor(second, hospitals);
+  const sameDestination = firstHospital && secondHospital
     ? firstHospital.id === secondHospital.id
     : first.clinic.trim().toLowerCase() === second.clinic.trim().toLowerCase();
   const destinationKm = firstHospital && secondHospital ? distanceKm(firstHospital, secondHospital) : null;
