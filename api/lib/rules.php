@@ -115,10 +115,22 @@ function private_car_units(bool $refresh = false): array
     return $units;
 }
 
-/** الرقم الصحي للمطابقة: الأرقام فقط بلا أصفار في البداية */
-function health_key($value): string
+/**
+ * الأرقام الصحية للمطابقة: الأرقام فقط بلا أصفار في البداية. الخانة قد تحوي أكثر من رقم («08828393/08815535»):
+ * كل رقم من 5 خانات فأكثر وحده، وإلا الخانة كلها رقم واحد.
+ */
+function health_keys($value): array
 {
-    return ltrim((string)preg_replace('/\D+/', '', (string)$value), '0');
+    $keys = [];
+    foreach (preg_split('/[\/,;|&\s]+/', (string)$value, -1, PREG_SPLIT_NO_EMPTY) ?: [] as $part) {
+        $key = ltrim((string)preg_replace('/\D+/', '', $part), '0');
+        if (strlen($key) >= 5) $keys[$key] = true;
+    }
+    if (!$keys) {
+        $key = ltrim((string)preg_replace('/\D+/', '', (string)$value), '0');
+        if ($key !== '') $keys[$key] = true;
+    }
+    return array_keys($keys);
 }
 
 /** ذوو الاحتياجات الخاصة: أرقام الضيوف المطابقين، وأرقامهم الصحية (لمن أُضيف إلى قائمة الضيوف بعدها) */
@@ -131,8 +143,7 @@ function special_needs_index(bool $refresh = false): array
         $entry = decode_doc($row['data']);
         if (!$entry) continue;
         if (!empty($entry['guestId'])) $index['ids'][(string)$entry['guestId']] = true;
-        $health = health_key($entry['healthNumber'] ?? '');
-        if ($health !== '') $index['health'][$health] = true;
+        foreach (health_keys($entry['healthNumber'] ?? '') as $health) $index['health'][$health] = true;
     }
     return $index;
 }
@@ -143,8 +154,8 @@ function guest_special_needs(?array $guest, ?array $index = null): bool
     if (!$guest) return false;
     $index ??= special_needs_index();
     if (isset($index['ids'][(string)($guest['id'] ?? '')])) return true;
-    $health = health_key($guest['healthNumber'] ?? '');
-    return $health !== '' && isset($index['health'][$health]);
+    foreach (health_keys($guest['healthNumber'] ?? '') as $health) if (isset($index['health'][$health])) return true;
+    return false;
 }
 
 /**
@@ -168,7 +179,7 @@ function valid_special_need(array $data, string $id): bool
         && $text('name', 120) && $text('healthNumber', 30) && $text('buildingNumber', 20) && $text('apartmentNumber', 20) && $text('mobile', 20)
         && in_array($data['gender'] ?? 'ذكر', ['ذكر', 'أنثى'], true)
         && (!array_key_exists('guestId', $data) || (is_string($data['guestId']) && valid_doc_id($data['guestId'])))
-        && (trim((string)($data['name'] ?? '')) !== '' || health_key($data['healthNumber'] ?? '') !== '' || !empty($data['guestId']));
+        && (trim((string)($data['name'] ?? '')) !== '' || health_keys($data['healthNumber'] ?? '') || !empty($data['guestId']));
 }
 
 /** يعيد إرسال ضيوف بأرقامهم أو أرقامهم الصحية في المزامنة القادمة (تغيّرت علامة الاحتياجات الخاصة) */
@@ -179,8 +190,9 @@ function touch_guests(PDO $pdo, array $ids, array $health, int $rev): void
     foreach ($pdo->query("SELECT id, data FROM docs WHERE col = 'guests' AND data IS NOT NULL") as $row) {
         $guest = decode_doc($row['data']);
         if (!$guest) continue;
-        $key = health_key($guest['healthNumber'] ?? '');
-        if (isset($ids[(string)$row['id']]) || ($key !== '' && isset($health[$key]))) $update->execute([$rev, $row['id']]);
+        $match = isset($ids[(string)$row['id']]);
+        foreach (health_keys($guest['healthNumber'] ?? '') as $key) $match = $match || isset($health[$key]);
+        if ($match) $update->execute([$rev, $row['id']]);
     }
 }
 

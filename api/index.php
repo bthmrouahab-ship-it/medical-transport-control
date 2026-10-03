@@ -431,7 +431,7 @@ function route_write(PDO $pdo, array $body): array
                 foreach ([$before, $after] as $entry) {
                     if (!$entry) continue;
                     if (!empty($entry['guestId'])) $ids[(string)$entry['guestId']] = true;
-                    if (($key = health_key($entry['healthNumber'] ?? '')) !== '') $health[$key] = true;
+                    foreach (health_keys($entry['healthNumber'] ?? '') as $key) $health[$key] = true;
                 }
                 touch_guests($pdo, $ids, $health, $rev);
             }
@@ -562,30 +562,33 @@ function route_private_cars_import(PDO $pdo, array $body): array
     return ['cars' => count($entries), 'units' => count($added), 'guests' => $guests];
 }
 
-/** كلمات الاسم الإنجليزي للمطابقة (حرفان فأكثر) */
-function name_tokens($name): array
+/** الاسم الأول بالإنجليزية للمطابقة (ثلاثة أحرف فأكثر، وإلا لا شيء) */
+function first_name_key($name): string
 {
     $words = preg_split('/[^a-z]+/', strtolower((string)$name), -1, PREG_SPLIT_NO_EMPTY) ?: [];
-    return array_values(array_unique(array_filter($words, fn($word) => strlen($word) > 1)));
+    return strlen($words[0] ?? '') >= 3 ? $words[0] : '';
 }
 
 /**
- * ضيف القائمة لصاحب الاحتياجات الخاصة: برقمه الصحي، وإلا بالاسم الإنجليزي (كلمتان مشتركتان على الأقل) في نفس المبنى والشقة.
+ * ضيف القائمة لصاحب الاحتياجات الخاصة: بأحد أرقامه الصحية، وإلا بالاسم الأول الإنجليزي نفسه في نفس المبنى والشقة
+ * (ضيف واحد فقط). اسم العائلة واسم الأب وحدهما لا يكفيان: يشترك فيهما أفراد العائلة في الشقة.
  * يعيد [رقم الضيف، طريقة المطابقة] أو [null، null].
  */
 function match_special_need(array $entry, array $guests): array
 {
-    $health = health_key($entry['healthNumber'] ?? '');
-    if ($health !== '') {
-        foreach ($guests as $guest) if (health_key($guest['healthNumber'] ?? '') === $health) return [(string)$guest['id'], 'health'];
+    $health = array_flip(health_keys($entry['healthNumber'] ?? ''));
+    if ($health) {
+        foreach ($guests as $guest) {
+            foreach (health_keys($guest['healthNumber'] ?? '') as $key) if (isset($health[$key])) return [(string)$guest['id'], 'health'];
+        }
     }
     $unit = unit_key($entry['buildingNumber'] ?? '', $entry['apartmentNumber'] ?? '');
-    $words = name_tokens($entry['name'] ?? '');
+    $first = first_name_key($entry['name'] ?? '');
+    if ($first === '' || $unit === '/') return [null, null];
     $found = [];
     foreach ($guests as $guest) {
         if (unit_key($guest['buildingNumber'] ?? '', $guest['apartmentNumber'] ?? '') !== $unit) continue;
-        $guestWords = array_merge(name_tokens($guest['nameEn'] ?? ''), name_tokens($guest['name'] ?? ''));
-        if (count(array_intersect($words, $guestWords)) >= 2) $found[] = (string)$guest['id'];
+        if (in_array($first, [first_name_key($guest['nameEn'] ?? ''), first_name_key($guest['name'] ?? '')], true)) $found[] = (string)$guest['id'];
     }
     return count($found) === 1 ? [$found[0], 'name'] : [null, null];
 }
@@ -635,13 +638,13 @@ function route_special_needs_import(PDO $pdo, array $body): array
         foreach ($pdo->query("SELECT id, data FROM docs WHERE col = 'specialNeeds' AND data IS NOT NULL FOR UPDATE") as $row) {
             $old = decode_doc($row['data']);
             if (!empty($old['guestId'])) $ids[(string)$old['guestId']] = true;
-            if (($key = health_key($old['healthNumber'] ?? '')) !== '') $health[$key] = true;
+            foreach (health_keys($old['healthNumber'] ?? '') as $key) $health[$key] = true;
             save_doc($pdo, 'specialNeeds', (string)$row['id'], null, $rev);
         }
         foreach ($docs as $id => $doc) {
             save_doc($pdo, 'specialNeeds', $id, $doc, $rev);
             if (!empty($doc['guestId'])) $ids[$doc['guestId']] = true;
-            if (($key = health_key($doc['healthNumber'] ?? '')) !== '') $health[$key] = true;
+            foreach (health_keys($doc['healthNumber'] ?? '') as $key) $health[$key] = true;
         }
         // ضيوف القائمة القديمة والجديدة يُعاد إرسالهم بالعلامة الصحيحة
         special_needs_index(true);
