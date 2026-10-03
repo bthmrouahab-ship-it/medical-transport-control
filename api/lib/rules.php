@@ -62,7 +62,7 @@ const HOSPITAL_FIELDS = ['id', 'name', 'nameEn', 'zone', 'lat', 'lng', 'aliases'
 /** nurse: ممرضة من قائمة الممرضات (يُطلب لها سيارة مثل الضيف)، organization: جهة عملها */
 const GUEST_FIELDS = ['id', 'name', 'nameEn', 'gender', 'mobile', 'buildingNumber', 'apartmentNumber', 'age', 'healthNumber', 'nurse', 'organization', '_o'];
 const GUEST_PRIVATE_FIELDS = ['age', 'healthNumber'];
-/** أقل من هذا العمر: المرافق إلزامي في الموعد إلا مع Nurse (نفس MINOR_AGE في shared/guests.ts) */
+/** أقل من هذا العمر: المرافق إلزامي في الموعد الطبي إلا مع Nurse (نفس MINOR_AGE في shared/guests.ts) */
 const MINOR_AGE = 18;
 /** من يرى قائمة الضيوف: المدير والعيادة ومسؤولها، ومشرف السيارات (الرحلات غير الطبية من القائمة) */
 const GUEST_LIST_ROLES = ['admin', 'clinic', 'clinicLead', 'fleetSupervisor'];
@@ -305,7 +305,9 @@ function registry_error(array $appointment, callable $docOf, ?array $changed = n
             if (guest_has_private_car($guest)) return PRIVATE_CAR_MESSAGE;
         }
         $assistance = is_array($appointment['assistance'] ?? null) ? $appointment['assistance'] : [];
-        if (guest_is_minor($guest) && !in_array('يحتاج مرافق', $assistance, true) && !in_array('يحتاج Nurse', $assistance, true)) {
+        // في الموعد الطبي فقط: الرحلة غير الطبية بلا مرافق إلزامي
+        $medical = ($appointment['category'] ?? null) !== 'غير طبية';
+        if ($medical && guest_is_minor($guest) && !in_array('يحتاج مرافق', $assistance, true) && !in_array('يحتاج Nurse', $assistance, true)) {
             return 'الضيف أقل من 18 سنة: يحتاج مرافقًا (إلا إن كان معه Nurse)';
         }
     }

@@ -21,7 +21,7 @@ export type Guest = {
   organization?: string;
   /**
    * أقل من 18 سنة: يضيفها الخادم عند المزامنة بدل العمر (public_doc في api/lib/rules.php)، ولا تُحفظ.
-   * المرافق إلزامي في موعده إلا إن كان معه Nurse (withMinorEscort في shared/transport.ts).
+   * المرافق إلزامي في موعده الطبي إلا إن كان معه Nurse (withMinorEscort في shared/transport.ts)، لا في الرحلة غير الطبية.
    */
   minor?: true;
   /**

@@ -12,7 +12,7 @@ export const ESCORT_NEED: AssistanceNeed = "يحتاج مرافق";
 export const NURSE_NEED: AssistanceNeed = "يحتاج Nurse";
 
 /**
- * الضيف أقل من 18 سنة: المرافق إلزامي في السيارة، إلا إن كان معه Nurse. يعيد الاحتياجات ومعها المرافق إن لزم
+ * الضيف أقل من 18 سنة: المرافق إلزامي في سيارة الموعد الطبي، إلا إن كان معه Nurse (لا في الرحلة غير الطبية). يعيد الاحتياجات ومعها المرافق إن لزم
  * (بترتيب ASSISTANCE_NEEDS)، ونفس المصفوفة إن لم يتغير شيء. الخادم يرفض موعده بلا مرافق ولا Nurse (registry_error).
  */
 export function withMinorEscort(assistance: AssistanceNeed[], minor: boolean): AssistanceNeed[] {
