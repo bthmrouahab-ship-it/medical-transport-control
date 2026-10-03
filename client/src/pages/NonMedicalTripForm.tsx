@@ -17,9 +17,8 @@ import {
   type ClinicAppointment,
   type Gender,
   type VehicleRequest,
-  withMinorEscort,
 } from "@shared/transport";
-import { PRIVATE_CAR_MESSAGE, guestIndex, hasPrivateCar, hasSpecialNeeds, isMinor, isNurse, type Guest } from "@shared/guests";
+import { PRIVATE_CAR_MESSAGE, guestIndex, hasPrivateCar, hasSpecialNeeds, isNurse, type Guest } from "@shared/guests";
 import { CLINIC_TEXT } from "@/lib/i18n";
 import { useGuests } from "@/lib/useShared";
 import { DateChooser, Field, Panel, btn, choiceClass, cx, inputClass, labelClass, timeLabel } from "@/components/ui-kit";
@@ -77,8 +76,8 @@ export default function NonMedicalTripForm({ defaultDate, onSave, onCancel }: {
       const previous = current.guestId ? index.byId.get(current.guestId) : undefined;
       // هاتف الضيف من القائمة، إلا إذا كتب المشرف رقمًا آخر
       const mobile = !current.mobile || current.mobile === previous?.mobile ? next?.mobile ?? "" : current.mobile;
-      // الضيف أقل من 18 سنة: المرافق إلزامي إلا مع Nurse
-      const assistance = withMinorEscort(current.assistance, isMinor(next));
+      // المرافق اختياري هنا حتى للضيف أقل من 18 سنة (إلزامي في الموعد الطبي فقط)
+      const assistance = current.assistance;
       // من ذوي الاحتياجات الخاصة: «احتياجات خاصة» و«كرسي متحرك»، ويمكن تغييرهما
       const special = hasSpecialNeeds(next);
       return {
@@ -156,7 +155,7 @@ export default function NonMedicalTripForm({ defaultDate, onSave, onCancel }: {
         appointmentAt: form.appointmentAt,
         category: "غير طبية",
         kind: form.kind,
-        assistance: withMinorEscort(form.assistance, isMinor(guest)),
+        assistance: form.assistance,
         // المتكررة: ينتظر طلب مشرف المبنى في يومها
         status: repeat.enabled ? "بانتظار طلب السيارة" : "تم طلب السيارة",
         ...series,
@@ -281,7 +280,7 @@ export default function NonMedicalTripForm({ defaultDate, onSave, onCancel }: {
           </div>
         </fieldset>
 
-        <NeedsField t={CLINIC_TEXT.ar} value={form.assistance} minor={isMinor(guest)} onChange={(assistance) => setForm((current) => ({ ...current, assistance }))} />
+        <NeedsField t={CLINIC_TEXT.ar} value={form.assistance} minor={false} onChange={(assistance) => setForm((current) => ({ ...current, assistance }))} />
 
         <div className="flex gap-3 border-t border-slate-100 pt-5 sm:col-span-2">
           <button className={cx(btn("primary", "lg"), "flex-1")}><CheckCircle2 className="h-4 w-4" /> {repeat.enabled && seriesDates?.length ? `إضافة ${seriesDates.length.toLocaleString("en")} رحلة` : "إضافة الرحلة"}</button>
