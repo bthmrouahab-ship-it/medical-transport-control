@@ -26,14 +26,14 @@ import {
   type VehicleRequest,
 } from "@shared/transport";
 import type { UserProfile } from "@shared/users";
-import { useHospitals, useNow } from "@/lib/useShared";
+import { useGuests, useHospitals, useNow } from "@/lib/useShared";
 import AppHeader from "@/components/AppHeader";
 import { Segmented, addDays, btn, byAppointmentTime, headerButton, timeLabel } from "@/components/ui-kit";
 import { pickupDetails } from "@shared/trips";
 import { reveal } from "@/lib/notify";
 import { checkReplyChanges, confirmPendingChecks, pendingCheck, type CheckKind } from "@shared/driverChecks";
 import { CLINIC_TEXT, useLang } from "@/lib/i18n";
-import { ClinicForm, ClinicHome } from "./ClinicPages";
+import { ClinicForm, ClinicHome, useAppointmentNames } from "./ClinicPages";
 import { SupervisorHome, type RequestHandlers } from "./SupervisorPage";
 import { FleetSupervisorPage } from "./FleetSupervisorPage";
 import Login from "./Login";
@@ -281,6 +281,9 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
   const isClinic = session.role === "clinic" || session.role === "clinicLead";
   const isClinicLead = session.role === "clinicLead";
   const t = CLINIC_TEXT[isClinic ? lang : "ar"];
+  // اسم الضيف بلغة واجهة العيادة (بالإنجليزية من قائمة ضيوف المجمع)
+  const guests = useGuests();
+  const clinicNames = useAppointmentNames(isClinic ? lang : "ar", guests, hospitals);
 
   // تحديث الشاشة فورًا عند وصول تغييرات من مستخدمين آخرين
   useEffect(() => {
@@ -512,7 +515,7 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
       toast.error(t.errLocked);
       return;
     }
-    if (!window.confirm(t.confirmDelete(appointment.patientName))) return;
+    if (!window.confirm(t.confirmDelete(clinicNames.guest(appointment)))) return;
     // طلب العودة: يُحذف طلب سيارته معه (قبل إرسال السيارة)
     const carRequest = pendingReturnRequest(appointment);
     if (carRequest) {
@@ -557,7 +560,7 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
         };
       })
       .filter((trip) => trip.appointment);
-    return { vehicle, count: requestIds.length, message: buildDriverMessage(trips, vehicle, hospitals) };
+    return { vehicle, count: requestIds.length, message: buildDriverMessage(trips, vehicle, hospitals, guests) };
   }
 
   /**

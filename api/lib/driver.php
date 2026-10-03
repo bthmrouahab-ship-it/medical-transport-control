@@ -58,7 +58,13 @@ function route_driver_trips(PDO $pdo): array
     $today = qatar_today();
     $requests = [];
     $appointments = [];
-    $pick = fn(?array $appointment) => $appointment ? array_intersect_key($appointment, array_flip(DRIVER_APPOINTMENT_FIELDS)) : null;
+    // اسم الضيف الإنجليزي من قائمة ضيوف المجمع (لواجهة السائق بالإنجليزية والأردية)، برقم الموعد
+    $namesEn = [];
+    $pick = function (array $appointment) use ($pdo, &$namesEn): array {
+        $english = guest_name($pdo, $appointment, 'en');
+        if ($english !== trim((string)($appointment['patientName'] ?? ''))) $namesEn[(string)$appointment['id']] = $english;
+        return array_intersect_key($appointment, array_flip(DRIVER_APPOINTMENT_FIELDS));
+    };
     foreach (plate_requests($pdo, $plate) as $request) {
         $appointment = appointment_doc($pdo, (string)($request['appointmentId'] ?? ''));
         if (!$appointment) continue;
@@ -86,6 +92,7 @@ function route_driver_trips(PDO $pdo): array
         'plate' => $plate,
         'requests' => $requests,
         'appointments' => array_values($appointments),
+        'namesEn' => (object)$namesEn,
         'hospitals' => $hospitals,
         'sharing' => (bool)($location['sharing'] ?? false),
         'serverTime' => now_iso(),

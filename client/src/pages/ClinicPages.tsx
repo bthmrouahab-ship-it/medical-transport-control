@@ -6,6 +6,7 @@ import {
   ArrowLeft,
   Ban,
   ArrowRight,
+  Baby,
   Building2,
   CalendarDays,
   CalendarPlus,
@@ -20,6 +21,7 @@ import {
   Filter,
   House,
   Languages,
+  Lock,
   Ribbon,
   Pencil,
   X,
@@ -33,9 +35,13 @@ import {
   BriefcaseMedical,
 } from "lucide-react";
 import {
+  APPOINTMENT_TYPES,
   ASSISTANCE_NEEDS,
+  ESCORT_NEED,
   GENDERS,
+  appointmentTypeText,
   approvalOf,
+  destinationLabels,
   guestAlerts,
   isReturnOnly,
   localDateString,
@@ -43,7 +49,10 @@ import {
   REQUEST_GRACE_MINUTES,
   requestWindow,
   sameDayAppointments,
+  escortLocked,
+  normalizeAppointmentType,
   statusText,
+  withMinorEscort,
   type AppointmentKind,
   type Approval,
   type AssistanceNeed,
@@ -52,7 +61,7 @@ import {
   type VehicleRequest,
 } from "@shared/transport";
 import { matchHospital, normalizePlaceName, type Hospital } from "@shared/hospitals";
-import { guestIndex, guestOfAppointment, isNurse, searchGuests, type Guest } from "@shared/guests";
+import { guestIndex, guestOfAppointment, isMinor, isNurse, searchGuests, type Guest } from "@shared/guests";
 import { Badge, DateChooser, EmptyState, Field, Panel, PageHeader, Segmented, Stat, StatusBadge, StatusBar, btn, choiceClass, cx, formatDay, inputClass, labelClass, longDate } from "@/components/ui-kit";
 import { FILTER_LABELS_AR, FILTER_LABELS_EN, FilterTable, useColumnFilters, type FilterColumn } from "@/components/ExcelFilter";
 import { cancelReasonText, enableTranslation, hasArabic, useCancelReason } from "@/lib/translate";
@@ -60,6 +69,18 @@ import type { ClinicText, Lang } from "@/lib/i18n";
 import { useGuests, useHospitals, useNow } from "@/lib/useShared";
 
 const WAITING = "بانتظار طلب السيارة";
+
+/**
+ * اسم الضيف والوجهة بلغة الواجهة: بالإنجليزية اسم الضيف الإنجليزي من قائمة ضيوف المجمع واسم المستشفى الإنجليزي
+ * من الدليل (وإلا الاسم كما حُفظ في الموعد)، وبالعربية كما في الموعد.
+ */
+export function useAppointmentNames(lang: Lang, guests: Guest[], hospitals: Hospital[]) {
+  const index = useMemo(() => guestIndex(guests), [guests]);
+  return useMemo(() => ({
+    guest: (appointment: ClinicAppointment) => (lang === "en" ? guestOfAppointment(index, appointment)?.nameEn || appointment.patientName : appointment.patientName),
+    place: (appointment: ClinicAppointment) => (lang === "en" ? destinationLabels(appointment, hospitals).en : appointment.clinic),
+  }), [lang, index, hospitals]);
+}
 
 export function ClinicHome({ t, lang, appointments, date, onDateChange, onNew, onEdit, onDelete, onImport, lead = false, onApproval, canChange, requestOf }: {
   t: ClinicText;
@@ -86,6 +107,8 @@ export function ClinicHome({ t, lang, appointments, date, onDateChange, onNew, o
   const hospitals = useHospitals();
   const guests = useGuests();
   const now = useNow();
+  // بالإنجليزية: اسم الضيف من قائمة ضيوف المجمع واسم المستشفى من الدليل (وإلا كما كُتب)
+  const names = useAppointmentNames(lang, guests, hospitals);
 
   async function importExcel(file?: File) {
     if (!file) return;
@@ -122,6 +145,8 @@ export function ClinicHome({ t, lang, appointments, date, onDateChange, onNew, o
       const worksheet = XLSX.utils.json_to_sheet([{
         "اسم الضيف أو الرقم": "ضيف 001",
         "اسم العيادة أو المستشفى": "مستشفى حمد العام",
+        // اختياري: من القائمة أو أي نوع آخر
+        "نوع الموعد": "مراجعة",
         "رقم المبنى": "12",
         "رقم الشقة": "4",
         "رقم الموبايل": "55123456",
@@ -134,7 +159,7 @@ export function ClinicHome({ t, lang, appointments, date, onDateChange, onNew, o
         // نعم: طلب عودة فقط من المستشفى («وقت الموعد» وقت العودة)
         "عودة فقط": "لا",
       }]);
-      worksheet["!cols"] = [{ wch: 22 }, { wch: 28 }, { wch: 14 }, { wch: 14 }, { wch: 16 }, { wch: 14 }, { wch: 14 }, { wch: 18 }, { wch: 30 }, { wch: 10 }, { wch: 12 }, { wch: 10 }];
+      worksheet["!cols"] = [{ wch: 22 }, { wch: 28 }, { wch: 16 }, { wch: 14 }, { wch: 14 }, { wch: 16 }, { wch: 14 }, { wch: 14 }, { wch: 18 }, { wch: 30 }, { wch: 10 }, { wch: 12 }, { wch: 10 }];
       const workbook = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(workbook, worksheet, "المواعيد");
       XLSX.writeFile(workbook, "appointments-template.xlsx");
@@ -213,7 +238,7 @@ export function ClinicHome({ t, lang, appointments, date, onDateChange, onNew, o
             <li key={alert.other.id} className={cx("flex items-start gap-1 rounded-lg px-2 py-1 text-[11px] leading-4 ring-1 ring-inset",
               alert.kind === "sameTime" ? "bg-red-50 text-red-800 ring-red-200" : "bg-amber-50 text-amber-900 ring-amber-200")}>
               <AlertTriangle className="mt-px h-3 w-3 shrink-0" />
-              <span>{alert.kind === "sameTime" ? t.alertSameTime(alert.other.appointmentAt, alert.other.clinic, alert.gap) : t.alertSameHospital(alert.other.appointmentAt)}</span>
+              <span>{alert.kind === "sameTime" ? t.alertSameTime(alert.other.appointmentAt, names.place(alert.other), alert.gap) : t.alertSameHospital(alert.other.appointmentAt)}</span>
             </li>
           ))}
         </ul>
@@ -237,11 +262,11 @@ export function ClinicHome({ t, lang, appointments, date, onDateChange, onNew, o
     {
       key: "guest",
       label: t.cols.guest,
-      value: (a) => a.patientName,
+      value: (a) => names.guest(a),
       cell: (a) => (
         <div className="min-w-[160px] max-w-[260px] whitespace-normal">
           <p className="flex flex-wrap items-center gap-1.5 font-semibold text-ink">
-            {a.patientName}
+            <bdi>{names.guest(a)}</bdi>
             {a.nurse && <Badge tone="violet" icon={BriefcaseMedical}>{t.nurse}</Badge>}
             {a.cancer && <Badge tone="red" icon={Ribbon}>{t.priority}</Badge>}
           </p>
@@ -249,7 +274,7 @@ export function ClinicHome({ t, lang, appointments, date, onDateChange, onNew, o
             // لمسؤول العيادة: الموعد الذي عليه تنبيه يظهر في عمود التنبيهات فقط
             .filter((other) => !lead || !(alertsOf.get(a.id) ?? []).some((alert) => alert.other.id === other.id))
             .map((other) => (
-            <p key={other.id} className="mt-1 flex items-start gap-1 text-[11px] leading-4 text-cyan-800"><CalendarPlus className="mt-px h-3 w-3 shrink-0" /> {t.otherSameDay(other.appointmentAt, other.clinic)}</p>
+            <p key={other.id} className="mt-1 flex items-start gap-1 text-[11px] leading-4 text-cyan-800"><CalendarPlus className="mt-px h-3 w-3 shrink-0" /> {t.otherSameDay(other.appointmentAt, names.place(other))}</p>
           ))}
           {a.returnedSelf && <p className="mt-1 text-[11px] leading-4 text-emerald-700">{t.returnedSelf(a.returnedSelfBy)}</p>}
         </div>
@@ -261,7 +286,7 @@ export function ClinicHome({ t, lang, appointments, date, onDateChange, onNew, o
       label: t.cols.type,
       value: (a) => t.requestType(isReturnOnly(a)),
       cell: (a) => (isReturnOnly(a)
-        ? <span className="flex flex-col gap-1"><Badge tone="cyan" icon={House}>{t.returnOnly}</Badge><span className="max-w-[200px] whitespace-normal text-[11px] leading-4 text-slate-500">{t.returnTo(a.clinic)}</span></span>
+        ? <span className="flex flex-col gap-1"><Badge tone="cyan" icon={House}>{t.returnOnly}</Badge><span className="max-w-[200px] whitespace-normal text-[11px] leading-4 text-slate-500">{t.returnTo(names.place(a))}</span></span>
         : <span className="text-slate-500">{t.requestType(false)}</span>),
     },
     approvalColumn,
@@ -270,7 +295,13 @@ export function ClinicHome({ t, lang, appointments, date, onDateChange, onNew, o
     { key: "building", label: t.cols.building, value: (a) => a.buildingNumber, cell: (a) => <span className="tabular">{a.buildingNumber}</span> },
     { key: "apartment", label: t.cols.apartment, value: (a) => a.apartmentNumber, cell: (a) => <span className="tabular">{a.apartmentNumber}</span> },
     { key: "mobile", label: t.cols.mobile, value: (a) => (a.mobile === "-" ? "" : a.mobile), cell: (a) => (a.mobile && a.mobile !== "-" ? <span dir="ltr" className="tabular">{a.mobile}</span> : <span className="text-slate-300">—</span>) },
-    { key: "destination", label: t.cols.destination, value: (a) => a.clinic, cell: (a) => <span className="block max-w-[220px] whitespace-normal">{a.clinic}</span> },
+    { key: "destination", label: t.cols.destination, value: (a) => names.place(a), cell: (a) => <span className="block max-w-[220px] whitespace-normal">{names.place(a)}</span> },
+    {
+      key: "appointmentType",
+      label: t.cols.appointmentType,
+      value: (a) => appointmentTypeText(a.appointmentType, lang),
+      cell: (a) => (a.appointmentType ? <span className="block max-w-[160px] whitespace-normal">{appointmentTypeText(a.appointmentType, lang)}</span> : <span className="text-slate-300">—</span>),
+    },
     { key: "kind", label: t.cols.kind, value: (a) => t.kind(a.kind) },
     { key: "needs", label: t.cols.needs, value: (a) => a.assistance.map(t.need).join(separator), cell: (a) => (a.assistance.length ? <span className="block max-w-[180px] whitespace-normal text-xs">{a.assistance.map(t.need).join(separator)}</span> : <span className="text-slate-300">—</span>) },
     {
@@ -300,8 +331,8 @@ export function ClinicHome({ t, lang, appointments, date, onDateChange, onNew, o
         const editable = canChange ? canChange(a) : a.status === WAITING;
         return (
           <div className="flex gap-1.5">
-            <button disabled={!editable} title={editable ? t.edit : t.lockedHint} aria-label={`${t.edit} ${a.patientName}`} onClick={() => onEdit(a)} className={cx(btn(expiredOf(a) ? "primary" : "secondary", "sm"), "w-9 px-0")}><Pencil className="h-3.5 w-3.5" /></button>
-            <button disabled={!editable} title={editable ? t.delete : t.lockedHint} aria-label={`${t.delete} ${a.patientName}`} onClick={() => onDelete(a)} className={cx(btn("danger", "sm"), "w-9 px-0")}><Trash2 className="h-3.5 w-3.5" /></button>
+            <button disabled={!editable} title={editable ? t.edit : t.lockedHint} aria-label={`${t.edit} ${names.guest(a)}`} onClick={() => onEdit(a)} className={cx(btn(expiredOf(a) ? "primary" : "secondary", "sm"), "w-9 px-0")}><Pencil className="h-3.5 w-3.5" /></button>
+            <button disabled={!editable} title={editable ? t.delete : t.lockedHint} aria-label={`${t.delete} ${names.guest(a)}`} onClick={() => onDelete(a)} className={cx(btn("danger", "sm"), "w-9 px-0")}><Trash2 className="h-3.5 w-3.5" /></button>
           </div>
         );
       },
@@ -326,6 +357,7 @@ export function ClinicHome({ t, lang, appointments, date, onDateChange, onNew, o
         "اسم الضيف أو الرقم": appointment.patientName,
         "الجنس": appointment.gender ?? "",
         "اسم العيادة أو المستشفى": appointment.clinic,
+        "نوع الموعد": appointment.appointmentType ?? "",
         "رقم المبنى": appointment.buildingNumber,
         "رقم الشقة": appointment.apartmentNumber,
         "رقم الموبايل": appointment.mobile,
@@ -341,7 +373,7 @@ export function ClinicHome({ t, lang, appointments, date, onDateChange, onNew, o
         "ألغاه": appointment.cancelledBy ?? "",
       }));
       const worksheet = XLSX.utils.json_to_sheet(rows);
-      worksheet["!cols"] = [14, 24, 8, 30, 10, 10, 14, 13, 10, 14, 12, 12, 12, 12, 10, 20, 28, 18].map((wch) => ({ wch }));
+      worksheet["!cols"] = [14, 24, 8, 30, 16, 10, 10, 14, 13, 10, 14, 12, 12, 12, 12, 10, 20, 28, 18].map((wch) => ({ wch }));
       const workbook = XLSX.utils.book_new();
       workbook.Workbook = { Views: [{ RTL: true }] };
       XLSX.utils.book_append_sheet(workbook, worksheet, "المواعيد");
@@ -454,7 +486,7 @@ export function ClinicHome({ t, lang, appointments, date, onDateChange, onNew, o
             onChange: setSelected,
             canSelect,
             allLabel: t.selectAll,
-            rowLabel: (a) => t.selectRow(a.patientName),
+            rowLabel: (a) => t.selectRow(names.guest(a)),
             lockedHint: t.selectLocked,
           } : undefined}
         />
@@ -537,29 +569,31 @@ export function ClinicForm({ t, lang, initial, defaultDate, returnOnly = false, 
       appointmentDate: initial?.appointmentDate ?? defaultDate,
       appointmentAt: initial?.appointmentAt ?? "09:00",
       kind: initial?.kind ?? "عادي" as AppointmentKind,
-      assistance: initial?.assistance ?? [] as AssistanceNeed[],
+      // الضيف أقل من 18 سنة: المرافق إلزامي إلا مع Nurse
+      assistance: withMinorEscort(initial?.assistance ?? [], isMinor(guest)),
       gender: initial?.gender ?? guest?.gender,
       cancer: initial?.cancer ?? false,
+      appointmentType: initial?.appointmentType ?? "",
     };
   });
   const guest = form.guestId ? index.byId.get(form.guestId) : undefined;
+  const minor = isMinor(guest);
   // موعد ثانٍ لنفس الضيف في نفس اليوم (عند الإضافة فقط)
-  const [second, setSecond] = useState({ enabled: false, hospitalId: "", appointmentAt: "" });
+  const [second, setSecond] = useState({ enabled: false, hospitalId: "", appointmentAt: "", appointmentType: "" });
 
   function selectGuest(next: Guest | undefined) {
     setForm((current) => {
       const previous = current.guestId ? index.byId.get(current.guestId) : undefined;
       // هاتف الضيف من القائمة، إلا إذا كتبت العيادة رقمًا آخر
       const mobile = !current.mobile || current.mobile === previous?.mobile ? next?.mobile ?? "" : current.mobile;
-      return { ...current, guestId: next?.id ?? "", mobile, gender: next?.gender ?? (next ? current.gender : undefined) };
+      return {
+        ...current,
+        guestId: next?.id ?? "",
+        mobile,
+        gender: next?.gender ?? (next ? current.gender : undefined),
+        assistance: withMinorEscort(current.assistance, isMinor(next)),
+      };
     });
-  }
-
-  function toggleAssistance(need: AssistanceNeed) {
-    setForm((current) => ({
-      ...current,
-      assistance: current.assistance.includes(need) ? current.assistance.filter((item) => item !== need) : [...current.assistance, need],
-    }));
   }
 
   function submit(event: React.FormEvent) {
@@ -603,6 +637,7 @@ export function ClinicForm({ t, lang, initial, defaultDate, returnOnly = false, 
       }
     }
     const stamp = Date.now().toString().slice(-6);
+    const appointmentType = normalizeAppointmentType(form.appointmentType);
     const first: ClinicAppointment = {
       id: initial?.id ?? `APT-${stamp}`,
       guestId: guest.id,
@@ -615,9 +650,10 @@ export function ClinicForm({ t, lang, initial, defaultDate, returnOnly = false, 
       appointmentDate: form.appointmentDate,
       appointmentAt: form.appointmentAt,
       kind: form.kind,
-      assistance: form.assistance,
+      assistance: withMinorEscort(form.assistance, minor),
       gender: form.gender,
       ...(form.cancer ? { cancer: true } : {}),
+      ...(appointmentType ? { appointmentType } : {}),
       ...(returnOnly ? { returnOnly: true } : {}),
       // ممرضة من قائمة الممرضات: تُعرف بها عند المشرفين والسائق
       ...(isNurse(guest) ? { nurse: true } : {}),
@@ -627,8 +663,17 @@ export function ClinicForm({ t, lang, initial, defaultDate, returnOnly = false, 
       onSave([first]);
       return;
     }
-    // الموعد الثاني: نفس الضيف والتاريخ والاحتياجات، بمستشفى ووقت آخرين
-    onSave([first, { ...first, id: `APT-${stamp}-2`, clinic: secondHospital.name, hospitalId: secondHospital.id, appointmentAt: second.appointmentAt }]);
+    // الموعد الثاني: نفس الضيف والتاريخ والاحتياجات، بمستشفى ووقت ونوع آخر
+    const { appointmentType: _firstType, ...shared } = first;
+    const secondType = normalizeAppointmentType(second.appointmentType);
+    onSave([first, {
+      ...shared,
+      id: `APT-${stamp}-2`,
+      clinic: secondHospital.name,
+      hospitalId: secondHospital.id,
+      appointmentAt: second.appointmentAt,
+      ...(secondType ? { appointmentType: secondType } : {}),
+    }]);
   }
 
   const BackIcon = t.dir === "rtl" ? ArrowRight : ArrowLeft;
@@ -661,6 +706,7 @@ export function ClinicForm({ t, lang, initial, defaultDate, returnOnly = false, 
           </fieldset>}
           <div className="sm:col-span-2"><DateChooser label={returnOnly ? t.returnDate : t.date} value={form.appointmentDate} onChange={(value) => setForm({ ...form, appointmentDate: value })} labels={t.dateChoice} /></div>
           <Field label={returnOnly ? t.returnTime : t.time} value={form.appointmentAt} onChange={(value) => setForm({ ...form, appointmentAt: value })} type="time" />
+          <AppointmentTypeField id="appointment-type" t={t} lang={lang} value={form.appointmentType} onChange={(appointmentType) => setForm((current) => ({ ...current, appointmentType }))} />
 
           <fieldset className="sm:col-span-2">
             <legend className={labelClass}>{t.tripType}</legend>
@@ -673,20 +719,7 @@ export function ClinicForm({ t, lang, initial, defaultDate, returnOnly = false, 
             </div>
           </fieldset>
 
-          <fieldset className="sm:col-span-2">
-            <legend className={labelClass}>{t.needs}</legend>
-            <div className="grid gap-3 sm:grid-cols-3">
-              {ASSISTANCE_NEEDS.map((need) => {
-                const selected = form.assistance.includes(need);
-                return (
-                  <label key={need} className={cx(choiceClass(selected), "cursor-pointer")}>
-                    <input type="checkbox" checked={selected} onChange={() => toggleAssistance(need)} className="h-4 w-4 accent-brand-600" />
-                    {t.need(need)}
-                  </label>
-                );
-              })}
-            </div>
-          </fieldset>
+          <NeedsField t={t} value={form.assistance} minor={minor} onChange={(assistance) => setForm((current) => ({ ...current, assistance }))} />
 
           <label className={cx(choiceClass(form.cancer), "cursor-pointer sm:col-span-2")}>
             <input type="checkbox" checked={form.cancer} onChange={(event) => setForm({ ...form, cancer: event.target.checked })} className="h-4 w-4 accent-brand-600" />
@@ -704,6 +737,7 @@ export function ClinicForm({ t, lang, initial, defaultDate, returnOnly = false, 
                 <div className="mt-4 grid gap-4 sm:grid-cols-[minmax(0,1fr)_180px]">
                   <HospitalSelect id="hospital-second" label={`${t.secondTitle} · ${t.hospital}`} value={second.hospitalId} onChange={(hospitalId) => setSecond({ ...second, hospitalId })} hospitals={hospitals} lang={lang} placeholder={t.hospitalChoose} noMatch={t.hospitalNoMatch} />
                   <Field label={`${t.secondTitle} · ${t.time}`} value={second.appointmentAt} onChange={(value) => setSecond({ ...second, appointmentAt: value })} type="time" />
+                  <AppointmentTypeField id="appointment-type-second" t={t} lang={lang} label={`${t.secondTitle} · ${t.appointmentType}`} value={second.appointmentType} onChange={(appointmentType) => setSecond((current) => ({ ...current, appointmentType }))} className="sm:col-span-2" />
                   <p className="text-xs leading-5 text-slate-500 sm:col-span-2">{t.secondHint}</p>
                 </div>
               )}
@@ -717,6 +751,98 @@ export function ClinicForm({ t, lang, initial, defaultDate, returnOnly = false, 
         </form>
       </Panel>
     </div>
+  );
+}
+
+const TYPE_OTHER = "__other";
+
+/**
+ * نوع الموعد (اختياري): من القائمة الجاهزة، أو «أخرى» ويُكتب. القيمة نوع القائمة بالعربية أو النص المكتوب،
+ * وفارغة بلا تحديد.
+ */
+function AppointmentTypeField({ id, t, lang, label, value, onChange, className }: {
+  id: string;
+  t: ClinicText;
+  lang: Lang;
+  label?: string;
+  value: string;
+  onChange: (value: string) => void;
+  className?: string;
+}) {
+  const preset = APPOINTMENT_TYPES.some((type) => type.ar === value);
+  const [other, setOther] = useState(() => Boolean(value) && !preset);
+  return (
+    <div className={className}>
+      <label htmlFor={id} className={labelClass}>
+        {label ?? t.appointmentType} <span className="text-xs font-normal text-slate-400">({t.optional})</span>
+      </label>
+      <select
+        id={id}
+        value={other ? TYPE_OTHER : preset ? value : ""}
+        onChange={(event) => {
+          const next = event.target.value;
+          setOther(next === TYPE_OTHER);
+          onChange(next === TYPE_OTHER ? "" : next);
+        }}
+        className={inputClass}
+      >
+        <option value="">{t.appointmentTypeNone}</option>
+        {APPOINTMENT_TYPES.map((type) => <option key={type.ar} value={type.ar}>{lang === "en" ? type.en : type.ar}</option>)}
+        <option value={TYPE_OTHER}>{t.appointmentTypeOther}</option>
+      </select>
+      {other && (
+        <input
+          autoFocus
+          aria-label={t.appointmentTypeOtherLabel}
+          value={value}
+          maxLength={60}
+          onChange={(event) => onChange(event.target.value)}
+          placeholder={t.appointmentTypeOtherPlaceholder}
+          className={cx(inputClass, "mt-2")}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * احتياجات الضيف. الضيف أقل من 18 سنة (minor): يُضاف المرافق تلقائيًا ولا يُزال إلا إذا اختير «يحتاج Nurse»،
+ * وإزالة الـ Nurse تعيد المرافق.
+ */
+export function NeedsField({ t, value, onChange, minor, columns = "sm:grid-cols-3" }: {
+  t: ClinicText;
+  value: AssistanceNeed[];
+  onChange: (assistance: AssistanceNeed[]) => void;
+  minor: boolean;
+  columns?: string;
+}) {
+  const locked = escortLocked(value, minor);
+  function toggle(need: AssistanceNeed) {
+    const next = value.includes(need) ? value.filter((item) => item !== need) : [...value, need];
+    onChange(withMinorEscort(next, minor));
+  }
+  return (
+    <fieldset className="sm:col-span-2">
+      <legend className={labelClass}>{t.needs}</legend>
+      <div className={cx("grid gap-3", columns)}>
+        {ASSISTANCE_NEEDS.map((need) => {
+          const selected = value.includes(need);
+          const fixed = need === ESCORT_NEED && locked;
+          return (
+            <label key={need} title={fixed ? t.minorEscortLocked : undefined} className={cx(choiceClass(selected), fixed ? "cursor-not-allowed" : "cursor-pointer")}>
+              <input type="checkbox" checked={selected} disabled={fixed} onChange={() => toggle(need)} className="h-4 w-4 accent-brand-600" />
+              {t.need(need)}
+              {fixed && <Lock aria-hidden="true" className="ms-auto h-3.5 w-3.5 text-slate-400" />}
+            </label>
+          );
+        })}
+      </div>
+      {minor && (
+        <p className="mt-2 flex items-start gap-2 rounded-lg bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-900 ring-1 ring-inset ring-amber-200">
+          <Baby className="mt-0.5 h-4 w-4 shrink-0" /> {t.minorEscortHint}
+        </p>
+      )}
+    </fieldset>
   );
 }
 
@@ -755,6 +881,10 @@ export function GuestPicker({ t, guests, guest, onSelect, notListed }: {
   }, [guests, building, apartment, query, searching, filtering]);
   const shown = results.slice(0, 30);
   const listId = "guest-options";
+  // بالإنجليزية: الاسم الإنجليزي أولًا والعربي تحته
+  const english = t.dir === "ltr";
+  const mainName = (item: Guest) => (english ? item.nameEn || item.name : item.name);
+  const otherName = (item: Guest) => (english ? (item.nameEn ? item.name : "") : item.nameEn);
 
   if (guest) {
     return (
@@ -762,12 +892,13 @@ export function GuestPicker({ t, guests, guest, onSelect, notListed }: {
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">
             <p className="text-[13px] font-medium text-slate-500">{t.guest}</p>
-            <p className="mt-0.5 font-semibold text-ink">{guest.name}</p>
-            {guest.nameEn && <p className="text-xs text-slate-500"><bdi>{guest.nameEn}</bdi></p>}
+            <p className="mt-0.5 font-semibold text-ink"><bdi>{mainName(guest)}</bdi></p>
+            {otherName(guest) && <p className="text-xs text-slate-500"><bdi>{otherName(guest)}</bdi></p>}
             <div className="mt-2 flex flex-wrap gap-1.5">
               {isNurse(guest) && <Badge tone="violet" icon={BriefcaseMedical}>{t.nurse}{guest.organization ? ` · ${guest.organization}` : ""}</Badge>}
               <Badge tone="neutral" icon={Building2}>{t.guestUnit(guest.buildingNumber, guest.apartmentNumber)}</Badge>
               {guest.gender && <Badge tone="neutral">{t.genderLabel(guest.gender)}</Badge>}
+              {isMinor(guest) && <Badge tone="amber" icon={Baby}>{t.minor}</Badge>}
             </div>
             <p className="mt-2 text-[11px] leading-4 text-slate-400">{t.guestFromList}</p>
           </div>
@@ -853,10 +984,10 @@ export function GuestPicker({ t, guests, guest, onSelect, notListed }: {
               >
                 <span className="min-w-0">
                   <span className="flex min-w-0 items-center gap-1.5 text-sm font-medium text-ink">
-                    <span className="truncate">{item.name}</span>
+                    <span className="truncate"><bdi>{mainName(item)}</bdi></span>
                     {isNurse(item) && <Badge tone="violet" icon={BriefcaseMedical} className="shrink-0">{t.nurse}</Badge>}
                   </span>
-                  {item.nameEn && <span className="block truncate text-xs text-slate-500"><bdi>{item.nameEn}</bdi></span>}
+                  {otherName(item) && <span className="block truncate text-xs text-slate-500"><bdi>{otherName(item)}</bdi></span>}
                 </span>
                 <span className="shrink-0 text-xs text-slate-500 tabular">{t.guestUnit(item.buildingNumber, item.apartmentNumber)}</span>
               </li>

@@ -116,7 +116,7 @@ import { KindIcon, KindLabel, VehiclePicker } from "@/components/VehiclePicker";
 import DriverAssignment from "@/components/DriverAssignment";
 import { reveal } from "@/lib/notify";
 import GuestContact from "@/components/GuestContact";
-import { useDrivers, useHospitals, useLiveVehicles, useNow, useSharedState } from "@/lib/useShared";
+import { useDrivers, useGuests, useHospitals, useLiveVehicles, useNow, useSharedState } from "@/lib/useShared";
 import { locationFreshness, type VehicleLocation } from "@/lib/vehicleLocation";
 import { NOTIFY_KEY, deviceNotificationsOn, useArrivalAlerts, useCancellationAlerts, useDenialAlerts, useRedirectAlerts } from "@/lib/arrivalAlerts";
 import { checkStateText, driverCheck } from "@shared/driverChecks";
@@ -1065,7 +1065,9 @@ function ActiveTrip({ trips, phase, late = false, vehicle, driver, hospitals, on
 }) {
   const plate = trips[0].request.vehiclePlate ?? "";
   const changed = trips.find((trip) => trip.request.previousPlate)?.request;
-  const message = buildDriverMessage(trips, { plate, driver }, hospitals);
+  // النصف الإنجليزي من الرسالة باسم الضيف الإنجليزي من قائمة ضيوف المجمع
+  const guests = useGuests();
+  const message = buildDriverMessage(trips, { plate, driver }, hospitals, guests);
   const phone = vehicle?.phone;
   // المقاعد الباقية: الباص 14، وسيارة الاحتياجات الخاصة 4، والسيدان 3 (أو 4 بطاقتها الكاملة)
   const seatsLeft = vehicleSeats(vehicle ?? { kind: "سيدان" }) - sumPersons(trips);

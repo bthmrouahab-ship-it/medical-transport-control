@@ -139,7 +139,7 @@ const ar = {
   cols: {
     date: "التاريخ", time: "الوقت", id: "رقم الموعد", guest: "الضيف", gender: "الجنس", building: "المبنى", apartment: "الشقة",
     mobile: "الموبايل", destination: "الوجهة", kind: "نوع الرحلة", needs: "الاحتياجات", status: "الحالة", reason: "سبب الإلغاء", actions: "إجراءات",
-    approval: "الموافقة", alerts: "تنبيهات", type: "الطلب",
+    approval: "الموافقة", alerts: "تنبيهات", type: "الطلب", appointmentType: "نوع الموعد",
   },
   filterHint: "اضغط ▾ في عنوان أي عمود للفرز والفلترة كما في Excel",
   filtersOn: (count: number) => `${count} ${count === 1 ? "فلتر" : "فلاتر"}`,
@@ -232,6 +232,17 @@ const ar = {
   exportExcel: "تصدير Excel",
   exported: (count: number) => `تم تصدير ${count} موعد`,
   exportNone: "لا توجد مواعيد للتصدير",
+  // نوع الموعد (خانة اختيارية)
+  appointmentType: "نوع الموعد",
+  optional: "اختياري",
+  appointmentTypeNone: "بدون تحديد",
+  appointmentTypeOther: "أخرى (اكتب النوع)",
+  appointmentTypeOtherLabel: "نوع الموعد الآخر",
+  appointmentTypeOtherPlaceholder: "اكتب نوع الموعد",
+  // الضيف أقل من 18 سنة: المرافق إلزامي إلا مع Nurse
+  minor: "أقل من 18 سنة",
+  minorEscortHint: "الضيف أقل من 18 سنة: أُضيف المرافق تلقائيًا، ولا يمكن إزالته إلا إذا كان معه Nurse.",
+  minorEscortLocked: "المرافق إلزامي للضيف أقل من 18 سنة إلا إذا كان معه Nurse",
 };
 
 export type ClinicText = typeof ar;
@@ -327,7 +338,7 @@ const en: ClinicText = {
   cols: {
     date: "Date", time: "Time", id: "Appointment no.", guest: "Guest", gender: "Gender", building: "Building", apartment: "Apt",
     mobile: "Mobile", destination: "Destination", kind: "Trip type", needs: "Needs", status: "Status", reason: "Cancellation reason", actions: "Actions",
-    approval: "Approval", alerts: "Alerts", type: "Request",
+    approval: "Approval", alerts: "Alerts", type: "Request", appointmentType: "Appointment type",
   },
   filterHint: "Use ▾ in any column header to sort and filter, as in Excel",
   filtersOn: (count) => `${count} ${count === 1 ? "filter" : "filters"}`,
@@ -414,6 +425,15 @@ const en: ClinicText = {
   exportExcel: "Export Excel",
   exported: (count) => `${count} appointments exported`,
   exportNone: "No appointments to export",
+  appointmentType: "Appointment type",
+  optional: "optional",
+  appointmentTypeNone: "Not specified",
+  appointmentTypeOther: "Other (type it)",
+  appointmentTypeOtherLabel: "Other appointment type",
+  appointmentTypeOtherPlaceholder: "Type the appointment type",
+  minor: "Under 18",
+  minorEscortHint: "The guest is under 18: an escort was added automatically and can be removed only if a nurse goes with them.",
+  minorEscortLocked: "An escort is required for a guest under 18 unless a nurse goes with them",
 };
 
 
