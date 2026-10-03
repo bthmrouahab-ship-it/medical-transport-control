@@ -1,7 +1,7 @@
 import { DEFAULT_HOSPITALS, distanceKm, matchHospital, type Hospital } from "./hospitals";
 import { FLEET_SEED } from "./seedData";
 import { normalizeGender, normalizeMobile, readAliased, toText, toWesternDigits } from "./text";
-import { findGuestByName, guestIndex, guestOfAppointment, isMinor, type Guest } from "./guests";
+import { PRIVATE_CAR_MESSAGE, findGuestByName, guestIndex, guestOfAppointment, hasPrivateCar, isMinor, type Guest } from "./guests";
 
 export type AppointmentKind = "عادي" | "احتياجات خاصة";
 export type VehicleKind = "سيدان" | "احتياجات خاصة" | "باص";
@@ -443,6 +443,11 @@ export function parseImportedAppointments(
       const guest = findGuestByName(index, patientName, buildingNumber, apartmentNumber);
       if (!guest) {
         errors.push(`الصف ${excelRow}: الضيف «${patientName}» غير موجود في قائمة ضيوف المجمع`);
+        return;
+      }
+      // صاحب سيارة خاصة أو من يسكن معه في نفس الشقة
+      if (hasPrivateCar(guest)) {
+        errors.push(`الصف ${excelRow}: «${guest.name}»: ${PRIVATE_CAR_MESSAGE}`);
         return;
       }
       guestId = guest.id;

@@ -51,6 +51,7 @@ try {
         'POST push-subscribe' => 'route_push_subscribe',
         'POST push-unsubscribe' => 'route_push_unsubscribe',
         'POST guests.import' => 'route_guests_import',
+        'POST private-cars.import' => 'route_private_cars_import',
         'GET guests-stats' => 'route_guests_stats',
     ];
     $handler = $handlers["$method $route"] ?? null;
@@ -351,7 +352,9 @@ function route_sync(PDO $pdo): array
     $stmt = $pdo->prepare($sql);
     $stmt->execute([$since, $rev, ...$collections]);
     $docs = [];
-    foreach ($stmt as $row) $docs[] = ['col' => $row['col'], 'id' => $row['id'], 'data' => public_doc($row['col'], decode_doc($row['data']))];
+    // شقق السيارات الخاصة: علامة privateCar مع ضيوفها
+    $privateUnits = private_car_units();
+    foreach ($stmt as $row) $docs[] = ['col' => $row['col'], 'id' => $row['id'], 'data' => public_doc($row['col'], decode_doc($row['data']), $privateUnits)];
     return ['rev' => $rev, 'full' => $since === 0, 'docs' => $docs];
 }
 
@@ -392,14 +395,14 @@ function route_write(PDO $pdo, array $body): array
             if ($kind === 'set') {
                 $after = $op['data'] ?? null;
                 if (!is_array($after) || ($after && array_is_list($after))) throw new ApiException(400, 'بيانات غير صالحة', 'bad_request');
-                // علامة «أقل من 18 سنة» تضيفها المزامنة من العمر (public_doc) ولا تُحفظ
-                if ($col === 'guests') unset($after['minor']);
+                // علامتا «أقل من 18 سنة» و«سيارة خاصة» تضيفهما المزامنة (public_doc) ولا تُحفظان
+                if ($col === 'guests') unset($after['minor'], $after['privateCar']);
             } elseif ($kind === 'update') {
                 if ($before === null) throw new ApiException(409, 'تغيّر هذا العنصر أو حُذف من مستخدم آخر. حدّث الصفحة وحاول مرة أخرى.', 'conflict');
                 $after = $before;
                 foreach ((array)($op['set'] ?? []) as $field => $value) $after[(string)$field] = $value;
                 foreach ((array)($op['unset'] ?? []) as $field) unset($after[(string)$field]);
-                if ($col === 'guests') unset($after['minor']);
+                if ($col === 'guests') unset($after['minor'], $after['privateCar']);
             } elseif ($kind === 'delete') {
                 if ($before === null) continue;
                 $after = null;
@@ -413,6 +416,13 @@ function route_write(PDO $pdo, array $body): array
             if ($entry) log_activity($pdo, empty($entry[4]) ? $user : null, $entry[0], $entry[1], $entry[2], $id, $entry[3]);
             if ($col === 'requests') queue_request_pushes($pdo, $before, $after);
             if ($col === 'fleet' || $col === 'drivers') $fleetChanged = true;
+            // شقة أُضيفت إلى السيارات الخاصة أو حُذفت منها: يُعاد إرسال ضيوفها بالعلامة الجديدة
+            if ($col === 'privateCars') {
+                private_car_units(true);
+                $units = [];
+                foreach ([$before, $after] as $car) if ($car) $units[unit_key($car['buildingNumber'] ?? '', $car['apartmentNumber'] ?? '')] = true;
+                touch_unit_guests($pdo, $units, $rev);
+            }
         }
         // اسم السائق ورقمه في السيارات، والسائق في سيارة واحدة، وحسابات السائقين تتبع سياراتهم
         if ($fleetChanged) normalize_fleet_drivers($pdo, $rev);
@@ -457,7 +467,7 @@ function route_guests_import(PDO $pdo, array $body): array
         $seen = [];
         foreach ($guests as $index => $guest) {
             $id = is_array($guest) ? (string)($guest['id'] ?? '') : '';
-            if (is_array($guest)) unset($guest['minor']);
+            if (is_array($guest)) unset($guest['minor'], $guest['privateCar']);
             if (!valid_doc_id($id) || isset($seen[$id]) || !valid_guest($guest, $id)) {
                 throw new ApiException(400, 'بيانات الضيف رقم ' . ($index + 1) . ' في الملف غير صالحة', 'invalid');
             }
@@ -488,6 +498,56 @@ function route_guests_import(PDO $pdo, array $body): array
         throw $error;
     }
     return ['added' => $added, 'updated' => $updated, 'unchanged' => $unchanged, 'removed' => $removed];
+}
+
+/**
+ * رفع قائمة السيارات الخاصة من ملف Excel (المدير): تحل محل القائمة الحالية كلها. ضيوف كل شقة فيها (صاحب السيارة
+ * وعائلته) لا يُضاف لهم موعد، ويبقون في قائمة الضيوف. كلها أو لا شيء، وعملية واحدة في السجل.
+ */
+function route_private_cars_import(PDO $pdo, array $body): array
+{
+    $user = current_user($pdo);
+    require_role($user, ['admin']);
+    $entries = $body['entries'] ?? null;
+    if (!is_array($entries) || !array_is_list($entries) || count($entries) > 5000) throw new ApiException(400, 'بيانات غير صالحة', 'bad_request');
+    $pdo->beginTransaction();
+    try {
+        $rev = next_revision($pdo);
+        $units = [];
+        foreach ($pdo->query("SELECT id, data FROM docs WHERE col = 'privateCars' AND data IS NOT NULL FOR UPDATE") as $row) {
+            $car = decode_doc($row['data']);
+            if ($car) $units[unit_key($car['buildingNumber'] ?? '', $car['apartmentNumber'] ?? '')] = true;
+            save_doc($pdo, 'privateCars', (string)$row['id'], null, $rev);
+        }
+        $stamp = base_convert((string)time(), 10, 36);
+        $added = [];
+        foreach ($entries as $index => $entry) {
+            $id = "PC-$stamp-" . ($index + 1);
+            $doc = is_array($entry) ? array_intersect_key($entry, array_flip(['name', 'plate', 'buildingNumber', 'apartmentNumber'])) : [];
+            foreach ($doc as $field => $value) if (is_string($value)) $doc[$field] = trim($value);
+            $doc = array_filter($doc, fn($value) => $value !== '');
+            $doc = ['id' => $id] + $doc + ['_o' => $index];
+            if (!valid_private_car($doc, $id)) throw new ApiException(400, 'بيانات السيارة الخاصة رقم ' . ($index + 1) . ' في الملف غير صالحة', 'invalid');
+            save_doc($pdo, 'privateCars', $id, $doc, $rev);
+            $key = unit_key($doc['buildingNumber'], $doc['apartmentNumber']);
+            $units[$key] = true;
+            $added[$key] = true;
+        }
+        // ضيوف الشقق القديمة والجديدة يُعاد إرسالهم بالعلامة الصحيحة
+        private_car_units(true);
+        touch_unit_guests($pdo, $units, $rev);
+        $guests = 0;
+        foreach ($pdo->query("SELECT data FROM docs WHERE col = 'guests' AND data IS NOT NULL") as $row) {
+            if (guest_has_private_car(decode_doc($row['data']))) $guests += 1;
+        }
+        $summary = 'رفع قائمة السيارات الخاصة: ' . count($entries) . ' سيارة في ' . count($added) . " شقة، ويُمنع $guests ضيفًا يسكنون فيها من سيارات المجمع";
+        log_activity($pdo, $user, 'guest', 'guest.private_cars', $summary, '', ['changes' => count($entries) . ' سيارة']);
+        $pdo->commit();
+    } catch (Throwable $error) {
+        $pdo->rollBack();
+        throw $error;
+    }
+    return ['cars' => count($entries), 'units' => count($added), 'guests' => $guests];
 }
 
 /** قائمة الضيوف كاملة مع العمر والرقم الصحي: للإحصائيات فقط (المدير ومشرف السيارات). */

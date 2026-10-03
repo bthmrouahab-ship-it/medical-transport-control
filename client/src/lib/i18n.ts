@@ -243,6 +243,10 @@ const ar = {
   minor: "أقل من 18 سنة",
   minorEscortHint: "الضيف أقل من 18 سنة: أُضيف المرافق تلقائيًا، ولا يمكن إزالته إلا إذا كان معه Nurse.",
   minorEscortLocked: "المرافق إلزامي للضيف أقل من 18 سنة إلا إذا كان معه Nurse",
+  // صاحب سيارة خاصة أو من يسكن معه في نفس الشقة: لا يُضاف له موعد
+  privateCar: "هذا الشخص يمتلك سيارة خاصة ولا يمكنه استخدام سيارات المجمع",
+  privateCarBadge: "سيارة خاصة",
+  privateCarHint: "يسكن في شقة لها سيارة خاصة (صاحبها أو أحد أفراد عائلته)",
 };
 
 export type ClinicText = typeof ar;
@@ -434,6 +438,9 @@ const en: ClinicText = {
   minor: "Under 18",
   minorEscortHint: "The guest is under 18: an escort was added automatically and can be removed only if a nurse goes with them.",
   minorEscortLocked: "An escort is required for a guest under 18 unless a nurse goes with them",
+  privateCar: "This person has a private car and cannot use the complex cars",
+  privateCarBadge: "Private car",
+  privateCarHint: "Lives in an apartment with a private car (the owner or a family member)",
 };
 
 

@@ -370,6 +370,16 @@ function describe_write(PDO $pdo, string $col, string $id, ?array $before, ?arra
             $details['changes'] = $changes;
             return ['guest', 'guest.update', "تعديل بيانات $who $name: " . ($changes ?: 'العمر أو الرقم الصحي'), $details];
 
+        case 'privateCars':
+            // السيارات الخاصة: ضيوف الشقة لا يُضاف لهم موعد
+            $car = $after ?? $before;
+            $place = 'مبنى ' . ($car['buildingNumber'] ?? '') . ' شقة ' . ($car['apartmentNumber'] ?? '');
+            $owner = trim(($car['name'] ?? '') . (empty($car['plate']) ? '' : ' · ' . $car['plate']));
+            $details = ['building' => $car['buildingNumber'] ?? '', 'apartment' => $car['apartmentNumber'] ?? '', 'plate' => $car['plate'] ?? ''];
+            if ($before === null) return ['guest', 'guest.private_car', "إضافة سيارة خاصة لـ$place" . ($owner ? " ($owner)" : '') . ' · يُمنع ضيوفها من سيارات المجمع', $details];
+            if ($after === null) return ['guest', 'guest.private_car', "حذف السيارة الخاصة لـ$place" . ($owner ? " ($owner)" : '') . ' · يُسمح لضيوفها بسيارات المجمع', $details];
+            return ['guest', 'guest.private_car', "تعديل السيارة الخاصة لـ$place", $details];
+
         case 'vehicleLocations':
             return ['location', 'location.delete', "حذف آخر موقع للسيارة $id", ['plate' => $id]];
 

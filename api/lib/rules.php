@@ -70,14 +70,77 @@ const GUEST_LIST_ROLES = ['admin', 'clinic', 'clinicLead', 'fleetSupervisor'];
 const GUEST_STATS_ROLES = ['admin', 'fleetSupervisor'];
 /** بيانات الضيف في الموعد: يجب أن تطابق القائمة */
 const APPOINTMENT_GUEST_FIELDS = ['guestId', 'patientName', 'buildingNumber', 'apartmentNumber', 'nurse'];
+/**
+ * السيارات الخاصة (يرفعها المدير): ضيوف الشقة التي لها سيارة خاصة (صاحبها وعائلته) لا يُضاف لهم موعد ولا رحلة.
+ * القائمة نفسها (اسم المالك ورقم المركبة) للمدير فقط، وتصل علامة privateCar مع كل ضيف في الشقة (public_doc).
+ */
+const PRIVATE_CAR_FIELDS = ['id', 'name', 'plate', 'buildingNumber', 'apartmentNumber', '_o'];
+const PRIVATE_CAR_MESSAGE = 'هذا الشخص يمتلك سيارة خاصة ولا يمكنه استخدام سيارات المجمع';
 /** المجموعات التي تُزامن مع موظفي المكتب */
-const SYNC_COLLECTIONS = ['appointments', 'requests', 'fleet', 'hospitals', 'vehicleLocations', 'meta', 'guests', 'drivers'];
+const SYNC_COLLECTIONS = ['appointments', 'requests', 'fleet', 'hospitals', 'vehicleLocations', 'meta', 'guests', 'drivers', 'privateCars'];
 
-/** مجموعات المزامنة لهذا المستخدم: قائمة الضيوف للمدير والعيادة ومشرف السيارات، وقائمة السائقين للمدير ومشرف السيارات */
+/**
+ * مجموعات المزامنة لهذا المستخدم: قائمة الضيوف للمدير والعيادة ومشرف السيارات، وقائمة السائقين للمدير ومشرف السيارات،
+ * وقائمة السيارات الخاصة للمدير فقط
+ */
 function sync_collections(array $user): array
 {
     return array_values(array_filter(SYNC_COLLECTIONS, fn(string $col) => ($col !== 'guests' || in_array($user['role'], GUEST_LIST_ROLES, true))
-        && ($col !== 'drivers' || in_array($user['role'], DRIVER_LIST_ROLES, true))));
+        && ($col !== 'drivers' || in_array($user['role'], DRIVER_LIST_ROLES, true))
+        && ($col !== 'privateCars' || $user['role'] === 'admin')));
+}
+
+/** المبنى والشقة للمطابقة: بأحرف كبيرة وبلا أصفار في البداية (03 = 3، و001 = 1) — نفس unitKey في shared/guests.ts */
+function unit_key($building, $apartment): string
+{
+    $part = fn($value) => (string)preg_replace('/^0+(?=\d)/', '', strtoupper(trim((string)$value)));
+    return $part($building) . '/' . $part($apartment);
+}
+
+/** شقق السيارات الخاصة (مفتاح unit_key ← true). $refresh بعد تغيير القائمة في نفس الطلب */
+function private_car_units(bool $refresh = false): array
+{
+    static $units = null;
+    if ($units !== null && !$refresh) return $units;
+    $units = [];
+    foreach (db()->query("SELECT data FROM docs WHERE col = 'privateCars' AND data IS NOT NULL") as $row) {
+        $car = decode_doc($row['data']);
+        if ($car) $units[unit_key($car['buildingNumber'] ?? '', $car['apartmentNumber'] ?? '')] = true;
+    }
+    return $units;
+}
+
+/** الضيف يسكن في شقة لها سيارة خاصة (الممرضات خارج هذا الشرط: سكنهن مشترك) */
+function guest_has_private_car(?array $guest, ?array $units = null): bool
+{
+    if (!$guest || ($guest['nurse'] ?? null) === true) return false;
+    $units ??= private_car_units();
+    return isset($units[unit_key($guest['buildingNumber'] ?? '', $guest['apartmentNumber'] ?? '')]);
+}
+
+/** سيارة خاصة لشقة: المبنى والشقة إلزاميان، واسم المالك ورقم المركبة اختياريان */
+function valid_private_car(array $data, string $id): bool
+{
+    $unit = fn($value) => is_text($value, 20) && trim($value) !== '';
+    return only(array_keys($data), PRIVATE_CAR_FIELDS)
+        && ($data['id'] ?? null) === $id
+        && $unit($data['buildingNumber'] ?? null) && $unit($data['apartmentNumber'] ?? null)
+        && (!array_key_exists('name', $data) || is_text($data['name'], 120))
+        && (!array_key_exists('plate', $data) || is_text($data['plate'], 20));
+}
+
+/**
+ * يعيد إرسال ضيوف الشقق التي تغيّرت سيارتها الخاصة في المزامنة القادمة (رقم مراجعة جديد بلا تغيير في البيانات)،
+ * فتتحدث علامة privateCar عند العيادة فورًا.
+ */
+function touch_unit_guests(PDO $pdo, array $unitKeys, int $rev): void
+{
+    if (!$unitKeys) return;
+    $update = $pdo->prepare("UPDATE docs SET rev = ? WHERE col = 'guests' AND id = ?");
+    foreach ($pdo->query("SELECT id, data FROM docs WHERE col = 'guests' AND data IS NOT NULL") as $row) {
+        $guest = decode_doc($row['data']);
+        if ($guest && isset($unitKeys[unit_key($guest['buildingNumber'] ?? '', $guest['apartmentNumber'] ?? '')])) $update->execute([$rev, $row['id']]);
+    }
 }
 
 /** سائق من قائمة السائقين: الاسم إلزامي، والرقم 8 إلى 15 رقمًا إن وُجد، وحساب التطبيق لا يتغير هنا (يربطه المدير من «المستخدمين») */
@@ -103,12 +166,14 @@ function valid_vehicle_driver(array $vehicle, ?callable $docOf): bool
  * المستند كما يُرسل في المزامنة: قائمة الضيوف بلا العمر والرقم الصحي، ومعها علامة minor لمن هو أقل من 18 سنة
  * (حتى يضيف نموذج الموعد المرافق تلقائيًا دون أن يصل العمر نفسه).
  */
-function public_doc(string $col, ?array $data): ?array
+function public_doc(string $col, ?array $data, ?array $privateUnits = null): ?array
 {
     if ($col !== 'guests' || $data === null) return $data;
     $minor = guest_is_minor($data);
     foreach (GUEST_PRIVATE_FIELDS as $field) unset($data[$field]);
     if ($minor) $data['minor'] = true;
+    // يسكن في شقة لها سيارة خاصة: لا يُضاف له موعد
+    if (guest_has_private_car($data, $privateUnits)) $data['privateCar'] = true;
     return $data;
 }
 
@@ -153,6 +218,8 @@ function registry_error(array $appointment, callable $docOf, ?array $changed = n
             }
             // موعد الممرضة يحمل علامتها كما في القائمة
             if ((($appointment['nurse'] ?? null) === true) !== (($guest['nurse'] ?? null) === true)) return 'بيانات الضيف لا تطابق قائمة ضيوف المجمع';
+            // صاحب سيارة خاصة أو من يسكن معه في نفس الشقة
+            if (guest_has_private_car($guest)) return PRIVATE_CAR_MESSAGE;
         }
         $assistance = is_array($appointment['assistance'] ?? null) ? $appointment['assistance'] : [];
         if (guest_is_minor($guest) && !in_array('يحتاج مرافق', $assistance, true) && !in_array('يحتاج Nurse', $assistance, true)) {
@@ -630,6 +697,11 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
             // قائمة ضيوف المجمع: المدير يضيف ضيفًا ويعدّل بياناته (المبنى والشقة) ويحذفه
             if ($role !== 'admin') return $denied;
             return $after === null || valid_guest($after, $id) ? null : 'بيانات الضيف غير صالحة';
+
+        case 'privateCars':
+            // السيارات الخاصة: المدير يضيف شقة ويحذفها (أو يرفع القائمة كاملة: private-cars.import)
+            if ($role !== 'admin') return $denied;
+            return $after === null || valid_private_car($after, $id) ? null : 'بيانات السيارة الخاصة غير صالحة';
 
         case 'vehicleLocations':
             // السائق يرسل موقعه من صفحة السائق فقط؛ هنا الحذف للمدير

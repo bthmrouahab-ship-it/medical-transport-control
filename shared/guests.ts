@@ -24,7 +24,23 @@ export type Guest = {
    * المرافق إلزامي في موعده إلا إن كان معه Nurse (withMinorEscort في shared/transport.ts).
    */
   minor?: true;
+  /**
+   * يسكن في شقة لها سيارة خاصة (صاحبها أو أحد أفراد عائلته): يضيفها الخادم عند المزامنة من قائمة السيارات الخاصة
+   * (public_doc)، ولا تُحفظ. لا يُضاف له موعد ولا رحلة.
+   */
+  privateCar?: true;
 };
+
+/** سيارة خاصة لشقة (يرفعها المدير): ضيوف الشقة كلهم لا يستخدمون سيارات المجمع */
+export type PrivateCar = { id: string; name?: string; plate?: string; buildingNumber: string; apartmentNumber: string };
+export const PRIVATE_CAR_MESSAGE = "هذا الشخص يمتلك سيارة خاصة ولا يمكنه استخدام سيارات المجمع";
+export const hasPrivateCar = (guest?: Pick<Guest, "privateCar"> | null) => guest?.privateCar === true;
+
+/** المبنى والشقة للمطابقة: بأحرف كبيرة وبلا أصفار في البداية (03 = 3) — نفس unit_key في api/lib/rules.php */
+export function unitKey(buildingNumber: unknown, apartmentNumber: unknown) {
+  const part = (value: unknown) => normalizeUnit(value).replace(/^0+(?=\d)/, "");
+  return `${part(buildingNumber)}/${part(apartmentNumber)}`;
+}
 
 /** سكن الممرضات: كلهن في مبنى 03 شقة 001 (إلا إن ذكر الملف غير ذلك) */
 export const NURSE_BUILDING = "03";
@@ -137,6 +153,43 @@ export function parseNurseRows(rows: Record<string, unknown>[], firstRow = 2): {
 
 /** رقم المبنى أو الشقة كما يُكتب في المواعيد (R1 بأحرف كبيرة) */
 export const normalizeUnit = (value: unknown) => cellText(value).toUpperCase();
+
+/** أعمدة ملف السيارات الخاصة (تصريح دخول السيارات): اسم الضيف، رقم المركبة، المبنى، الشقة */
+const PRIVATE_CAR_COLUMNS = {
+  name: ["اسم الضيف", "اسم المالك", "الاسم", "اسم صاحب السيارة", ...COLUMNS.name],
+  plate: ["رقم المركبة", "رقم السيارة", "رقم اللوحة", "اللوحة", "المركبة", "plate", "vehicle number"],
+  building: ["المبني", ...COLUMNS.building],
+  apartment: ["شقة", "شقه", ...COLUMNS.apartment],
+};
+export const PRIVATE_CAR_NAME_HEADERS = PRIVATE_CAR_COLUMNS.name;
+
+/** يقرأ ملف السيارات الخاصة: المبنى والشقة إلزاميان (المنع لكل من يسكن في الشقة)، واسم المالك ورقم المركبة للعرض. */
+export function parsePrivateCarRows(rows: Record<string, unknown>[], firstRow = 2): { cars: Omit<PrivateCar, "id">[]; errors: string[] } {
+  const cars: Omit<PrivateCar, "id">[] = [];
+  const errors: string[] = [];
+  rows.forEach((row, index) => {
+    const excelRow = firstRow + index;
+    const name = spaced(readAliased(row, PRIVATE_CAR_COLUMNS.name)).slice(0, GUEST_NAME_MAX);
+    const plate = cellText(readAliased(row, PRIVATE_CAR_COLUMNS.plate)).slice(0, 20);
+    const buildingNumber = normalizeUnit(readAliased(row, PRIVATE_CAR_COLUMNS.building)).slice(0, 20);
+    const apartmentNumber = normalizeUnit(readAliased(row, PRIVATE_CAR_COLUMNS.apartment)).slice(0, 20);
+    if (!buildingNumber || !apartmentNumber) {
+      // صف فارغ أو فيه رقم التسلسل فقط لا يُعدّ خطأ
+      if (name || plate || buildingNumber || apartmentNumber) errors.push(`الصف ${excelRow}: رقم المبنى أو الشقة ناقص`);
+      return;
+    }
+    cars.push({ ...(name ? { name } : {}), ...(plate && !NOT_AVAILABLE.test(plate) ? { plate } : {}), buildingNumber, apartmentNumber });
+  });
+  return { cars, errors };
+}
+
+/** مراجعة القائمة قبل الحفظ: عدد الشقق، والضيوف الذين يُمنعون (بلا الممرضات)، والشقق غير الموجودة في قائمة الضيوف. */
+export function planPrivateCars(cars: Pick<PrivateCar, "buildingNumber" | "apartmentNumber">[], guests: Guest[]) {
+  const units = new Set(cars.map((car) => unitKey(car.buildingNumber, car.apartmentNumber)));
+  const blocked = guests.filter((guest) => !isNurse(guest) && units.has(unitKey(guest.buildingNumber, guest.apartmentNumber)));
+  const listed = new Set(blocked.map((guest) => unitKey(guest.buildingNumber, guest.apartmentNumber)));
+  return { units: units.size, blocked: blocked.length, unlisted: cars.filter((car) => !listed.has(unitKey(car.buildingNumber, car.apartmentNumber))) };
+}
 
 /** العمر من الخلية (رقم صحيح من 0 إلى 130)، وإلا بلا عمر. */
 export function normalizeAge(value: unknown): number | undefined {

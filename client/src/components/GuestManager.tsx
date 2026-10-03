@@ -1,12 +1,14 @@
 import { useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import { Check, FileSpreadsheet, FilterX, Loader2, Lock, Pencil, Search, BriefcaseMedical, Trash2, Upload, UserPlus, UsersRound, X } from "lucide-react";
+import { CarFront, Check, FileSpreadsheet, FilterX, Loader2, Lock, Pencil, Search, BriefcaseMedical, Trash2, Upload, UserPlus, UsersRound, X } from "lucide-react";
 import {
   NURSE_APARTMENT,
   NURSE_BUILDING,
   NURSE_LABEL,
+  PRIVATE_CAR_NAME_HEADERS,
   guestIndex,
   guestOfAppointment,
+  hasPrivateCar,
   isNurse,
   normalizeAge,
   normalizeGuestMobile,
@@ -14,6 +16,7 @@ import {
   normalizeUnit,
   parseGuestRows,
   parseNurseRows,
+  parsePrivateCarRows,
   planGuestImport,
   tableRows,
   searchGuests,
@@ -25,8 +28,9 @@ import { GENDERS, localDateString, type ClinicAppointment, type Gender } from "@
 import { loadState, saveState } from "@/lib/appStore";
 import { api } from "@/lib/api";
 import { authErrorMessage } from "@/lib/auth";
-import { useGuests } from "@/lib/useShared";
+import { useGuests, usePrivateCars } from "@/lib/useShared";
 import { Badge, EmptyState, Panel, PageHeader, btn, cx, inputClass, labelClass } from "./ui-kit";
+import { PrivateCarsPanel, PrivateCarsPreviewPanel, type PrivateCarsPreview } from "./PrivateCars";
 
 const PAGE = 50;
 const WAITING = "بانتظار طلب السيارة";
@@ -35,7 +39,8 @@ const NURSE_COLUMNS_HINT = "الاسم كامل عربي، الاسم انجلي
 
 /** nurses: قائمة الممرضات (تُقارن بالممرضات فقط، وملف الضيوف بالضيوف فقط) */
 type ImportPreview = { fileName: string; nurses: boolean; plan: ReturnType<typeof planGuestImport>; errors: string[]; removeMissing: boolean };
-type KindFilter = "all" | "guests" | "nurses";
+/** privateCar: من يسكن في شقة لها سيارة خاصة (لا يُضاف لهم موعد) */
+type KindFilter = "all" | "guests" | "nurses" | "privateCar";
 
 /** ترتيب المباني: الأرقام أولًا بترتيبها ثم R1 وR2 */
 const byUnit = (a: string, b: string) => a.localeCompare(b, "en", { numeric: true });
@@ -46,8 +51,11 @@ const byUnit = (a: string, b: string) => a.localeCompare(b, "en", { numeric: tru
  */
 export default function GuestManager() {
   const guests = useGuests();
+  const privateCars = usePrivateCars();
   const fileInput = useRef<HTMLInputElement>(null);
   const nurseInput = useRef<HTMLInputElement>(null);
+  const carsInput = useRef<HTMLInputElement>(null);
+  const [carsPreview, setCarsPreview] = useState<PrivateCarsPreview | null>(null);
   const [query, setQuery] = useState("");
   const [building, setBuilding] = useState("all");
   const [kind, setKind] = useState<KindFilter>("all");
@@ -60,11 +68,12 @@ export default function GuestManager() {
 
   const buildings = useMemo(() => Array.from(new Set(guests.map((guest) => guest.buildingNumber))).sort(byUnit), [guests]);
   const nurseCount = useMemo(() => guests.filter(isNurse).length, [guests]);
+  const privateCarCount = useMemo(() => guests.filter(hasPrivateCar).length, [guests]);
   const filtering = Boolean(query.trim()) || building !== "all" || kind !== "all";
   const shown = useMemo(() => {
     const list = query.trim() ? searchGuests(guests, query, guests.length) : guests;
     return list.filter((guest) => (building === "all" || guest.buildingNumber === building)
-      && (kind === "all" || isNurse(guest) === (kind === "nurses")));
+      && (kind === "all" || (kind === "privateCar" ? hasPrivateCar(guest) : isNurse(guest) === (kind === "nurses"))));
   }, [guests, query, building, kind]);
 
   /** ملف الضيوف، أو قائمة الممرضات (نموذج إضافة البيانات: العناوين بعد عنوان النموذج، والسكن مبنى 03 شقة 001) */
@@ -98,6 +107,34 @@ export default function GuestManager() {
       setReading(false);
       if (fileInput.current) fileInput.current.value = "";
       if (nurseInput.current) nurseInput.current.value = "";
+    }
+  }
+
+  /** ملف السيارات الخاصة (تصريح دخول السيارات): عنوان النموذج ثم العناوين: اسم الضيف، رقم المركبة، المبنى، الشقة */
+  async function readCarsFile(file: File | undefined) {
+    if (!file) return;
+    setReading(true);
+    try {
+      const XLSX = await import("xlsx");
+      const workbook = XLSX.read(await file.arrayBuffer(), { type: "array" });
+      const sheets = workbook.SheetNames.map((name) => workbook.Sheets[name]).filter((item) => item["!ref"]);
+      const table = sheets
+        .map((sheet) => tableRows(XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, defval: "" }), [...PRIVATE_CAR_NAME_HEADERS, "المبني", "رقم المبنى", "رقم المركبة"]))
+        .find((item) => item.rows.length);
+      const { cars, errors } = table ? parsePrivateCarRows(table.rows, table.firstRow) : { cars: [], errors: [] };
+      if (!cars.length) {
+        toast.error("لم يُعثر على سيارات خاصة في الملف", { description: errors[0] ?? "الأعمدة المطلوبة: اسم الضيف، رقم المركبة، المبنى، الشقة", duration: 12000 });
+        return;
+      }
+      setCarsPreview({ fileName: file.name, cars, errors });
+      setPreview(null);
+      setAdding(false);
+    } catch (error) {
+      console.error("[private cars] import", error);
+      toast.error("تعذر قراءة الملف. تأكد أنه ملف Excel.");
+    } finally {
+      setReading(false);
+      if (carsInput.current) carsInput.current.value = "";
     }
   }
 
@@ -188,11 +225,16 @@ export default function GuestManager() {
             <button type="button" disabled={reading} onClick={() => nurseInput.current?.click()} className={btn("secondary")}>
               <BriefcaseMedical className="h-4 w-4" /> رفع قائمة الممرضات (Excel)
             </button>
+            <input ref={carsInput} type="file" accept=".xlsx,.xls" className="hidden" onChange={(event) => readCarsFile(event.target.files?.[0])} />
+            <button type="button" disabled={reading} onClick={() => carsInput.current?.click()} className={btn("secondary")}>
+              <CarFront className="h-4 w-4" /> رفع قائمة السيارات الخاصة (Excel)
+            </button>
             <button type="button" onClick={() => { setAdding(true); setPreview(null); }} className={btn("primary")}><UserPlus className="h-4 w-4" /> إضافة ضيف</button>
           </>
         )}
       />
 
+      {carsPreview && <PrivateCarsPreviewPanel preview={carsPreview} guests={guests} current={privateCars.length} onDone={() => setCarsPreview(null)} onCancel={() => setCarsPreview(null)} />}
       {preview && <ImportPreviewPanel preview={preview} saving={saving} onChange={setPreview} onSave={saveImport} onCancel={() => setPreview(null)} />}
       {adding && <NewGuestForm buildings={buildings} onAdd={add} onCancel={() => setAdding(false)} />}
 
@@ -218,6 +260,7 @@ export default function GuestManager() {
               <option value="all">الضيوف والممرضات</option>
               <option value="guests">الضيوف فقط</option>
               <option value="nurses">الممرضات فقط ({nurseCount})</option>
+              {privateCarCount > 0 && <option value="privateCar">لهم سيارة خاصة ({privateCarCount})</option>}
             </select>
           </div>
         )}
@@ -248,6 +291,7 @@ export default function GuestManager() {
                         <p className="flex flex-wrap items-center gap-1.5 font-medium text-ink">
                           {guest.name}
                           {isNurse(guest) && <Badge tone="violet" icon={BriefcaseMedical}>{NURSE_LABEL}</Badge>}
+                          {hasPrivateCar(guest) && <Badge tone="red" icon={CarFront} title="يسكن في شقة لها سيارة خاصة: لا يُضاف له موعد">سيارة خاصة</Badge>}
                         </p>
                         {(guest.nameEn || guest.organization) && <p className="text-xs text-slate-500">{guest.nameEn && <bdi>{guest.nameEn}</bdi>}{guest.nameEn && guest.organization ? " · " : ""}{guest.organization && <bdi>{guest.organization}</bdi>}</p>}
                       </td>
@@ -292,6 +336,8 @@ export default function GuestManager() {
           </div>
         )}
       </Panel>
+
+      <PrivateCarsPanel cars={privateCars} guests={guests} />
     </>
   );
 }
