@@ -867,10 +867,16 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
             onDateChange={setSelectedDate}
             onAddTrips={(trips) => {
               // الرحلات وطلبات سياراتها في حفظ واحد (الرحلات أولًا: يجدها الخادم قبل طلباتها)
-              updateBoth([...appointments, ...trips.map((trip) => trip.appointment)].sort(byAppointmentTime), [...requests, ...trips.map((trip) => trip.request)]);
+              updateBoth(
+                [...appointments, ...trips.map((trip) => trip.appointment)].sort(byAppointmentTime),
+                [...requests, ...trips.flatMap((trip) => (trip.request ? [trip.request] : []))],
+              );
               const first = trips[0].appointment;
-              toast.success(trips.length > 1 ? `تمت إضافة ${trips.length} رحلة متكررة` : "تمت إضافة الرحلة إلى الطلبات", {
-                description: trips.length > 1 ? `من ${first.appointmentDate} إلى ${trips[trips.length - 1].appointment.appointmentDate}` : undefined,
+              // المتكررة بلا طلب: تنتظر مشرف المبنى في يوم كل رحلة
+              toast.success(first.seriesId ? `تمت إضافة ${trips.length} رحلة متكررة` : "تمت إضافة الرحلة إلى الطلبات", {
+                description: first.seriesId
+                  ? `من ${first.appointmentDate} إلى ${trips[trips.length - 1].appointment.appointmentDate} · تظهر لمشرف المبنى في يوم كل رحلة ليطلب سيارتها`
+                  : undefined,
               });
               setSelectedDate(first.appointmentDate);
             }}

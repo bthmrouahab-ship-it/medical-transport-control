@@ -1506,10 +1506,14 @@ export function recurringDates(start: string, end: string, days: readonly number
   return dates;
 }
 
-/** رحلات السلسلة القادمة التي يمكن إيقافها: من يوم from فصاعدًا، ولم تُلغَ، وطلبها بانتظار التوزيع (لم تُرسل سيارتها) */
+/**
+ * رحلات السلسلة القادمة التي يمكن إيقافها: من يوم from فصاعدًا، لم يُطلب لها سيارة بعد، أو طُلبت ولم تُرسل
+ * (طلبها بانتظار التوزيع).
+ */
 export function stoppableSeriesTrips(appointments: ClinicAppointment[], requests: VehicleRequest[], seriesId: string, from: string) {
   return appointments
-    .filter((appointment) => appointment.seriesId === seriesId && appointment.appointmentDate >= from && appointment.status === "تم طلب السيارة")
+    .filter((appointment) => appointment.seriesId === seriesId && appointment.appointmentDate >= from
+      && (appointment.status === "بانتظار طلب السيارة" || appointment.status === "تم طلب السيارة"))
     .map((appointment) => ({ appointment, requests: requests.filter((request) => request.appointmentId === appointment.id) }))
     .filter((trip) => trip.requests.every((request) => request.status === "بانتظار التوزيع"))
     .sort((a, b) => byTime(a.appointment, b.appointment));

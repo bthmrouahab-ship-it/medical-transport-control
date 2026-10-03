@@ -48,5 +48,8 @@ describe("recurring non-medical trips", () => {
     const requests = [request("R1", "A1"), request("R2", "A2"), request("R3", "A3", { status: "تم إرسال السيارة", vehiclePlate: "111" }), request("R4", "A4"), request("R5", "A5"), request("Q1", "B1")];
     expect(stoppableSeriesTrips(appointments, requests, "SER-1", "2026-10-05").map((item) => item.appointment.id)).toEqual(["A2", "A4"]);
     expect(stoppableSeriesTrips(appointments, requests, "SER-1", "2026-10-04").map((item) => item.requests.map((r) => r.id))).toEqual([["R1"], ["R2"], ["R4"]]);
+    // رحلة لم يطلب لها مشرف المبنى سيارة بعد (بلا طلب): تُوقف أيضًا
+    const waiting = [...appointments, trip("A6", "2026-10-11", { status: "بانتظار طلب السيارة" })];
+    expect(stoppableSeriesTrips(waiting, requests, "SER-1", "2026-10-05").map((item) => [item.appointment.id, item.requests.length])).toEqual([["A2", 1], ["A4", 1], ["A6", 0]]);
   });
 });

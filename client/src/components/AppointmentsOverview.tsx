@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Accessibility, ArrowLeftRight, Ban, BriefcaseMedical, CalendarDays, Clock3, Eye, EyeOff, Filter, Footprints, House, Ribbon, Stethoscope, Truck, UsersRound, X } from "lucide-react";
+import { Accessibility, ArrowLeftRight, Ban, BriefcaseMedical, CalendarDays, Clock3, Eye, EyeOff, Filter, Footprints, House, Repeat, Ribbon, Stethoscope, Truck, UsersRound, X } from "lucide-react";
 import {
   approvalOf,
   isApproved,
@@ -33,11 +33,13 @@ const requestKind = (request: VehicleRequest) => (request.nurseOnly ? "عودة 
  * كل المواعيد لمشرف السيارات للعرض فقط (الطبية وغير الطبية) في جدول بفلترة أعمدة مثل Excel:
  * حالة كل موعد وطلبات سيارته ومن أرسلت إليه. طلب السيارة للموعد الطبي من مشرف المبنى وحده، فلا أزرار هنا.
  */
-export function AppointmentsOverview({ appointments, requests, date, now }: {
+export function AppointmentsOverview({ appointments, requests, date, now, onStopSeries }: {
   appointments: ClinicAppointment[];
   requests: VehicleRequest[];
   date: string;
   now: Date;
+  /** إيقاف رحلة غير طبية متكررة (يفتح نافذة الإيقاف في صفحة مشرف السيارات) */
+  onStopSeries?: (appointment: ClinicAppointment) => void;
 }) {
   const [scope, setScope] = useState<"day" | "all">("day");
   const dayAppointments = useMemo(() => appointments.filter((appointment) => appointment.appointmentDate === date), [appointments, date]);
@@ -81,7 +83,14 @@ export function AppointmentsOverview({ appointments, requests, date, now }: {
             {a.kind === "احتياجات خاصة" && <Badge tone="amber" icon={Accessibility}>احتياجات خاصة</Badge>}
             {isPriority(a) && <Badge tone="red" icon={Ribbon}>أولوية</Badge>}
             {a.nurse && <Badge tone="violet" icon={BriefcaseMedical}>ممرضة</Badge>}
+            {a.seriesId && <Badge tone="blue" icon={Repeat}>متكررة</Badge>}
           </p>
+          {/* إيقاف رحلة متكررة لم تُرسل سيارتها (هي وما بعدها، أو وحدها) */}
+          {a.seriesId && onStopSeries && (a.status === "بانتظار طلب السيارة" || a.status === "تم طلب السيارة") && (
+            <button type="button" onClick={() => onStopSeries(a)} className="mt-1 inline-flex items-center gap-1 text-xs font-medium text-slate-500 underline-offset-2 hover:text-red-700 hover:underline">
+              <Repeat className="h-3.5 w-3.5" /> إيقاف التكرار…
+            </button>
+          )}
         </div>
       ),
     },

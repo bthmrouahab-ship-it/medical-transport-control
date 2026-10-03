@@ -599,9 +599,10 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
             // مشرف السيارات: حالة الموعد فقط، تتقدم كما عند الاستلام (إنهاء رحلة عالقة، أو ضم ضيف استلمه السائق إلى رحلة)،
             // أو تعود إلى ما قبل الاستلام (إزالة ضيف سُجّل استلامه من الرحلة)
             if ($role === 'fleetSupervisor') {
-                // إيقاف رحلة غير طبية متكررة قبل إرسال سيارتها: ملغي بسبب باسمه (وطلبها يُحذف قبله)
+                // إيقاف رحلة غير طبية متكررة قبل طلب سيارتها أو قبل إرسالها: ملغي بسبب باسمه (وطلبها يُحذف قبله)
                 if (($after['status'] ?? null) === 'ملغي') {
-                    return ($before['category'] ?? '') === 'غير طبية' && !empty($before['seriesId']) && ($before['status'] ?? null) === 'تم طلب السيارة'
+                    return ($before['category'] ?? '') === 'غير طبية' && !empty($before['seriesId'])
+                        && in_array($before['status'] ?? null, ['بانتظار طلب السيارة', 'تم طلب السيارة'], true)
                         && valid_cancel($user, $after, $changed) ? null : $denied;
                 }
                 $move = [$before['status'] ?? null, $after['status'] ?? null];
