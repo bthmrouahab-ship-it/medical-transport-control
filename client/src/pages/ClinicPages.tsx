@@ -9,6 +9,7 @@ import {
   Baby,
   Building2,
   CalendarDays,
+  CarFront,
   CalendarPlus,
   Check,
   CheckCircle2,
@@ -61,7 +62,7 @@ import {
   type VehicleRequest,
 } from "@shared/transport";
 import { matchHospital, normalizePlaceName, type Hospital } from "@shared/hospitals";
-import { guestIndex, guestOfAppointment, isMinor, isNurse, searchGuests, type Guest } from "@shared/guests";
+import { guestIndex, guestOfAppointment, hasPrivateCar, isMinor, isNurse, searchGuests, type Guest } from "@shared/guests";
 import { Badge, DateChooser, EmptyState, Field, Panel, PageHeader, Segmented, Stat, StatusBadge, StatusBar, btn, choiceClass, cx, formatDay, inputClass, labelClass, longDate } from "@/components/ui-kit";
 import { FILTER_LABELS_AR, FILTER_LABELS_EN, FilterTable, useColumnFilters, type FilterColumn } from "@/components/ExcelFilter";
 import { cancelReasonText, enableTranslation, hasArabic, useCancelReason } from "@/lib/translate";
@@ -109,6 +110,9 @@ export function ClinicHome({ t, lang, appointments, date, onDateChange, onNew, o
   const now = useNow();
   // بالإنجليزية: اسم الضيف من قائمة ضيوف المجمع واسم المستشفى من الدليل (وإلا كما كُتب)
   const names = useAppointmentNames(lang, guests, hospitals);
+  // ضيف يسكن في شقة لها سيارة خاصة (لموعد أُضيف قبل رفع قائمة السيارات الخاصة)
+  const guestsIndex = useMemo(() => guestIndex(guests), [guests]);
+  const privateCarOf = (appointment: ClinicAppointment) => hasPrivateCar(guestOfAppointment(guestsIndex, appointment));
 
   async function importExcel(file?: File) {
     if (!file) return;
@@ -269,6 +273,7 @@ export function ClinicHome({ t, lang, appointments, date, onDateChange, onNew, o
             <bdi>{names.guest(a)}</bdi>
             {a.nurse && <Badge tone="violet" icon={BriefcaseMedical}>{t.nurse}</Badge>}
             {a.cancer && <Badge tone="red" icon={Ribbon}>{t.priority}</Badge>}
+            {privateCarOf(a) && <Badge tone="red" icon={CarFront} title={t.privateCarHint}>{t.privateCarBadge}</Badge>}
           </p>
           {sameDayAppointments(a, appointments)
             // لمسؤول العيادة: الموعد الذي عليه تنبيه يظهر في عمود التنبيهات فقط
@@ -602,6 +607,10 @@ export function ClinicForm({ t, lang, initial, defaultDate, returnOnly = false, 
       toast.error(t.errGuest);
       return;
     }
+    if (hasPrivateCar(guest)) {
+      toast.error(t.privateCar);
+      return;
+    }
     const hospital = hospitals.find((item) => item.id === form.hospitalId);
     if (!hospital) {
       toast.error(t.errHospital);
@@ -865,6 +874,8 @@ export function GuestPicker({ t, guests, guest, onSelect, notListed }: {
   const [building, setBuilding] = useState("");
   const [apartment, setApartment] = useState("");
   const [active, setActive] = useState(0);
+  // آخر ضيف اختير وهو صاحب سيارة خاصة أو من عائلته: لا يُختار، وتظهر رسالة المنع
+  const [blocked, setBlocked] = useState<Guest | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const buildings = useMemo(() => Array.from(new Set(guests.map((item) => item.buildingNumber))).sort(byUnit), [guests]);
   const apartments = useMemo(() => (building
@@ -885,6 +896,21 @@ export function GuestPicker({ t, guests, guest, onSelect, notListed }: {
   const english = t.dir === "ltr";
   const mainName = (item: Guest) => (english ? item.nameEn || item.name : item.name);
   const otherName = (item: Guest) => (english ? (item.nameEn ? item.name : "") : item.nameEn);
+  /** صاحب السيارة الخاصة ومن يسكن معه في نفس الشقة لا يُضاف لهم موعد */
+  function choose(item: Guest) {
+    if (hasPrivateCar(item)) {
+      setBlocked(item);
+      toast.error(t.privateCar, { description: mainName(item), duration: 8000 });
+      return;
+    }
+    setBlocked(null);
+    onSelect(item);
+  }
+  const privateCarAlert = (item: Guest) => (
+    <p role="alert" className="mt-2 flex items-start gap-2 rounded-lg bg-red-50 px-3 py-2 text-xs font-medium leading-5 text-red-800 ring-1 ring-inset ring-red-200">
+      <CarFront className="mt-0.5 h-4 w-4 shrink-0" /> <span><bdi>{mainName(item)}</bdi>: {t.privateCar}</span>
+    </p>
+  );
 
   if (guest) {
     return (
@@ -899,7 +925,10 @@ export function GuestPicker({ t, guests, guest, onSelect, notListed }: {
               <Badge tone="neutral" icon={Building2}>{t.guestUnit(guest.buildingNumber, guest.apartmentNumber)}</Badge>
               {guest.gender && <Badge tone="neutral">{t.genderLabel(guest.gender)}</Badge>}
               {isMinor(guest) && <Badge tone="amber" icon={Baby}>{t.minor}</Badge>}
+              {hasPrivateCar(guest) && <Badge tone="red" icon={CarFront}>{t.privateCarBadge}</Badge>}
             </div>
+            {/* موعد سابق لضيف أُضيفت شقته إلى السيارات الخاصة */}
+            {hasPrivateCar(guest) && privateCarAlert(guest)}
             <p className="mt-2 text-[11px] leading-4 text-slate-400">{t.guestFromList}</p>
           </div>
           <button type="button" onClick={() => { onSelect(undefined); requestAnimationFrame(() => inputRef.current?.focus()); }} className={btn("secondary", "sm")}>
@@ -917,7 +946,7 @@ export function GuestPicker({ t, guests, guest, onSelect, notListed }: {
     } else if (event.key === "Enter") {
       // Enter يختار الضيف ولا يرسل النموذج
       event.preventDefault();
-      if (shown[active]) onSelect(shown[active]);
+      if (shown[active]) choose(shown[active]);
     }
   }
 
@@ -943,7 +972,7 @@ export function GuestPicker({ t, guests, guest, onSelect, notListed }: {
               autoComplete="off"
               disabled={!guests.length}
               value={query}
-              onChange={(event) => { setQuery(event.target.value); setActive(0); }}
+              onChange={(event) => { setQuery(event.target.value); setActive(0); setBlocked(null); }}
               onKeyDown={onKeyDown}
               placeholder={t.guestSearch}
               className={cx(inputClass, "ps-10")}
@@ -978,7 +1007,7 @@ export function GuestPicker({ t, guests, guest, onSelect, notListed }: {
                 id={`guest-${item.id}`}
                 role="option"
                 aria-selected={position === active}
-                onClick={() => onSelect(item)}
+                onClick={() => choose(item)}
                 onMouseEnter={() => setActive(position)}
                 className={cx("flex cursor-pointer items-center justify-between gap-3 rounded-lg px-3 py-2", position === active ? "bg-brand-50" : "hover:bg-slate-50")}
               >
@@ -986,6 +1015,7 @@ export function GuestPicker({ t, guests, guest, onSelect, notListed }: {
                   <span className="flex min-w-0 items-center gap-1.5 text-sm font-medium text-ink">
                     <span className="truncate"><bdi>{mainName(item)}</bdi></span>
                     {isNurse(item) && <Badge tone="violet" icon={BriefcaseMedical} className="shrink-0">{t.nurse}</Badge>}
+                    {hasPrivateCar(item) && <Badge tone="red" icon={CarFront} className="shrink-0" title={t.privateCarHint}>{t.privateCarBadge}</Badge>}
                   </span>
                   {otherName(item) && <span className="block truncate text-xs text-slate-500"><bdi>{otherName(item)}</bdi></span>}
                 </span>
@@ -996,6 +1026,7 @@ export function GuestPicker({ t, guests, guest, onSelect, notListed }: {
           </ul>
         </div>
       )}
+      {blocked && privateCarAlert(blocked)}
       {!guests.length
         ? <p role="alert" className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-900 ring-1 ring-inset ring-amber-200">{t.guestListEmpty}</p>
         : notListed

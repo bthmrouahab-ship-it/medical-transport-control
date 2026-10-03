@@ -13,7 +13,7 @@ import {
   type VehicleRequest,
   withMinorEscort,
 } from "@shared/transport";
-import { guestIndex, isMinor, isNurse, type Guest } from "@shared/guests";
+import { PRIVATE_CAR_MESSAGE, guestIndex, hasPrivateCar, isMinor, isNurse, type Guest } from "@shared/guests";
 import { CLINIC_TEXT } from "@/lib/i18n";
 import { useGuests } from "@/lib/useShared";
 import { DateChooser, Field, Panel, btn, choiceClass, cx, inputClass, labelClass, timeLabel } from "@/components/ui-kit";
@@ -60,6 +60,11 @@ export default function NonMedicalTripForm({ defaultDate, onSave, onCancel }: {
     event.preventDefault();
     if (!guest) {
       toast.error("اختر الضيف من قائمة ضيوف المجمع");
+      return;
+    }
+    // صاحب سيارة خاصة أو من يسكن معه في نفس الشقة
+    if (hasPrivateCar(guest)) {
+      toast.error(PRIVATE_CAR_MESSAGE);
       return;
     }
     const destination = form.destination === OTHER ? form.otherDestination.trim() : form.destination;

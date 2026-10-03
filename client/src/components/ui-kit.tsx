@@ -147,9 +147,9 @@ export function Stat({ label, value, icon: IconComponent, tone = "neutral", hint
   );
 }
 
-export function Badge({ tone = "neutral", icon: IconComponent, children, className }: { tone?: Tone; icon?: Icon; children: ReactNode; className?: string }) {
+export function Badge({ tone = "neutral", icon: IconComponent, children, className, title }: { tone?: Tone; icon?: Icon; children: ReactNode; className?: string; title?: string }) {
   return (
-    <span className={cx("inline-flex items-center gap-1 whitespace-nowrap rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset", TONES[tone].soft, className)}>
+    <span title={title} className={cx("inline-flex items-center gap-1 whitespace-nowrap rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset", TONES[tone].soft, className)}>
       {IconComponent && <IconComponent className="h-3.5 w-3.5" />}{children}
     </span>
   );
