@@ -10,7 +10,7 @@ const APPOINTMENT_STATUSES = ['بانتظار طلب السيارة', 'تم طل
 const APPOINTMENT_FIELDS = ['id', 'guestId', 'patientName', 'clinic', 'buildingNumber', 'apartmentNumber', 'mobile', 'appointmentDate',
     'appointmentAt', 'hospitalId', 'category', 'kind', 'assistance', 'status', 'cancelReason', 'cancelledBy', 'cancelledAt',
     'gender', 'cancer', 'returnedSelf', 'returnedSelfBy', 'returnedSelfAt', 'approval', 'approvedBy', 'approvedAt', 'excludedBy', 'excludedAt',
-    'returnOnly', 'nurse', 'appointmentType', '_o'];
+    'returnOnly', 'nurse', 'appointmentType', 'seriesId', 'returnAt', '_o'];
 /** موافقة مسؤول العيادة: بانتظار الموافقة، أو موافق عليه (باسمه ووقته)، أو مستبعد بلا حذف (باسمه ووقته) */
 const APPROVAL_FIELDS = ['approval', 'approvedBy', 'approvedAt', 'excludedBy', 'excludedAt'];
 /** بيانات الموعد نفسه: تعديل العيادة لها يعيد الموعد إلى انتظار موافقة مسؤولها */
@@ -36,7 +36,7 @@ const TRIP_RESET_FIELDS = ['vehiclePlate', 'driver', 'groupId', 'notificationSen
 /** حالة الموعد قبل استلام الضيف: إزالة ضيف سُجّل استلامه من الرحلة تعيدها (الذهاب، والعودة، والموعد الأول في النقل) */
 const TRIP_UNDO_APPOINTMENT_STATUS = [['تم استلام المريض', 'تم طلب السيارة'], ['مكتملة', 'طلب عودة'], ['مكتملة', 'تم استلام المريض']];
 const REQUEST_FIELDS = ['id', 'appointmentId', 'vehiclePlate', 'driver', 'direction', 'status', 'notificationMethod',
-    'createdAt', 'groupId', 'notificationSentAt', 'requestedBy', 'pickedUpAt', 'etaAt', 'destLat', 'destLng', 'arrivedAt', 'arrivalSource',
+    'createdAt', 'requestedOn', 'autoReturn', 'groupId', 'notificationSentAt', 'requestedBy', 'pickedUpAt', 'etaAt', 'destLat', 'destLng', 'arrivedAt', 'arrivalSource',
     'fromAppointmentId', 'nurseOnly', 'driverArrivedAt', 'arrivalGps', 'pickupGps', ...CHECK_FIELDS, ...VEHICLE_CHANGE_FIELDS, ...TRIP_REMOVAL_FIELDS, '_o'];
 /** خانات مرحلة الطريق إلى الوجهة (تُكتب عند استلام المريض وعند الوصول) */
 const TRIP_FIELDS = ['pickedUpAt', 'etaAt', 'destLat', 'destLng', 'arrivedAt', 'arrivalSource'];
@@ -388,12 +388,7 @@ function building_appointment_error(array $user, array $before, array $after, ar
         return valid_mobile($after['mobile'] ?? null) ? null : 'رقم الهاتف غير صالح';
     }
     if (($after['status'] ?? null) === 'ملغي') {
-        $reason = trim((string)($after['cancelReason'] ?? ''));
-        return only($changed, ['status', ...CANCEL_FIELDS])
-            && in_array($before['status'] ?? null, ['بانتظار طلب السيارة', 'تم طلب السيارة'], true)
-            && is_text($after['cancelReason'] ?? null, 300) && mb_strlen($reason) >= 3
-            && ($after['cancelledBy'] ?? null) === $user['display_name']
-            && is_text($after['cancelledAt'] ?? null, 40) && strtotime($after['cancelledAt']) !== false ? null : $denied;
+        return in_array($before['status'] ?? null, ['بانتظار طلب السيارة', 'تم طلب السيارة'], true) && valid_cancel($user, $after, $changed) ? null : $denied;
     }
     // الضيف عاد بنفسه: ينتهي الموعد بعد ذهابه (أو طلب العودة فقط قبل طلب سيارته)، باسم المشرف ووقته
     if (array_intersect($changed, SELF_RETURN_FIELDS)) {
@@ -505,7 +500,22 @@ function valid_appointment(array $data, string $id): bool
         // موعد ممرضة من قائمة الممرضات: true أو بلا الخانة
         && ($data['nurse'] ?? true) === true
         && valid_appointment_type($data)
+        // رحلة غير طبية متكررة: رقم سلسلتها
+        && (!array_key_exists('seriesId', $data) || (is_text($data['seriesId'], 40) && $data['seriesId'] !== '' && ($data['category'] ?? '') === 'غير طبية'))
+        // العودة التلقائية للرحلة غير الطبية: وقتها بعد وقت الذهاب في نفس اليوم (auto_returns في index.php)
+        && (!array_key_exists('returnAt', $data) || (is_string($data['returnAt']) && preg_match('/^([01]\d|2[0-3]):[0-5]\d$/', $data['returnAt'])
+            && ($data['category'] ?? '') === 'غير طبية' && $data['returnAt'] > (string)($data['appointmentAt'] ?? '')))
         && valid_approval($data);
+}
+
+/** إلغاء الموعد بسبب (3 أحرف فأكثر) باسم من ألغاه ووقته، ولا يتغير معه غير الحالة */
+function valid_cancel(array $user, array $after, array $changed): bool
+{
+    $reason = trim((string)($after['cancelReason'] ?? ''));
+    return only($changed, ['status', ...CANCEL_FIELDS])
+        && is_text($after['cancelReason'] ?? null, 300) && mb_strlen($reason) >= 3
+        && ($after['cancelledBy'] ?? null) === $user['display_name']
+        && is_text($after['cancelledAt'] ?? null, 40) && strtotime($after['cancelledAt']) !== false;
 }
 
 /** نوع الموعد (اختياري): نص قصير غير فارغ، أو بلا الخانة */
@@ -589,6 +599,11 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
             // مشرف السيارات: حالة الموعد فقط، تتقدم كما عند الاستلام (إنهاء رحلة عالقة، أو ضم ضيف استلمه السائق إلى رحلة)،
             // أو تعود إلى ما قبل الاستلام (إزالة ضيف سُجّل استلامه من الرحلة)
             if ($role === 'fleetSupervisor') {
+                // إيقاف رحلة غير طبية متكررة قبل إرسال سيارتها: ملغي بسبب باسمه (وطلبها يُحذف قبله)
+                if (($after['status'] ?? null) === 'ملغي') {
+                    return ($before['category'] ?? '') === 'غير طبية' && !empty($before['seriesId']) && ($before['status'] ?? null) === 'تم طلب السيارة'
+                        && valid_cancel($user, $after, $changed) ? null : $denied;
+                }
                 $move = [$before['status'] ?? null, $after['status'] ?? null];
                 return only($changed, ['status'])
                     && ((TRIP_END_APPOINTMENT_STATUS[$move[0] ?? ''] ?? null) === $move[1] || in_array($move, TRIP_UNDO_APPOINTMENT_STATUS, true)) ? null : $denied;
@@ -606,6 +621,12 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
                     $linked = $docOf ? $docOf('appointments', (string)($before['appointmentId'] ?? '')) : null;
                     if (nurse_lead($user, $linked)) return null;
                     return $linked !== null && ($linked['returnOnly'] ?? null) === true && ($before['status'] ?? null) === 'بانتظار التوزيع' ? null : $denied;
+                }
+                // مشرف السيارات يحذف طلب رحلة متكررة يوقفها، ما دامت سيارتها لم تُرسل
+                if ($role === 'fleetSupervisor') {
+                    $linked = $docOf ? $docOf('appointments', (string)($before['appointmentId'] ?? '')) : null;
+                    return $linked !== null && ($linked['category'] ?? '') === 'غير طبية' && !empty($linked['seriesId'])
+                        && ($before['status'] ?? null) === 'بانتظار التوزيع' ? null : $denied;
                 }
                 return has_role($user, BUILDING_ROLES) && follows_request($user, $before) ? null : $denied;
             }
@@ -655,6 +676,10 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
                     // عودة الـ Nurse فقط: طلب عودة (لا نقل بين موعدين)
                     && (!array_key_exists('nurseOnly', $after)
                         || ($after['nurseOnly'] === true && $after['direction'] === 'عودة' && !array_key_exists('fromAppointmentId', $after)))
+                    // طلب العودة التلقائي ينشئه الخادم وحده
+                    && !array_key_exists('autoReturn', $after)
+                    // حجز مسبق (يوم الطلب قبل يوم الرحلة)
+                    && (!array_key_exists('requestedOn', $after) || (is_string($after['requestedOn']) && preg_match('/^\d{4}-\d{2}-\d{2}$/', $after['requestedOn'])))
                     && !array_intersect(array_keys($after), ['vehiclePlate', 'driver', 'groupId', 'notificationSentAt', ...TRIP_FIELDS]);
                 return $valid ? null : 'بيانات الطلب غير صالحة';
             }

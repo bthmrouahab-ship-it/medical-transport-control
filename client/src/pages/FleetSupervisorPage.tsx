@@ -24,6 +24,7 @@ import {
   Phone,
   Plus,
   Radio,
+  Repeat,
   Send,
   Sparkles,
   Timer,
@@ -70,6 +71,7 @@ import {
   seatsFor,
   groupSeats,
   mergeVehicle,
+  stoppableSeriesTrips,
   suggestJoinDispatched,
   vehicleLoad,
   vehicleRestriction,
@@ -143,10 +145,19 @@ function riderDetails(trip: Trip) {
   return [kind, gender, assistance.join("، "), trip.persons > 1 ? personsText(trip.persons) : ""].filter(Boolean).join(" · ");
 }
 
+/** الطلب محجوز في يوم قبل يومه (رحلة متكررة أو رحلة ليوم قادم) */
+const bookedAhead = (request: VehicleRequest) => Boolean(request.requestedOn && request.requestedOn < localDateString());
+
 /** وقت طلب السيارة من مشرف المبنى: للذهاب، وللعودة (ومعه وقت طلب الذهاب)، وللنقل بين موعدين. */
 function requestTimes(trip: Trip) {
   const at = trip.request.createdAt;
   if (!at) return "";
+  // العودة التلقائية للرحلة غير الطبية: أنشأها الخادم، والضيف جاهز في وقتها
+  if (trip.request.autoReturn) return `عودة تلقائية ${at}${trip.outboundAt ? ` · طلب الذهاب ${trip.outboundAt}` : ""}`;
+  // حجز مسبق: يوم الحجز ووقته (السيارة مطلوبة في يوم الرحلة من وقت الانطلاق)
+  if (trip.request.requestedOn && trip.request.requestedOn < trip.appointment.appointmentDate) {
+    return `حُجزت مسبقًا ${trip.request.requestedOn.slice(8, 10)}-${trip.request.requestedOn.slice(5, 7)} ${at}`;
+  }
   if (trip.from) return `طلب النقل ${at}`;
   // طلب العودة فقط من المستشفى: بلا رحلة ذهاب
   if (trip.request.direction === "عودة") return `${isReturnOnly(trip.appointment) ? `${RETURN_ONLY_LABEL} · ` : trip.outboundAt ? `طلب الذهاب ${trip.outboundAt} · ` : ""}طلب العودة ${at}`;
@@ -188,7 +199,7 @@ const roleOf = (vehicle: Vehicle) => (busRoleOf(vehicle) ? BUS_ROLE_LABELS[busRo
 /** why: لا تناسب الرحلة (معطّلة)، warning: تناسبها بعد موافقة المشرف (سيارة عادية لضيف احتياجات خاصة) */
 type VehicleChoice = { vehicle: Vehicle; why: string | null; warning?: string | null };
 
-export function FleetSupervisorPage({ vehicles, appointments, requests, date, onDateChange, onManager, onUpdate, onDispatch, onDispatchMany, onArrived, onEndTrip, onChangeVehicle, onRemoveFromTrip, onAddToTrip, onExport, onAddTrip }: {
+export function FleetSupervisorPage({ vehicles, appointments, requests, date, onDateChange, onManager, onUpdate, onDispatch, onDispatchMany, onArrived, onEndTrip, onChangeVehicle, onRemoveFromTrip, onAddToTrip, onExport, onAddTrips, onStopSeries }: {
   vehicles: Vehicle[];
   appointments: ClinicAppointment[];
   requests: VehicleRequest[];
@@ -208,7 +219,10 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
   /** ضم ضيف ينتظر السيارة إلى رحلة جارية (استلمه السائق أو سيستلمه). يعيد رسالة السائق */
   onAddToTrip: (requestId: string, tripRequestIds: string[], vehicle: Vehicle, pickedUp: boolean) => DriverMessage[];
   onExport: () => void;
-  onAddTrip: (appointment: ClinicAppointment, request: VehicleRequest) => void;
+  /** رحلة غير طبية (أو رحلات متكررة) مع طلب سيارة كل منها، في حفظ واحد */
+  onAddTrips: (trips: { appointment: ClinicAppointment; request: VehicleRequest }[]) => void;
+  /** إيقاف رحلات متكررة قادمة لم تُرسل سيارتها: تُلغى بالسبب ويُحذف طلبها */
+  onStopSeries: (appointmentIds: string[], reason: string) => void;
 }) {
   const [addingTrip, setAddingTrip] = useState(false);
   const [selectedVehicles, setSelectedVehicles] = useState<Record<string, string>>({});
@@ -225,6 +239,8 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
   const [changing, setChanging] = useState<Trip[] | null>(null);
   /** إزالة ضيف من رحلة جارية، وإضافة ضيف إليها */
   const [removing, setRemoving] = useState<{ trip: Trip; alone: boolean } | null>(null);
+  // إيقاف رحلة متكررة: هذه الرحلة وحدها، أو هي وما بعدها
+  const [stopping, setStopping] = useState<Trip | null>(null);
   const [adding, setAdding] = useState<Trip[] | null>(null);
   /** نافذة السائقين في السيارات (بداية الشفت)، ومعها نص البحث الأول (رقم سيارة من تفاصيلها) */
   const [assigning, setAssigning] = useState<string | null>(null);
@@ -568,7 +584,7 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
         />
       </div>
 
-      {addingTrip && <NonMedicalTripForm defaultDate={date} onCancel={() => setAddingTrip(false)} onSave={(appointment, request) => { onAddTrip(appointment, request); setAddingTrip(false); }} />}
+      {addingTrip && <NonMedicalTripForm defaultDate={date} onCancel={() => setAddingTrip(false)} onSave={(trips) => { onAddTrips(trips); setAddingTrip(false); }} />}
 
       {view === "appointments" ? <AppointmentsOverview appointments={appointments} requests={requests} date={date} now={now} /> : (<>
       {/* شريط الحالة: عدادات حية ملونة، والضغط ينقل إلى القسم */}
@@ -642,6 +658,7 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
                             <p className="font-semibold text-ink">{trip.appointment.patientName}</p>
                             {trip.from ? <Badge tone="cyan">نقل بين موعدين</Badge> : trip.request.nurseOnly ? <Badge tone="amber">عودة الـ Nurse فقط</Badge> : <Badge tone={trip.request.direction === "عودة" ? "amber" : "neutral"}>{trip.request.direction}</Badge>}
                             {isNonMedical(trip.appointment) && <Badge tone="violet">غير طبية</Badge>}
+                            {trip.appointment.seriesId && <Badge tone="blue" icon={Repeat}>متكررة</Badge>}
                             {trip.appointment.nurse && <Badge tone="violet" icon={BriefcaseMedical}>ممرضة</Badge>}
                             {isPriority(trip.appointment) && <PriorityBadge />}
                             {pendingLate(trip) && <Badge tone="red" icon={AlertTriangle}>متأخر</Badge>}
@@ -650,6 +667,9 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
                           </div>
                           <p className="mt-1 text-sm text-slate-600">{routeLabel(trip.appointment, trip.from)}{zone && <span className="text-slate-400"> · {zone}</span>}</p>
                           <p className="mt-0.5 text-xs text-slate-500">{riderDetails(trip)}</p>
+                          {trip.appointment.returnAt && trip.request.direction === "ذهاب" && (
+                            <p className="mt-0.5 text-xs text-slate-500">العودة تلقائيًا {trip.appointment.returnAt}</p>
+                          )}
                           {/* أُزيل من رحلة جارية: ينتظر سيارة أخرى */}
                           {trip.request.removedFrom && (
                             <p className="mt-1 text-xs font-medium leading-5 text-red-700">
@@ -659,8 +679,13 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
                           {trip.request.createdAt && (
                             <p className="mt-1 flex flex-wrap items-center gap-1 text-xs font-medium text-amber-800">
                               <Clock3 className="h-3.5 w-3.5" /> {requestTimes(trip)}
-                              {waitedText(trip.request.createdAt, now) && <span className="font-normal text-amber-700">· {waitedText(trip.request.createdAt, now)}</span>}
+                              {!bookedAhead(trip.request) && waitedText(trip.request.createdAt, now) && <span className="font-normal text-amber-700">· {waitedText(trip.request.createdAt, now)}</span>}
                             </p>
+                          )}
+                          {trip.appointment.seriesId && (
+                            <button type="button" onClick={() => setStopping(trip)} className="mt-1.5 inline-flex items-center gap-1 text-xs font-medium text-slate-500 underline-offset-2 hover:text-red-700 hover:underline">
+                              <Repeat className="h-3.5 w-3.5" /> إيقاف الرحلات المتكررة…
+                            </button>
                           )}
                         </div>
                       </div>
@@ -957,6 +982,17 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
           hospitals={hospitals}
           onChangeDriver={() => { setShownPlate(null); setAssigning(shownVehicle.plate); }}
           onClose={() => setShownPlate(null)}
+        />
+      )}
+      {stopping && (
+        <StopSeriesDialog
+          trip={stopping}
+          trips={stoppableSeriesTrips(appointments, requests, stopping.appointment.seriesId!, stopping.appointment.appointmentDate).map((item) => item.appointment)}
+          onConfirm={(appointmentIds, reason) => {
+            onStopSeries(appointmentIds, reason);
+            setStopping(null);
+          }}
+          onClose={() => setStopping(null)}
         />
       )}
       {removing && (
@@ -1262,6 +1298,52 @@ function ReasonChoice({ reasons, value, other, onChange, onOther, legend }: {
  * إزالة ضيف من رحلة جارية (لم يركب السيارة، أو سجّل السائق استلامه خطأً): يعود طلبه إلى «بانتظار التوزيع» لترسل له
  * سيارة أخرى، وحالة موعده كما قبل الاستلام، وتبقى الرحلة لباقي الركاب.
  */
+/**
+ * إيقاف رحلة غير طبية متكررة: هذه الرحلة وحدها، أو هي وكل ما بعدها مما لم تُرسل سيارته، بسبب إلزامي.
+ * trips: رحلات السلسلة القابلة للإيقاف من يوم هذه الرحلة فصاعدًا (stoppableSeriesTrips).
+ */
+function StopSeriesDialog({ trip, trips, onConfirm, onClose }: { trip: Trip; trips: ClinicAppointment[]; onConfirm: (appointmentIds: string[], reason: string) => void; onClose: () => void }) {
+  const [scope, setScope] = useState<"one" | "rest">("rest");
+  const [reason, setReason] = useState("");
+  const chosen = scope === "one" ? trips.filter((item) => item.id === trip.appointment.id) : trips;
+  const last = trips[trips.length - 1];
+  const day = (date: string) => `${date.slice(8, 10)}-${date.slice(5, 7)}`;
+  return (
+    <Modal
+      tone="red"
+      icon={Repeat}
+      title="إيقاف الرحلات المتكررة"
+      description={<>{trip.appointment.patientName} · {trip.appointment.clinic} · {trip.appointment.appointmentAt}</>}
+      onClose={onClose}
+      footer={(
+        <>
+          <button type="button" onClick={onClose} className={btn("secondary")}>تراجع</button>
+          <button type="button" disabled={reason.trim().length < 3 || !chosen.length} onClick={() => onConfirm(chosen.map((item) => item.id), reason.trim())} className={btn("danger")}>
+            <Repeat className="h-4 w-4" /> إلغاء {chosen.length.toLocaleString("en")} رحلة
+          </button>
+        </>
+      )}
+    >
+      <fieldset className="grid gap-2">
+        <legend className="sr-only">ما يُلغى</legend>
+        <label className={cx(choiceClass(scope === "one"), "cursor-pointer")}>
+          <input type="radio" name="series-scope" checked={scope === "one"} onChange={() => setScope("one")} className="h-4 w-4 accent-brand-600" />
+          هذه الرحلة فقط ({day(trip.appointment.appointmentDate)})
+        </label>
+        <label className={cx(choiceClass(scope === "rest"), "cursor-pointer")}>
+          <input type="radio" name="series-scope" checked={scope === "rest"} onChange={() => setScope("rest")} className="h-4 w-4 accent-brand-600" />
+          هذه الرحلة وكل ما بعدها ({trips.length.toLocaleString("en")} رحلة{last && last.id !== trip.appointment.id ? ` حتى ${day(last.appointmentDate)}` : ""})
+        </label>
+      </fieldset>
+      <p className="mt-3 text-xs leading-5 text-slate-500">الرحلات التي أُرسلت سيارتها لا تُلغى من هنا. تبقى الرحلات الملغاة في «كل المواعيد» بحالة «ملغي» مع السبب.</p>
+      <label className="mt-4 block">
+        <span className={labelClass}>السبب</span>
+        <input autoFocus value={reason} onChange={(event) => setReason(event.target.value)} placeholder="مثل: انتهى الفصل الدراسي" className={inputClass} />
+      </label>
+    </Modal>
+  );
+}
+
 function RemoveFromTripDialog({ trip, alone, onConfirm, onClose }: { trip: Trip; alone: boolean; onConfirm: (reason: string) => void; onClose: () => void }) {
   const pickedUp = trip.request.status === "تم استلام المريض";
   const [reason, setReason] = useState<string>(pickedUp ? "لم يركب السيارة" : "الضيف غير جاهز");

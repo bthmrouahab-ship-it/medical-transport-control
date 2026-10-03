@@ -211,6 +211,10 @@ function describe_write(PDO $pdo, string $col, string $id, ?array $before, ?arra
                 if (!empty($request['nurseOnly'])) {
                     return ['request', 'request.create', "طلب عودة الـ Nurse فقط من {$details['destination']} (مرافقة {$details['patient']}، مبنى {$details['building']}) · يبقى الضيف في موعده", $details];
                 }
+                // العودة التلقائية للرحلة غير الطبية (ينشئها الخادم في وقتها)
+                if (($request['autoReturn'] ?? null) === true) {
+                    return ['request', 'request.create', "طلب سيارة عودة تلقائي لـ $who من {$details['destination']} إلى المجمع (وقت العودة " . ($request['createdAt'] ?? '') . ') · رحلة غير طبية', $details];
+                }
                 // طلب العودة فقط من المستشفى (من العيادة مباشرة إلى مشرف السيارات)
                 if ((appointment_doc($pdo, (string)($request['appointmentId'] ?? ''))['returnOnly'] ?? null) === true) {
                     return ['request', 'request.create', "طلب سيارة عودة لـ $who من {$details['destination']} إلى المجمع (وقت العودة " . ($details['time'] ?? '') . ") · عودة فقط من المستشفى", $details];

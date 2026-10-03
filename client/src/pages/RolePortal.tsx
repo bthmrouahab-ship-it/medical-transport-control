@@ -865,11 +865,25 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
             onExport={exportStats}
             date={selectedDate}
             onDateChange={setSelectedDate}
-            onAddTrip={(appointment, request) => {
-              // الرحلة وطلب سيارتها في حفظ واحد (الرحلة أولًا: يجدها الخادم قبل طلبها)
-              updateBoth([...appointments, appointment].sort(byAppointmentTime), [...requests, request]);
-              toast.success("تمت إضافة الرحلة إلى الطلبات");
-              setSelectedDate(appointment.appointmentDate);
+            onAddTrips={(trips) => {
+              // الرحلات وطلبات سياراتها في حفظ واحد (الرحلات أولًا: يجدها الخادم قبل طلباتها)
+              updateBoth([...appointments, ...trips.map((trip) => trip.appointment)].sort(byAppointmentTime), [...requests, ...trips.map((trip) => trip.request)]);
+              const first = trips[0].appointment;
+              toast.success(trips.length > 1 ? `تمت إضافة ${trips.length} رحلة متكررة` : "تمت إضافة الرحلة إلى الطلبات", {
+                description: trips.length > 1 ? `من ${first.appointmentDate} إلى ${trips[trips.length - 1].appointment.appointmentDate}` : undefined,
+              });
+              setSelectedDate(first.appointmentDate);
+            }}
+            onStopSeries={(appointmentIds, reason) => {
+              // طلبات السيارات أولًا (تُحذف والرحلة ما زالت محفوظة)، ثم تُلغى الرحلات بالسبب باسم المشرف
+              const ids = new Set(appointmentIds);
+              const cancelledAt = new Date().toISOString();
+              updateBoth(
+                appointments.map((item) => (ids.has(item.id) ? { ...item, status: "ملغي" as const, cancelReason: reason, cancelledBy: session.name, cancelledAt } : item)),
+                requests.filter((request) => !ids.has(request.appointmentId)),
+                "requests",
+              );
+              toast.success(`أُلغيت ${appointmentIds.length} رحلة متكررة`, { description: reason });
             }}
           />
         )}
