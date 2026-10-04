@@ -86,7 +86,7 @@ import {
 } from "@shared/transport";
 import type { Hospital } from "@shared/hospitals";
 import { shortDriverName } from "@shared/drivers";
-import { LATE_MINUTES, arrivalsOn, minutesSince, neededAt, returningText, suggestReturnPickups, suggestReturnRedirects, tripEndpoints, tripPhase, vehicleAvailability, vehicleLocationState, type TripPhase, type VehicleLocationState } from "@shared/trips";
+import { LATE_MINUTES, arrivalsOn, incomingCars, minutesSince, neededAt, returningText, suggestReturnPickups, suggestReturnRedirects, tripEndpoints, tripPhase, vehicleAvailability, vehicleLocationState, type IncomingCar, type TripPhase, type VehicleLocationState } from "@shared/trips";
 import {
   Badge,
   DateChooser,
@@ -336,6 +336,33 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
     `${trips.filter((trip) => trip.appointment.kind === "احتياجات خاصة").map((trip) => trip.appointment.patientName).join("، ")} يحتاج سيارة احتياجات خاصة.\n`
     + `إرسال السيارة ${choice.vehicle.plate} (${choice.vehicle.kind}) رغم ذلك؟`,
   );
+  /**
+   * رحلة عودة (أو نقل) لها سيارة ذاهبة الآن إلى نفس المكان أو قريب منه، وتناسب ضيفها (نوعها ومقاعدها):
+   * بعد وصولها تُقترح للضيف («توجيه السيارة»)، فلا تُرسل سيارة من داخل المجمع إلا بعد تنبيه المشرف.
+   */
+  const incomingByRequest = new Map(pending.map((trip) => [trip.request.id, incomingCars(trip, requests, appointments, hospitals, now, gpsLive)
+    .filter((car) => {
+      const vehicle = vehicles.find((item) => item.plate === car.plate);
+      return vehicle && !vehicleRestriction(vehicle, { appointments: [trip.appointment], transfer: isTransfer(trip.request), persons: trip.persons }, rules);
+    })] as const));
+  const incomingFor = (requestIds: string[]) => {
+    const cars = new Map<string, IncomingCar>();
+    for (const id of requestIds) for (const car of incomingByRequest.get(id) ?? []) if (!cars.has(car.plate)) cars.set(car.plate, car);
+    return Array.from(cars.values());
+  };
+  const incomingText = (car: IncomingCar) => `${car.plate} (${driverOf(car.plate, car.driver)}) ذاهبة إلى ${car.destination}${car.distanceKm ? ` على بعد ${car.distanceKm} كم` : ""}`
+    + (car.etaAt ? ` · تصل ${timeLabel(car.etaAt)}` : " · في الطريق إلى استلام ضيفها");
+  /** سيارة من داخل المجمع لرحلة عودة لها سيارة ذاهبة إلى نفس المكان: تُرسل بعد موافقة المشرف على التنبيه */
+  const confirmIncoming = (vehicle: Vehicle, trips: Trip[]) => {
+    const cars = incomingFor(trips.map((trip) => trip.request.id));
+    if (!cars.length || isOutside(vehicle.plate)) return true;
+    return window.confirm(
+      `سيارة ذاهبة الآن إلى مكان عودة ${trips.map((trip) => trip.appointment.patientName).join("، ")} أو قريبة منه:\n`
+      + `${cars.map(incomingText).join("\n")}\n`
+      + "بعد وصولها تظهر في «توجيه سيارات خارج المجمع» لاستلام الضيف، بدل إرسال سيارة من المجمع.\n\n"
+      + `إرسال السيارة ${vehicle.plate} من داخل المجمع رغم ذلك؟`,
+    );
+  };
   const locationRank = (direction: VehicleRequest["direction"], requestIds: string[]) => (vehicle: Vehicle) => {
     // العودة والنقل بين موعدين يبدآن من مستشفى: السيارة الموجَّهة إليهما أولًا
     if (direction === "عودة" || requestIds.some((id) => transferIds.has(id))) return requestIds.some((id) => redirectFor.get(id)?.vehicle.plate === vehicle.plate) ? 0 : 1;
@@ -422,7 +449,7 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
       toast.error("اختر سيارة متاحة ومناسبة للرحلة");
       return;
     }
-    if (!confirmRegular(choice, [trip])) return;
+    if (!confirmRegular(choice, [trip]) || !confirmIncoming(choice.vehicle, [trip])) return;
     onDispatch([trip.request.id], choice.vehicle);
   }
 
@@ -433,6 +460,7 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
       toast.error("لا توجد سيارة مناسبة ومتاحة لجمع هذه الرحلات");
       return;
     }
+    if (!confirmIncoming(vehicle, members)) return;
     onDispatch(members.map((trip) => trip.request.id), vehicle);
   }
 
@@ -444,7 +472,7 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
       toast.error("تغيّرت الطلبات أو السيارة، راجع الرحلة");
       return;
     }
-    if (!confirmRegular(choice, members)) return;
+    if (!confirmRegular(choice, members) || !confirmIncoming(choice.vehicle, members)) return;
     onDispatch(requestIds, choice.vehicle);
     setEditing(null);
   }
@@ -644,6 +672,7 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
                 {pendingShown.map((trip) => {
                   const suggested = suggestFor([trip]);
                   const redirect = redirectFor.get(trip.request.id);
+                  const incoming = incomingByRequest.get(trip.request.id) ?? [];
                   const selectedPlate = selectedVehicles[trip.request.id] || suggested?.plate || "";
                   // المتاحة لها أولًا، ثم المشغولة وما لا يناسبها (الباصات: الساعات والتخصيص) مع السبب
                   const choices = choicesFor([trip]);
@@ -664,9 +693,16 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
                             {pendingLate(trip) && <Badge tone="red" icon={AlertTriangle}>متأخر</Badge>}
                             {groupedIds.has(trip.appointment.id) && <Badge tone="violet" icon={Sparkles}>قابلة للجمع</Badge>}
                             {redirect && <Badge tone="cyan" icon={Navigation}>سيارة قريبة {redirect.vehicle.plate} · {redirect.distanceKm} كم</Badge>}
+                            {incoming.length > 0 && <Badge tone="amber" icon={Navigation}>سيارة ذاهبة إلى نفس المكان</Badge>}
                           </div>
                           <p className="mt-1 text-sm text-slate-600">{routeLabel(trip.appointment, trip.from)}{zone && <span className="text-slate-400"> · {zone}</span>}</p>
                           <p className="mt-0.5 text-xs text-slate-500">{riderDetails(trip)}</p>
+                          {/* سيارة ذاهبة إلى مكان العودة: الأفضل انتظارها بدل إرسال سيارة من المجمع */}
+                          {incoming.map((car) => (
+                            <p key={car.plate} className="mt-1 text-xs font-medium leading-5 text-amber-800">
+                              <Navigation className="me-1 inline h-3.5 w-3.5 align-[-3px]" />{incomingText(car)} · بعد وصولها تُقترح لهذا الضيف
+                            </p>
+                          ))}
                           {trip.appointment.returnAt && trip.request.direction === "ذهاب" && (
                             <p className="mt-0.5 text-xs text-slate-500">العودة تلقائيًا {trip.appointment.returnAt}</p>
                           )}
@@ -952,7 +988,7 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
       </div>
       </>)}
 
-      {plan && <AutoDispatchDialog plan={plan} free={dispatchable} load={load} rules={rules} transferIds={transferIds} personsOf={new Map(pending.map((trip) => [trip.request.id, trip.persons]))} driverOf={driverOf} placeText={placeText} nextFree={nextFree} onConfirm={confirmPlan} onClose={() => setPlan(null)} />}
+      {plan && <AutoDispatchDialog plan={plan} free={dispatchable} load={load} rules={rules} transferIds={transferIds} incomingFor={(requestIds, plate) => (isOutside(plate) ? [] : incomingFor(requestIds))} incomingText={incomingText} personsOf={new Map(pending.map((trip) => [trip.request.id, trip.persons]))} driverOf={driverOf} placeText={placeText} nextFree={nextFree} onConfirm={confirmPlan} onClose={() => setPlan(null)} />}
       {editing && (
         <GroupEditor
           initial={editing}
@@ -1634,12 +1670,15 @@ function VehicleDetailsDialog({ vehicle, driver, state, place, current, dayTrips
  * خطة التوزيع التلقائي قبل الإرسال: كل رحلة وسيارتها المقترحة (الأقل رحلات اليوم)، ويمكن تغيير السيارة
  * أو استبعاد رحلة أو فصل ضيف عن رحلة مجمّعة (يأخذ سيارة وحده)، ثم تُرسل كل السيارات معًا.
  */
-function AutoDispatchDialog({ plan, free, load, rules, transferIds, personsOf, driverOf, placeText, nextFree, onConfirm, onClose }: {
+function AutoDispatchDialog({ plan, free, load, rules, transferIds, incomingFor, incomingText, personsOf, driverOf, placeText, nextFree, onConfirm, onClose }: {
   plan: DispatchPlan;
   free: Vehicle[];
   load: Map<string, number>;
   rules: VehicleRules;
   transferIds: Set<string>;
+  /** سيارات ذاهبة إلى مكان رحلة العودة، إن كانت السيارة المختارة لها من داخل المجمع */
+  incomingFor: (requestIds: string[], plate: string) => IncomingCar[];
+  incomingText: (car: IncomingCar) => string;
   /** عدد الأشخاص في كل طلب (مع المرافق والـ Nurse) */
   personsOf: Map<string, number>;
   driverOf: (plate?: string, fallback?: string) => string;
@@ -1648,7 +1687,10 @@ function AutoDispatchDialog({ plan, free, load, rules, transferIds, personsOf, d
   onConfirm: (items: { requestIds: string[]; vehicle: Vehicle }[]) => void;
   onClose: () => void;
 }) {
-  const [rows, setRows] = useState(() => plan.assignments.map(({ vehicle: _vehicle, ...item }) => ({ ...item, plate: _vehicle.plate, include: true })));
+  // رحلة عودة لها سيارة ذاهبة إلى نفس المكان: غير مختارة حتى يختارها المشرف بعد التنبيه
+  const [rows, setRows] = useState(() => plan.assignments.map(({ vehicle: _vehicle, ...item }) => ({
+    ...item, plate: _vehicle.plate, include: !incomingFor(item.requestIds, _vehicle.plate).length,
+  })));
   const chosen = rows.filter((row) => row.include);
   const used = new Map<string, number>();
   chosen.forEach((row) => used.set(row.plate, (used.get(row.plate) ?? 0) + 1));
@@ -1671,7 +1713,7 @@ function AutoDispatchDialog({ plan, free, load, rules, transferIds, personsOf, d
       const rest = { ...row, requestIds: row.requestIds.filter((_, i) => i !== at), appointments: row.appointments.filter((_, i) => i !== at), persons: row.persons - persons };
       const taken = new Set(current.filter((item) => item.include).map((item) => item.plate));
       const vehicle = assignVehicleForTrips(free.filter((item) => !taken.has(item.plate)), [appointment], load, undefined, { ...rules, transfer: transferIds.has(requestId), persons });
-      const alone = { requestIds: [requestId], appointments: [appointment], direction: row.direction, persons, plate: vehicle?.plate ?? "", include: Boolean(vehicle) };
+      const alone = { requestIds: [requestId], appointments: [appointment], direction: row.direction, persons, plate: vehicle?.plate ?? "", include: vehicle ? !incomingFor([requestId], vehicle.plate).length : false };
       return [...current.slice(0, index), rest, alone, ...current.slice(index + 1)];
     });
   }
@@ -1707,6 +1749,7 @@ function AutoDispatchDialog({ plan, free, load, rules, transferIds, personsOf, d
               const options = optionsFor(row);
               const first = [...row.appointments].sort((a, b) => a.appointmentAt.localeCompare(b.appointmentAt))[0];
               const grouped = row.appointments.length > 1;
+              const incoming = row.plate ? incomingFor(row.requestIds, row.plate) : [];
               return (
                 <li key={row.requestIds.join()} className={cx("space-y-2 p-3", !row.include && "opacity-50")}>
                   <label className="flex cursor-pointer items-start gap-2.5">
@@ -1722,6 +1765,13 @@ function AutoDispatchDialog({ plan, free, load, rules, transferIds, personsOf, d
                       <span className="block truncate text-xs text-slate-500">{destinations(row.appointments)}</span>
                     </span>
                   </label>
+                  {/* سيارة ذاهبة إلى مكان العودة: لا تُرسل سيارة من المجمع إلا إذا اختارها المشرف بعد التنبيه */}
+                  {incoming.length > 0 && (
+                    <p className="ms-6 rounded-lg bg-amber-50 px-2.5 py-1.5 text-xs leading-5 text-amber-900 ring-1 ring-inset ring-amber-200">
+                      <AlertTriangle className="me-1 inline h-3.5 w-3.5 align-[-3px]" />
+                      {incoming.map(incomingText).join("، ")}. بعد وصولها تُقترح لهذا الضيف، {row.include ? "وستُرسل سيارة من داخل المجمع رغم ذلك." : "لذلك لم تُختر هذه الرحلة؛ اخترها لإرسال سيارة من داخل المجمع."}
+                    </p>
+                  )}
                   {grouped && (
                     <ul className="flex flex-wrap gap-1.5 ps-6">
                       {row.appointments.map((appointment, at) => (
