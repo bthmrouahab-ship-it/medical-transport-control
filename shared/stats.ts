@@ -26,6 +26,8 @@ export type TripStat = {
   /** مدة الرحلة من خروج السيارة إلى عودتها */
   minutes: number | null;
   nonMedical: boolean;
+  /** رحلات النظام: سيارات أخرى خدمت نفس الموعد (العودة أو النقل بسيارة غير سيارة الذهاب) */
+  otherVehicles?: { plate: string; driver: string | null; kind: TripKind }[];
   /** من الملخص القديم: العدد اليومي ونوع المركبة فقط، بلا ساعة أو وجهة أو سيارة */
   legacy?: boolean;
 };
@@ -61,7 +63,17 @@ export const EMPTY_FILTER: StatsFilter = {
   category: "all",
 };
 
-export type DailyStat = { date: string; weekday: string; total: number; completed: number; sedan: number; special: number; bus: number };
+export type DailyStat = {
+  date: string;
+  weekday: string;
+  total: number;
+  completed: number;
+  sedan: number;
+  special: number;
+  bus: number;
+  /** عدد السيارات التي عملت في اليوم (بلا تكرار)؛ لا يوجد لأيام الملخص القديم */
+  vehicles?: number;
+};
 export type DestinationStat = { key: string; name: string; hospitalId: string | null; zone: string | null; trips: number; avgMinutes: number | null };
 
 export type StatsSummary = {
@@ -78,11 +90,28 @@ export type StatsSummary = {
   destinations: DestinationStat[];
   zones: { zone: string; trips: number }[];
   vehicles: { plate: string; driver: string; trips: number }[];
+  /** السيارات التي عملت في الفترة: عددها بلا تكرار، وحسب نوعها، ومتوسطها وأعلاها في اليوم */
+  workingVehicles?: WorkingVehicles;
   buildings: { building: string; trips: number }[];
   unmatchedDestinations: number;
   /** رحلات منجزة من الملخص القديم لا تظهر في الساعات والوجهات والسيارات والمباني */
   withoutDetails?: number;
 };
+
+export type WorkingVehicles = {
+  total: number;
+  /** حسب نوع المركبة، للسيارات التي يُعرف نوعها */
+  byKind: { kind: TripKind; vehicles: number }[];
+  /** من الأيام التي لها تفاصيل السيارات فقط */
+  dailyAverage: number | null;
+  dailyMax: number | null;
+};
+
+/** كل السيارات التي خدمت الموعد: سيارة الذهاب ثم سيارات العودة أو النقل */
+export function tripVehicles(trip: TripStat) {
+  const main = trip.plate && trip.kind ? [{ plate: trip.plate, driver: trip.driver, kind: trip.kind }] : [];
+  return [...main, ...(trip.otherVehicles ?? [])];
+}
 
 export const OTHER_ZONE = "وجهات أخرى";
 const WEEKDAYS = ["الأحد", "الإثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت"];
@@ -132,8 +161,17 @@ export function tripsFromSystem(
     const hospital = nonMedical
       ? null
       : (appointment.hospitalId && hospitals.find((item) => item.id === appointment.hospitalId)) || matchHospital(appointment.clinic, hospitals);
-    const fleetKind = request ? fleet.find((vehicle) => vehicle.plate === request.vehiclePlate)?.kind : undefined;
-    const kind: TripKind | null = request ? fleetKind ?? (appointment.kind === "احتياجات خاصة" ? "احتياجات خاصة" : "سيدان") : null;
+    const kindOf = (plate: string): TripKind => fleet.find((vehicle) => vehicle.plate === plate)?.kind
+      ?? (appointment.kind === "احتياجات خاصة" ? "احتياجات خاصة" : "سيدان");
+    const kind: TripKind | null = request?.vehiclePlate ? kindOf(request.vehiclePlate) : null;
+    // العودة أو النقل بسيارة أخرى: تُحسب السيارة بين السيارات التي عملت
+    const otherVehicles: NonNullable<TripStat["otherVehicles"]> = [];
+    for (const item of sent) {
+      const plate = item.vehiclePlate!;
+      if (plate !== request?.vehiclePlate && !otherVehicles.some((vehicle) => vehicle.plate === plate)) {
+        otherVehicles.push({ plate, driver: item.driver ?? null, kind: kindOf(plate) });
+      }
+    }
     const building = appointment.buildingNumber.trim();
     return {
       date: appointment.appointmentDate,
@@ -146,6 +184,7 @@ export function tripsFromSystem(
       building: building && building !== "غير محدد" ? building : null,
       minutes: null,
       nonMedical,
+      ...(otherVehicles.length ? { otherVehicles } : {}),
     };
   });
 }
@@ -231,7 +270,7 @@ export function matchesFilter(trip: TripStat, filter: StatsFilter, hospitals: Ho
   if (filter.kind !== "all" && trip.kind !== filter.kind) return false;
   if (filter.category === "medical" && trip.nonMedical) return false;
   if (filter.category === "nonMedical" && !trip.nonMedical) return false;
-  if (filter.plate !== "all" && trip.plate !== filter.plate) return false;
+  if (filter.plate !== "all" && !tripVehicles(trip).some((vehicle) => vehicle.plate === filter.plate)) return false;
   if (filter.building !== "all" && trip.building !== filter.building) return false;
   if (filter.zone !== "all" && (trip.legacy || tripZone(trip, hospitals) !== filter.zone)) return false;
   if (filter.destination !== "all" && (trip.legacy || tripDestination(trip, hospitals).key !== filter.destination)) return false;
@@ -252,7 +291,7 @@ export function filterOptions(trips: TripStat[], hospitals: Hospital[]) {
     const entry = destinations.get(destination.key) ?? { name: destination.name, zone, trips: 0 };
     entry.trips += 1;
     destinations.set(destination.key, entry);
-    if (trip.plate) plates.set(trip.plate, (plates.get(trip.plate) ?? 0) + 1);
+    for (const { plate } of tripVehicles(trip)) plates.set(plate, (plates.get(plate) ?? 0) + 1);
     if (trip.building) buildings.set(trip.building, (buildings.get(trip.building) ?? 0) + 1);
   }
   const ranked = <T,>(map: Map<string, T>, count: (value: T) => number) =>
@@ -271,6 +310,7 @@ const sortDesc = <T extends { trips: number }>(items: T[]) => items.sort((a, b) 
 
 /**
  * يلخّص الرحلات للمخططات. الساعات والوجهات والسيارات والمباني ومدة الرحلة تُحسب للرحلات المنجزة فقط.
+ * السيارات: كل سيارة خدمت الموعد (الذهاب والعودة والنقل)، وعدد السيارات التي عملت في الفترة وفي كل يوم بلا تكرار.
  * legacy: تفاصيل الملخص القديم تُضاف كما هي عندما تشمل الفترة المختارة كل أيامه ولا توجد فلاتر أخرى.
  */
 export function summarizeTrips(trips: TripStat[], hospitals: Hospital[] = DEFAULT_HOSPITALS, legacy: HistorySummary | null = null): StatsSummary {
@@ -281,6 +321,9 @@ export function summarizeTrips(trips: TripStat[], hospitals: Hospital[] = DEFAUL
   const vehicles = new Map<string, { drivers: Map<string, number>; trips: number }>();
   const buildings = new Map<string, number>();
   const destinations = new Map<string, DestinationStat & { minutesTotal: number; minutesCount: number }>();
+  // السيارات التي عملت: نوع كل سيارة، وسيارات كل يوم له تفاصيل (لا أيام الملخص القديم)
+  const plateKinds = new Map<string, TripKind>();
+  const dayPlates = new Map<string, Set<string>>();
   let completedTrips = 0;
   let unmatched = 0;
   let withoutDetails = 0;
@@ -305,6 +348,7 @@ export function summarizeTrips(trips: TripStat[], hospitals: Hospital[] = DEFAUL
     const day = daily.get(trip.date) ?? { date: trip.date, weekday: weekdayOf(trip.date), total: 0, completed: 0, sedan: 0, special: 0, bus: 0 };
     daily.set(trip.date, day);
     day.total += 1;
+    if (!trip.legacy && !dayPlates.has(trip.date)) dayPlates.set(trip.date, new Set());
     if (!trip.kind) continue;
     completedTrips += 1;
     day.completed += 1;
@@ -326,7 +370,11 @@ export function summarizeTrips(trips: TripStat[], hospitals: Hospital[] = DEFAUL
     addDestination(destination, 1, trip.minutes ?? 0, trip.minutes === null ? 0 : 1);
     const zone = tripZone(trip, hospitals);
     zones.set(zone, (zones.get(zone) ?? 0) + 1);
-    if (trip.plate) addVehicle(trip.plate, trip.driver ?? "", 1);
+    for (const vehicle of tripVehicles(trip)) {
+      addVehicle(vehicle.plate, vehicle.driver ?? "", 1);
+      if (!plateKinds.has(vehicle.plate)) plateKinds.set(vehicle.plate, vehicle.kind);
+      dayPlates.get(trip.date)!.add(vehicle.plate);
+    }
     if (trip.building) buildings.set(trip.building, (buildings.get(trip.building) ?? 0) + 1);
   }
 
@@ -350,7 +398,10 @@ export function summarizeTrips(trips: TripStat[], hospitals: Hospital[] = DEFAUL
     unmatched += legacy.unmatchedDestinations;
   }
 
+  for (const [date, plates] of Array.from(dayPlates)) daily.get(date)!.vehicles = plates.size;
   const days = Array.from(daily.values()).sort((a, b) => a.date.localeCompare(b.date));
+  // متوسط السيارات في اليوم من الأيام التي عملت فيها سيارات (لا الأيام القادمة التي لم تُرسل لها سيارة بعد)
+  const vehicleDays = days.map((day) => day.vehicles ?? 0).filter((count) => count > 0);
   const weekdayMap = new Map<string, { trips: number; days: number }>();
   for (const day of days) {
     const entry = weekdayMap.get(day.weekday) ?? { trips: 0, days: 0 };
@@ -380,6 +431,12 @@ export function summarizeTrips(trips: TripStat[], hospitals: Hospital[] = DEFAUL
       driver: Array.from(vehicle.drivers).sort((a, b) => b[1] - a[1]).map(([name]) => name).slice(0, 3).join(" / "),
       trips: vehicle.trips,
     }))),
+    workingVehicles: {
+      total: vehicles.size,
+      byKind: TRIP_KINDS.map((kind) => ({ kind, vehicles: Array.from(plateKinds.values()).filter((item) => item === kind).length })),
+      dailyAverage: vehicleDays.length ? Math.round(vehicleDays.reduce((total, count) => total + count, 0) / vehicleDays.length) : null,
+      dailyMax: vehicleDays.length ? Math.max(...vehicleDays) : null,
+    },
     buildings: sortDesc(Array.from(buildings, ([building, count]) => ({ building, trips: count }))),
     unmatchedDestinations: unmatched,
     withoutDetails,

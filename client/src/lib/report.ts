@@ -40,6 +40,10 @@ export function statsReport(summary: StatsSummary, title: string, subtitle: stri
       { label: "الرحلات المنجزة", value: summary.completedTrips.toLocaleString("en") },
       { label: "نسبة الإنجاز", value: `${completion}%` },
       { label: "أيام العمل", value: String(summary.activeDays) },
+      { label: "السيارات العاملة", value: String(summary.workingVehicles?.total ?? summary.vehicles.length) },
+      ...(summary.workingVehicles?.dailyAverage && summary.activeDays > 1
+        ? [{ label: "متوسط السيارات يوميًا", value: `${summary.workingVehicles.dailyAverage} (أعلى ${summary.workingVehicles.dailyMax})` }]
+        : []),
       { label: "متوسط المواعيد يوميًا", value: String(summary.activeDays ? Math.round(summary.totalTrips / summary.activeDays) : 0) },
       { label: "متوسط مدة الرحلة", value: summary.avgTripMinutes ? `${summary.avgTripMinutes} دقيقة` : "—" },
     ],
@@ -47,8 +51,8 @@ export function statsReport(summary: StatsSummary, title: string, subtitle: stri
       {
         title: "المواعيد يوميًا",
         sheet: "يوميًا",
-        columns: ["التاريخ", "اليوم", "إجمالي المواعيد", "المنجزة", "سيدان", "احتياجات خاصة", "باص"],
-        rows: summary.daily.map((day) => [day.date, day.weekday, day.total, day.completed, day.sedan, day.special, day.bus]),
+        columns: ["التاريخ", "اليوم", "إجمالي المواعيد", "المنجزة", "سيدان", "احتياجات خاصة", "باص", "السيارات العاملة"],
+        rows: summary.daily.map((day) => [day.date, day.weekday, day.total, day.completed, day.sedan, day.special, day.bus, day.vehicles ?? ""]),
         bar: 2,
       },
       { title: "خروج السيارات حسب الساعة", sheet: "حسب الساعة", columns: ["الساعة", "الرحلات"], rows: summary.byHour.filter((item) => item.trips).map((item) => [`${item.hour}:00`, item.trips]), bar: 1 },

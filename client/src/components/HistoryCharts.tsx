@@ -11,7 +11,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { BarChart3, Building2, CalendarDays, CheckCircle2, Clock3, MapPinned, Table2, Timer, TrendingUp, Truck } from "lucide-react";
+import { BarChart3, Building2, CalendarDays, CarFront, CheckCircle2, Clock3, MapPinned, Table2, Timer, TrendingUp, Truck } from "lucide-react";
 import type { StatsFilter, StatsSummary } from "@shared/stats";
 import { Panel, Stat, btn, cx } from "./ui-kit";
 
@@ -48,12 +48,23 @@ export default function HistoryCharts({ summary, onFilter }: { summary: StatsSum
   const weekdays = summary.byWeekday.filter((item) => item.days > 0).map((item) => ({ ...item, average: Math.round(item.trips / item.days) }));
   const topDestinations = summary.destinations.slice(0, 12);
   const peak = hours.reduce((best, item) => (item.trips > best.trips ? item : best), hours[0]);
+  // السيارات التي عملت: في الفترة (بلا تكرار) وفي كل يوم له تفاصيل
+  const working = summary.workingVehicles;
+  const kindVehicles = (kind: string) => working?.byKind.find((item) => item.kind === kind)?.vehicles ?? 0;
+  const vehicleDays = summary.daily.filter((day) => day.vehicles !== undefined);
 
   return (
     <div className="space-y-6">
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4 lg:gap-4">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5 lg:gap-4">
         <Stat icon={CalendarDays} tone="blue" label="إجمالي المواعيد" value={summary.totalTrips.toLocaleString("en")} hint={`${summary.activeDays} يوم`} />
         <Stat icon={CheckCircle2} tone="green" label="نسبة الإنجاز" value={`${completion}%`} hint={`${summary.completedTrips.toLocaleString("en")} رحلة منجزة`} />
+        <Stat
+          icon={CarFront}
+          tone="neutral"
+          label="السيارات العاملة"
+          value={working?.total ?? summary.vehicles.length}
+          hint={summary.activeDays > 1 && working?.dailyAverage ? `متوسط ${working.dailyAverage} يوميًا` : undefined}
+        />
         <Stat icon={TrendingUp} tone="violet" label="متوسط المواعيد يوميًا" value={String(dailyAverage)} />
         <Stat icon={Timer} tone="cyan" label="متوسط مدة الرحلة" value={summary.avgTripMinutes ? `${summary.avgTripMinutes} د` : "—"} />
       </div>
@@ -73,6 +84,22 @@ export default function HistoryCharts({ summary, onFilter }: { summary: StatsSum
           </ResponsiveContainer>
         </div>
       </Panel>
+
+      {vehicleDays.length > 1 && working?.dailyMax ? (
+        <Panel icon={CarFront} title="السيارات العاملة يوميًا" description={`عدد السيارات التي خرجت في كل يوم بلا تكرار · متوسط ${working.dailyAverage} وأعلى ${working.dailyMax} في اليوم`} bodyClassName="p-5">
+          <div dir="ltr" className="h-52">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={vehicleDays} margin={{ top: 8, right: 8, bottom: 0, left: -16 }}>
+                <CartesianGrid stroke={GRID} vertical={false} />
+                <XAxis dataKey="date" tickFormatter={shortDate} {...axisProps} minTickGap={12} />
+                <YAxis {...axisProps} allowDecimals={false} />
+                <Tooltip {...tooltipStyle} labelFormatter={(date) => `${date}`} formatter={(value, _name, item) => [`${value} سيارة · ${item.payload.completed} رحلة منجزة`, "السيارات العاملة"]} />
+                <Bar dataKey="vehicles" fill={SERIES_1} radius={[4, 4, 0, 0]} maxBarSize={22} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </Panel>
+      ) : null}
 
       <div className="grid gap-6 lg:grid-cols-2">
         <Panel icon={Clock3} title="خروج السيارات حسب الساعة" description={peak ? `الذروة الساعة ${peak.hour}:00 (${peak.trips} رحلة)` : undefined} bodyClassName="p-5">
@@ -160,12 +187,12 @@ export default function HistoryCharts({ summary, onFilter }: { summary: StatsSum
               })}
             </ul>
           </Panel>
-          <Panel icon={Truck} title="نوع المركبة" description="من الرحلات المنجزة" bodyClassName="px-3 py-2">
+          <Panel icon={Truck} title="نوع المركبة" description="الرحلات المنجزة والسيارات التي عملت" bodyClassName="px-3 py-2">
             <ul className="divide-y divide-slate-100 text-sm">
               {summary.byKind.map((item) => (
                 <li key={item.kind}>
                   <Pick onClick={pick({ kind: item.kind })} label={item.kind} className="flex justify-between rounded-lg px-2 py-2.5">
-                    <span className="text-slate-600">{item.kind}</span>
+                    <span className="text-slate-600">{item.kind}{kindVehicles(item.kind) ? <span className="text-xs text-slate-400"> · {kindVehicles(item.kind)} سيارة</span> : null}</span>
                     <span className="font-semibold text-ink tabular">{item.trips} <span className="text-xs font-normal text-slate-400">({summary.completedTrips ? Math.round((item.trips / summary.completedTrips) * 100) : 0}%)</span></span>
                   </Pick>
                 </li>
@@ -176,7 +203,7 @@ export default function HistoryCharts({ summary, onFilter }: { summary: StatsSum
       </div>
 
       <div className="grid items-start gap-6 lg:grid-cols-2">
-        <Panel icon={Truck} title="السيارات الأكثر عملًا" count={summary.vehicles.length || undefined} bodyClassName="px-3 py-2">
+        <Panel icon={Truck} title="السيارات الأكثر عملًا" count={summary.vehicles.length || undefined} description={summary.vehicles.length ? `${summary.vehicles.length} سيارة عملت في الفترة (ومنها سيارات العودة)` : undefined} bodyClassName="px-3 py-2">
           {!summary.vehicles.length && <NoData />}
           <ul className="max-h-72 divide-y divide-slate-100 overflow-auto text-sm">
             {summary.vehicles.slice(0, 20).map((item) => (
