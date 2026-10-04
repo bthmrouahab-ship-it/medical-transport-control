@@ -73,6 +73,11 @@ describe("hospital catalog", () => {
     expect(syncHospitals(withoutOcean).find((hospital) => hospital.id === "ocean-medical")).toMatchObject({ name: "مركز المحيط الطبي", nameEn: "Ocean Medical Center", lat: 25.215438, lng: 51.448938 });
     expect(matchHospital("مركز المحيط الطبي ذ.م.م")?.id).toBe("ocean-medical");
     expect(matchHospital("Ocean Medical Center")?.id).toBe("ocean-medical");
+    // دار خديجة لتحفيظ القرآن الكريم (6HQ8+H47 الدوحة)، قرب المجمع
+    const withoutKhadeejah = DEFAULT_HOSPITALS.filter((hospital) => hospital.id !== "dar-khadeejah");
+    expect(syncHospitals(withoutKhadeejah).find((hospital) => hospital.id === "dar-khadeejah")).toMatchObject({ nameEn: "Daar Khadeejah", lat: 25.238912, lng: 51.565297 });
+    expect(matchHospital("دار خديجة")?.id).toBe("dar-khadeejah");
+    expect(matchHospital("Daar Khadeejah")?.id).toBe("dar-khadeejah");
   });
 
   it("finds hospitals on the same campus", () => {
