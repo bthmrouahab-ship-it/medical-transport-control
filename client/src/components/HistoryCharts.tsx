@@ -12,7 +12,7 @@ import {
   YAxis,
 } from "recharts";
 import { BarChart3, Building2, CalendarDays, CarFront, CheckCircle2, Clock3, MapPinned, Table2, Timer, TrendingUp, Truck } from "lucide-react";
-import type { StatsFilter, StatsSummary } from "@shared/stats";
+import { clockText, durationText, type StatsFilter, type StatsSummary } from "@shared/stats";
 import { Panel, Stat, btn, cx } from "./ui-kit";
 
 // ألوان المخططات (الوضع الفاتح): السلسلة الأولى أزرق، الثانية برتقالي؛ النص بألوان النص لا بلون السلسلة
@@ -52,6 +52,9 @@ export default function HistoryCharts({ summary, onFilter }: { summary: StatsSum
   const working = summary.workingVehicles;
   const kindVehicles = (kind: string) => working?.byKind.find((item) => item.kind === kind)?.vehicles ?? 0;
   const vehicleDays = summary.daily.filter((day) => day.vehicles !== undefined);
+  // ساعات العمل: أول خروج وآخر عودة لليوم الواحد، ومتوسط الساعات في اليوم للفترة
+  const work = summary.workHours;
+  const singleDay = new Set(work?.days.map((day) => day.date)).size === 1;
 
   return (
     <div className="space-y-6">
@@ -230,6 +233,57 @@ export default function HistoryCharts({ summary, onFilter }: { summary: StatsSum
           </ul>
         </Panel>
       </div>
+
+      {work?.vehicles.length ? (
+        <Panel
+          icon={Clock3}
+          title="ساعات عمل السيارات"
+          count={work.vehicles.length}
+          description={`المجموع ${durationText(work.totalMinutes)}${work.avgDayMinutes !== null && !singleDay ? ` · متوسط ${durationText(work.avgDayMinutes)} للسيارة في اليوم` : ""} · من خروج السيارة حتى عودتها إلى المجمع (العودة بعد رحلة الذهاب تقديرية)`}
+          bodyClassName="p-0"
+        >
+          <div className="max-h-96 overflow-auto">
+            <table className="w-full text-start text-sm">
+              <thead className="sticky top-0 bg-slate-50 text-xs text-slate-500">
+                <tr>
+                  <th className="px-5 py-2.5 text-start font-medium">السيارة</th>
+                  {singleDay ? (
+                    <>
+                      <th className="py-2.5 text-start font-medium">أول خروج</th>
+                      <th className="py-2.5 text-start font-medium">آخر عودة</th>
+                    </>
+                  ) : (
+                    <>
+                      <th className="py-2.5 text-start font-medium">أيام العمل</th>
+                      <th className="py-2.5 text-start font-medium">متوسط اليوم</th>
+                    </>
+                  )}
+                  <th className="px-5 py-2.5 text-start font-medium">ساعات العمل</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {work.vehicles.map((item) => (
+                  <tr key={item.plate} onClick={pick({ plate: item.plate })} title={onFilter ? `عرض السيارة ${item.plate} فقط` : undefined} className={onFilter ? "cursor-pointer hover:bg-slate-50" : undefined}>
+                    <td className="px-5 py-2.5"><span dir="ltr" className="font-semibold text-ink">{item.plate}</span> <span className="text-xs text-slate-500">{item.driver}</span></td>
+                    {singleDay ? (
+                      <>
+                        <td className="py-2.5 tabular text-slate-600"><span dir="ltr">{clockText(item.first) || "—"}</span></td>
+                        <td className="py-2.5 tabular text-slate-600"><span dir="ltr">{clockText(item.last) || "—"}</span></td>
+                      </>
+                    ) : (
+                      <>
+                        <td className="py-2.5 tabular text-slate-600">{item.days}</td>
+                        <td className="py-2.5 tabular text-slate-600">{durationText(item.minutes / item.days)}</td>
+                      </>
+                    )}
+                    <td className="px-5 py-2.5 font-semibold tabular text-ink">{durationText(item.minutes)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Panel>
+      ) : null}
     </div>
   );
 }

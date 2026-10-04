@@ -98,6 +98,7 @@ export function parseTripRows(rows: unknown[][], hospitals: Hospital[] = DEFAULT
     const place = hospital?.name ?? (clean(stripReturnLeg(rawDestination)) || "غير محدد");
     const plate = clean(cell(row, "plate")).replace(/\.0$/, "");
     const building = clean(cell(row, "building")).replace(/\.0$/, "");
+    const timed = out !== null && back !== null && back > out && back - out <= 6 * 60;
     trips.push({
       date,
       hour: out !== null ? Math.floor(out / 60) : null,
@@ -107,8 +108,10 @@ export function parseTripRows(rows: unknown[][], hospitals: Hospital[] = DEFAULT
       plate: kind && plate && plate !== "0" ? plate : null,
       driver: kind ? clean(cell(row, "driver")) || null : null,
       building: building && building !== "0" ? building : null,
-      minutes: out !== null && back !== null && back > out && back - out <= 6 * 60 ? back - out : null,
+      minutes: timed ? back - out : null,
       nonMedical: !hospital && NON_MEDICAL_NAMES.some((name) => place.toLowerCase().includes(name)),
+      // خروج السيارة ودخولها لساعات عمل السيارات
+      ...(timed ? { out, back } : {}),
     });
   }
 
