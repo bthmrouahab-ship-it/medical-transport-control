@@ -75,6 +75,7 @@ export const DEFAULT_HOSPITALS: Hospital[] = [
   { id: "sparkle-dental", name: "سباركل لطب الأسنان", nameEn: "Sparkle Dental Center", zone: "الدوحة", lat: 25.372562, lng: 51.472437, aliases: ["سباركل", "سباركل للاسنان", "مركز سباركل", "sparkle dental", "sparkle"], verified: true }, // 9FFC+2X الدوحة
   { id: "wajbah-hc", name: "مركز الوجبة الصحي", nameEn: "Al Wajbah Health Center", zone: "الريان", lat: 25.282313, lng: 51.402313, aliases: ["الوجبة", "الوجبه", "مركز الوجبه", "صحي الوجبة", "wajbah", "al wajba", "wajba health"], verified: true }, // 7CJ2+WW الريان
   { id: "qatar-diabetes", name: "الجمعية القطرية للسكري", nameEn: "Qatar Diabetes Association", zone: "الثمامة وروضة الخيل", lat: 25.270562, lng: 51.517813, aliases: ["جمعية السكري", "الجمعية القطرية للسكر", "جمعية السكر", "qatar diabetes", "diabetes association"], verified: true }, // 7GC9+64 الدوحة
+  { id: "ocean-medical", name: "مركز المحيط الطبي", nameEn: "Ocean Medical Center", zone: "الدوحة", lat: 25.215438, lng: 51.448938, aliases: ["مركز المحيط الطبي ذ.م.م", "المحيط الطبي", "مركز المحيط", "ocean medical", "ocean medical center"], verified: true }, // 6C8X+5H الدوحة
 ];
 
 export function normalizePlaceName(value: string) {
@@ -155,5 +156,5 @@ export function syncHospitals(stored: Hospital[], defaults: Hospital[] = DEFAULT
 const ADDED_LATER = [
   "expert-dental", "gardenia", "psychiatric", "sama",
   "shafallah", "iris-optic", "al-jiwan", "the-view", "al-aman", "old-airport-hc", "pediatric-sadd", "al-ahli", "wakra-hc", "muaither-hc",
-  "wakra-dialysis", "sparkle-dental", "wajbah-hc", "qatar-diabetes",
+  "wakra-dialysis", "sparkle-dental", "wajbah-hc", "qatar-diabetes", "ocean-medical",
 ];
