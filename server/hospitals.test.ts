@@ -68,6 +68,11 @@ describe("hospital catalog", () => {
     expect(syncHospitals(withoutSparkle).find((hospital) => hospital.id === "sparkle-dental")).toMatchObject({ lat: 25.372562, lng: 51.472437 });
     const withoutNew = DEFAULT_HOSPITALS.filter((hospital) => !["wajbah-hc", "qatar-diabetes"].includes(hospital.id));
     expect(syncHospitals(withoutNew).filter((hospital) => ["wajbah-hc", "qatar-diabetes"].includes(hospital.id))).toHaveLength(2);
+    // مركز المحيط الطبي (6C8X+5H الدوحة)
+    const withoutOcean = DEFAULT_HOSPITALS.filter((hospital) => hospital.id !== "ocean-medical");
+    expect(syncHospitals(withoutOcean).find((hospital) => hospital.id === "ocean-medical")).toMatchObject({ name: "مركز المحيط الطبي", nameEn: "Ocean Medical Center", lat: 25.215438, lng: 51.448938 });
+    expect(matchHospital("مركز المحيط الطبي ذ.م.م")?.id).toBe("ocean-medical");
+    expect(matchHospital("Ocean Medical Center")?.id).toBe("ocean-medical");
   });
 
   it("finds hospitals on the same campus", () => {
