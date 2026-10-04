@@ -1,5 +1,6 @@
 import { DEFAULT_HOSPITALS, ORIGIN, distanceKm, type Hospital } from "./hospitals";
 import {
+  NEARBY_KM,
   appointmentDateTime,
   appointmentHospital,
   inService,
@@ -445,3 +446,60 @@ export function suggestReturnPickups(
 /** وصف السيارة العائدة في الاقتراح: «عائدة إلى المجمع وفيها شخصان · مقعدان فارغان» */
 export const returningText = (pickup: Pick<ReturnPickup, "onBoard" | "seatsLeft">) =>
   `عائدة إلى المجمع وفيها ${personsText(pickup.onBoard)} · ${pickup.seatsLeft === 1 ? "مقعد فارغ" : pickup.seatsLeft === 2 ? "مقعدان فارغان" : `${pickup.seatsLeft} مقاعد فارغة`}`;
+
+// ————— سيارة ذاهبة إلى مكان العودة —————
+
+/** سيارة في طريقها الآن (أُرسلت ولم تصل) إلى مكان استلام رحلة عودة أو إلى مكان قريب منه */
+export type IncomingCar = {
+  plate: string;
+  driver: string;
+  /** وجهة السيارة الذاهبة */
+  destination: string;
+  /** بعد وجهتها عن مكان استلام ضيف العودة (كم) */
+  distanceKm: number;
+  /** وقت وصولها المتوقع (بعد استلام ضيفها)، وnull إن كانت في الطريق إلى الاستلام */
+  etaAt: Date | null;
+};
+
+/**
+ * رحلة العودة (أو النقل بين موعدين) تبدأ من مستشفى: السيارات الذاهبة الآن إلى نفس المكان أو إلى مكان على بعد
+ * NEARBY_KM (3 كم) منه أو أقل، الأقرب ثم الأسبق وصولًا. بعد وصول السيارة الذاهبة تصبح متاحة خارج المجمع
+ * فيقترحها suggestReturnRedirects لضيف العودة، فلا تُرسل سيارة من المجمع إلا بعد تنبيه مشرف السيارات.
+ */
+export function incomingCars(
+  trip: { request: VehicleRequest; appointment: ClinicAppointment; from?: ClinicAppointment | null },
+  requests: VehicleRequest[],
+  appointments: ClinicAppointment[],
+  hospitals: Hospital[] = DEFAULT_HOSPITALS,
+  now = new Date(),
+  gpsLive: (plate?: string) => boolean = () => false,
+): IncomingCar[] {
+  const fromHospital = trip.request.direction === "عودة" || isTransfer(trip.request);
+  const pickup = fromHospital ? tripEndpoints(trip.appointment, trip.request.direction, hospitals, trip.from ?? null).from : null;
+  if (!pickup) return [];
+  const cars = new Map<string, IncomingCar>();
+  for (const request of requests) {
+    if (!request.vehiclePlate || request.direction !== "ذهاب" || request.id === trip.request.id) continue;
+    const phase = tripPhase(request, now, gpsLive(request.vehiclePlate));
+    if (phase.kind !== "toPickup" && phase.kind !== "toDestination") continue;
+    const appointment = appointments.find((item) => item.id === request.appointmentId);
+    const hospital = appointment ? appointmentHospital(appointment, hospitals) : null;
+    const place: Point | null = request.destLat !== undefined && request.destLng !== undefined
+      ? { lat: request.destLat, lng: request.destLng }
+      : hospital ? { lat: hospital.lat, lng: hospital.lng } : null;
+    if (!place || !appointment) continue;
+    const km = distanceKm(place, pickup);
+    if (km > NEARBY_KM) continue;
+    const car: IncomingCar = {
+      plate: request.vehiclePlate,
+      driver: request.driver ?? "",
+      destination: hospital?.name ?? appointment.clinic,
+      distanceKm: Math.round(km * 10) / 10,
+      etaAt: phase.kind === "toDestination" ? phase.etaAt : null,
+    };
+    const known = cars.get(car.plate);
+    if (!known || car.distanceKm < known.distanceKm) cars.set(car.plate, car);
+  }
+  return Array.from(cars.values()).sort((a, b) => a.distanceKm - b.distanceKm
+    || (a.etaAt?.getTime() ?? Infinity) - (b.etaAt?.getTime() ?? Infinity));
+}
