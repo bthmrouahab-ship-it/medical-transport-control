@@ -82,7 +82,13 @@ export function statsReport(summary: StatsSummary, title: string, subtitle: stri
         bar: 2,
       },
       { title: "الرحلات حسب المنطقة", sheet: "المناطق", columns: ["المنطقة", "الرحلات", "النسبة"], rows: summary.zones.map((zone) => [zone.zone, zone.trips, `${zoneTotal ? Math.round((zone.trips / zoneTotal) * 100) : 0}%`]), bar: 1 },
-      { title: "نوع المركبة", sheet: "نوع المركبة", columns: ["النوع", "الرحلات"], rows: summary.byKind.map((item) => [item.kind, item.trips]), bar: 1 },
+      {
+        title: "نوع المركبة",
+        sheet: "نوع المركبة",
+        columns: ["النوع", "الرحلات", "السيارات العاملة"],
+        rows: summary.byKind.map((item) => [item.kind, item.trips, summary.workingVehicles?.byKind.find((entry) => entry.kind === item.kind)?.vehicles ?? ""]),
+        bar: 1,
+      },
       { title: "السيارات", sheet: "السيارات", columns: ["السيارة", "السائق", "الرحلات"], rows: summary.vehicles.map((item) => [item.plate, item.driver, item.trips]), bar: 2 },
       { title: "المباني", sheet: "المباني", columns: ["المبنى", "الرحلات"], rows: summary.buildings.map((item) => [`مبنى ${item.building}`, item.trips]), bar: 1 },
       ...(work?.days.length
