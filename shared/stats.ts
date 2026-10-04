@@ -1,6 +1,7 @@
-import { DEFAULT_HOSPITALS, matchHospital, normalizePlaceName, type Hospital } from "./hospitals";
+import { DEFAULT_HOSPITALS, ORIGIN, matchHospital, normalizePlaceName, type Hospital } from "./hospitals";
 import type { HistorySummary } from "./history";
-import type { ClinicAppointment, Vehicle, VehicleRequest } from "./transport";
+import { appointmentDateTime, appointmentHospital, type ClinicAppointment, type Vehicle, type VehicleRequest } from "./transport";
+import { UNKNOWN_TRAVEL_MINUTES, driveMinutes, tripPhase } from "./trips";
 
 /**
  * سجلات الرحلات للإحصائيات: رحلة واحدة لكل موعد، بلا اسم المريض أو رقمه أو شقته.
@@ -28,6 +29,11 @@ export type TripStat = {
   nonMedical: boolean;
   /** رحلات النظام: سيارات أخرى خدمت نفس الموعد (العودة أو النقل بسيارة غير سيارة الذهاب) */
   otherVehicles?: { plate: string; driver: string | null; kind: TripKind }[];
+  /** ملفات Excel: خروج السيارة ودخولها بالدقائق منذ منتصف الليل (الملفات المرفوعة قبل هذه الخانة بلا وقت دقيق) */
+  out?: number;
+  back?: number;
+  /** رحلات النظام: كل رحلة سيارة للموعد (ذهاب أو عودة أو نقل) من إرسالها حتى عودتها إلى المجمع */
+  legs?: TripLeg[];
   /** من الملخص القديم: العدد اليومي ونوع المركبة فقط، بلا ساعة أو وجهة أو سيارة */
   legacy?: boolean;
 };
@@ -92,11 +98,98 @@ export type StatsSummary = {
   vehicles: { plate: string; driver: string; trips: number }[];
   /** السيارات التي عملت في الفترة: عددها بلا تكرار، وحسب نوعها، ومتوسطها وأعلاها في اليوم */
   workingVehicles?: WorkingVehicles;
+  /** ساعات عمل السيارات في كل يوم وفي الفترة */
+  workHours?: WorkHours;
   buildings: { building: string; trips: number }[];
   unmatchedDestinations: number;
   /** رحلات منجزة من الملخص القديم لا تظهر في الساعات والوجهات والسيارات والمباني */
   withoutDetails?: number;
 };
+
+/**
+ * رحلة سيارة لساعات العمل: من خروجها (إرسالها) حتى عودتها إلى المجمع، بالدقائق منذ منتصف ليل يوم الرحلة.
+ * approx: من ملف Excel قديم بلا وقت خروج دقيق (البداية من ساعة الخروج)، فلا يُعرض منه أول خروج وآخر عودة.
+ */
+export type TripLeg = { plate: string; driver: string | null; kind: TripKind; start: number; end: number; approx?: true };
+
+/** ساعات عمل سيارة في يوم: أول خروج وآخر عودة (بالدقائق منذ منتصف الليل) ومجموع وقتها في الرحلات بلا تداخل. */
+export type VehicleDayHours = { date: string; plate: string; driver: string; kind: TripKind; first: number | null; last: number | null; minutes: number };
+/** ساعات عمل سيارة في الفترة: أول خروج وآخر عودة لليوم الواحد فقط */
+export type VehicleHours = { plate: string; driver: string; kind: TripKind; days: number; minutes: number; first: number | null; last: number | null };
+export type WorkHours = {
+  days: VehicleDayHours[];
+  vehicles: VehicleHours[];
+  totalMinutes: number;
+  /** متوسط ساعات السيارة في اليوم الذي عملت فيه */
+  avgDayMinutes: number | null;
+};
+
+/** أطول رحلة تُحسب (مثل مدة الرحلة في ملفات Excel)؛ الأطول خطأ في التسجيل */
+export const MAX_LEG_MINUTES = 6 * 60;
+
+/** «5 س 20 د» */
+export function durationText(minutes: number) {
+  const rounded = Math.round(minutes);
+  const hours = Math.floor(rounded / 60);
+  const rest = rounded % 60;
+  return hours ? (rest ? `${hours} س ${rest} د` : `${hours} س`) : `${rest} د`;
+}
+
+/** «07:05»، وبعد منتصف الليل «00:30 (+1)» */
+export function clockText(minutes: number | null) {
+  if (minutes === null) return "";
+  const day = Math.floor(minutes / (24 * 60));
+  const inDay = Math.round(minutes - day * 24 * 60);
+  const text = `${String(Math.floor(inDay / 60)).padStart(2, "0")}:${String(inDay % 60).padStart(2, "0")}`;
+  return day ? `${text} (+${day})` : text;
+}
+
+/** رحلات السيارات لساعات العمل: رحلات النظام كما هي، وصف ملف Excel من خروج السيارة إلى دخولها. */
+export function tripLegs(trip: TripStat): TripLeg[] {
+  if (trip.legs) return trip.legs;
+  if (!trip.plate || !trip.kind || trip.minutes === null) return [];
+  if (trip.out !== undefined && trip.back !== undefined) return [{ plate: trip.plate, driver: trip.driver, kind: trip.kind, start: trip.out, end: trip.back }];
+  if (trip.hour === null) return [];
+  return [{ plate: trip.plate, driver: trip.driver, kind: trip.kind, start: trip.hour * 60, end: trip.hour * 60 + trip.minutes, approx: true }];
+}
+
+/** مجموع فترات متداخلة بلا تكرار (الرحلة المجمّعة، أو العودة التي تبدأ قبل وصول السيارة إلى المجمع). */
+function unionMinutes(intervals: [number, number][]) {
+  let total = 0;
+  let current: [number, number] | null = null;
+  for (const [start, end] of [...intervals].sort((a, b) => a[0] - b[0])) {
+    if (current && start <= current[1]) current[1] = Math.max(current[1], end);
+    else {
+      if (current) total += current[1] - current[0];
+      current = [start, end];
+    }
+  }
+  return total + (current ? current[1] - current[0] : 0);
+}
+
+/**
+ * رحلة سيارة من النظام: من إرسالها (notificationSentAt، ساعة يوم الموعد) حتى وصولها إلى الوجهة
+ * (GPS أو التأكيد أو الوقت المتوقع)، ومعها بعد رحلة الذهاب طريق العودة الفارغة إلى المجمع تقديريًا
+ * (مثل مكان السيارة في vehicleLocationState). الرحلة الجارية لا تُحسب حتى تصل.
+ */
+function systemLeg(request: VehicleRequest, appointment: ClinicAppointment, hospitals: Hospital[], kind: TripKind, now: Date): TripLeg | null {
+  const sent = request.notificationSentAt?.match(/^(\d{1,2}):(\d{2})/);
+  if (!request.vehiclePlate || !sent) return null;
+  const phase = tripPhase(request, now);
+  if (phase.kind !== "arrived" || !phase.at) return null;
+  const start = Number(sent[1]) * 60 + Number(sent[2]);
+  const midnight = appointmentDateTime({ appointmentDate: appointment.appointmentDate, appointmentAt: "00:00" });
+  let end = Math.round((phase.at.getTime() - midnight.getTime()) / 60000);
+  if (request.direction === "ذهاب") {
+    const hospital = appointmentHospital(appointment, hospitals);
+    const place = request.destLat !== undefined && request.destLng !== undefined
+      ? { lat: request.destLat, lng: request.destLng }
+      : hospital ? { lat: hospital.lat, lng: hospital.lng } : null;
+    end += Math.ceil(place ? driveMinutes(place, { lat: ORIGIN.lat, lng: ORIGIN.lng }, phase.at) : UNKNOWN_TRAVEL_MINUTES - 10);
+  }
+  if (end <= start || end - start > MAX_LEG_MINUTES) return null;
+  return { plate: request.vehiclePlate, driver: request.driver ?? null, kind, start, end };
+}
 
 export type WorkingVehicles = {
   total: number;
@@ -151,6 +244,7 @@ export function tripsFromSystem(
   requests: VehicleRequest[],
   fleet: Pick<Vehicle, "plate" | "kind">[],
   hospitals: Hospital[] = DEFAULT_HOSPITALS,
+  now = new Date(),
 ): TripStat[] {
   const byAppointment = new Map<string, VehicleRequest[]>();
   for (const request of requests) byAppointment.set(request.appointmentId, [...(byAppointment.get(request.appointmentId) ?? []), request]);
@@ -172,6 +266,9 @@ export function tripsFromSystem(
         otherVehicles.push({ plate, driver: item.driver ?? null, kind: kindOf(plate) });
       }
     }
+    const legs = sent.flatMap((item) => systemLeg(item, appointment, hospitals, kindOf(item.vehiclePlate!), now) ?? []);
+    // مدة الرحلة: رحلة سيارة الذهاب من إرسالها حتى عودتها إلى المجمع
+    const main = request ? systemLeg(request, appointment, hospitals, kindOf(request.vehiclePlate!), now) : null;
     const building = appointment.buildingNumber.trim();
     return {
       date: appointment.appointmentDate,
@@ -182,9 +279,10 @@ export function tripsFromSystem(
       plate: request?.vehiclePlate ?? null,
       driver: request?.driver ?? null,
       building: building && building !== "غير محدد" ? building : null,
-      minutes: null,
+      minutes: main ? main.end - main.start : null,
       nonMedical,
       ...(otherVehicles.length ? { otherVehicles } : {}),
+      ...(legs.length ? { legs } : {}),
     };
   });
 }
@@ -313,6 +411,39 @@ const sortDesc = <T extends { trips: number }>(items: T[]) => items.sort((a, b) 
  * السيارات: كل سيارة خدمت الموعد (الذهاب والعودة والنقل)، وعدد السيارات التي عملت في الفترة وفي كل يوم بلا تكرار.
  * legacy: تفاصيل الملخص القديم تُضاف كما هي عندما تشمل الفترة المختارة كل أيامه ولا توجد فلاتر أخرى.
  */
+const driverNames = (drivers: Map<string, number>) => Array.from(drivers).sort((a, b) => b[1] - a[1]).map(([name]) => name).slice(0, 3).join(" / ");
+
+type VehicleDayEntry = { date: string; plate: string; kind: TripKind; drivers: Map<string, number>; intervals: [number, number][]; first: number | null; last: number | null };
+
+/** ساعات العمل: لكل سيارة في كل يوم وقتها في الرحلات بلا تداخل، ثم مجموعها في الفترة (الأكثر عملًا أولًا). */
+function summarizeWorkHours(entries: VehicleDayEntry[]): WorkHours {
+  const sorted = [...entries].map((entry) => ({ entry, minutes: unionMinutes(entry.intervals) }))
+    .sort((a, b) => a.entry.date.localeCompare(b.entry.date) || b.minutes - a.minutes);
+  const byPlate = new Map<string, { kind: TripKind; drivers: Map<string, number>; days: number; minutes: number; first: number | null; last: number | null }>();
+  for (const { entry, minutes } of sorted) {
+    const vehicle = byPlate.get(entry.plate) ?? { kind: entry.kind, drivers: new Map<string, number>(), days: 0, minutes: 0, first: entry.first, last: entry.last };
+    vehicle.days += 1;
+    vehicle.minutes += minutes;
+    for (const [name, count] of Array.from(entry.drivers)) vehicle.drivers.set(name, (vehicle.drivers.get(name) ?? 0) + count);
+    byPlate.set(entry.plate, vehicle);
+  }
+  const days: VehicleDayHours[] = sorted.map(({ entry, minutes }) => ({
+    date: entry.date, plate: entry.plate, driver: driverNames(entry.drivers), kind: entry.kind, first: entry.first, last: entry.last, minutes,
+  }));
+  const vehicles: VehicleHours[] = Array.from(byPlate, ([plate, vehicle]) => ({
+    plate,
+    driver: driverNames(vehicle.drivers),
+    kind: vehicle.kind,
+    days: vehicle.days,
+    minutes: vehicle.minutes,
+    // أول خروج وآخر عودة لليوم الواحد فقط
+    first: vehicle.days === 1 ? vehicle.first : null,
+    last: vehicle.days === 1 ? vehicle.last : null,
+  })).sort((a, b) => b.minutes - a.minutes);
+  const totalMinutes = days.reduce((total, day) => total + day.minutes, 0);
+  return { days, vehicles, totalMinutes, avgDayMinutes: days.length ? Math.round(totalMinutes / days.length) : null };
+}
+
 export function summarizeTrips(trips: TripStat[], hospitals: Hospital[] = DEFAULT_HOSPITALS, legacy: HistorySummary | null = null): StatsSummary {
   const daily = new Map<string, DailyStat>();
   const hours = new Map<number, number>();
@@ -324,6 +455,8 @@ export function summarizeTrips(trips: TripStat[], hospitals: Hospital[] = DEFAUL
   // السيارات التي عملت: نوع كل سيارة، وسيارات كل يوم له تفاصيل (لا أيام الملخص القديم)
   const plateKinds = new Map<string, TripKind>();
   const dayPlates = new Map<string, Set<string>>();
+  // ساعات العمل: رحلات كل سيارة في كل يوم
+  const vehicleDays = new Map<string, VehicleDayEntry>();
   let completedTrips = 0;
   let unmatched = 0;
   let withoutDetails = 0;
@@ -375,6 +508,17 @@ export function summarizeTrips(trips: TripStat[], hospitals: Hospital[] = DEFAUL
       if (!plateKinds.has(vehicle.plate)) plateKinds.set(vehicle.plate, vehicle.kind);
       dayPlates.get(trip.date)!.add(vehicle.plate);
     }
+    for (const leg of tripLegs(trip)) {
+      const key = `${trip.date}|${leg.plate}`;
+      const entry = vehicleDays.get(key) ?? { date: trip.date, plate: leg.plate, kind: leg.kind, drivers: new Map<string, number>(), intervals: [], first: null, last: null };
+      entry.intervals.push([leg.start, leg.end]);
+      if (leg.driver) entry.drivers.set(leg.driver, (entry.drivers.get(leg.driver) ?? 0) + 1);
+      if (!leg.approx) {
+        entry.first = entry.first === null ? leg.start : Math.min(entry.first, leg.start);
+        entry.last = entry.last === null ? leg.end : Math.max(entry.last, leg.end);
+      }
+      vehicleDays.set(key, entry);
+    }
     if (trip.building) buildings.set(trip.building, (buildings.get(trip.building) ?? 0) + 1);
   }
 
@@ -401,7 +545,7 @@ export function summarizeTrips(trips: TripStat[], hospitals: Hospital[] = DEFAUL
   for (const [date, plates] of Array.from(dayPlates)) daily.get(date)!.vehicles = plates.size;
   const days = Array.from(daily.values()).sort((a, b) => a.date.localeCompare(b.date));
   // متوسط السيارات في اليوم من الأيام التي عملت فيها سيارات (لا الأيام القادمة التي لم تُرسل لها سيارة بعد)
-  const vehicleDays = days.map((day) => day.vehicles ?? 0).filter((count) => count > 0);
+  const workingDays = days.map((day) => day.vehicles ?? 0).filter((count) => count > 0);
   const weekdayMap = new Map<string, { trips: number; days: number }>();
   for (const day of days) {
     const entry = weekdayMap.get(day.weekday) ?? { trips: 0, days: 0 };
@@ -434,9 +578,10 @@ export function summarizeTrips(trips: TripStat[], hospitals: Hospital[] = DEFAUL
     workingVehicles: {
       total: vehicles.size,
       byKind: TRIP_KINDS.map((kind) => ({ kind, vehicles: Array.from(plateKinds.values()).filter((item) => item === kind).length })),
-      dailyAverage: vehicleDays.length ? Math.round(vehicleDays.reduce((total, count) => total + count, 0) / vehicleDays.length) : null,
-      dailyMax: vehicleDays.length ? Math.max(...vehicleDays) : null,
+      dailyAverage: workingDays.length ? Math.round(workingDays.reduce((total, count) => total + count, 0) / workingDays.length) : null,
+      dailyMax: workingDays.length ? Math.max(...workingDays) : null,
     },
+    workHours: summarizeWorkHours(Array.from(vehicleDays.values())),
     buildings: sortDesc(Array.from(buildings, ([building, count]) => ({ building, trips: count }))),
     unmatchedDestinations: unmatched,
     withoutDetails,

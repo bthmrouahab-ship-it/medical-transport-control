@@ -1,4 +1,4 @@
-import type { StatsSummary } from "@shared/stats";
+import { clockText, durationText, type StatsSummary } from "@shared/stats";
 import type { GuestRecord, guestStats } from "@shared/guests";
 import { statusText, type ClinicAppointment, type VehicleRequest } from "@shared/transport";
 import { ACTIVITY_ROLES, ACTIVITY_TYPES, DETAIL_LABELS, activityDate, activityTime, type ActivityItem } from "./activity";
@@ -29,9 +29,14 @@ const hm = (iso?: string) => (iso && !Number.isNaN(Date.parse(iso)) ? activityTi
 
 // ————— أقسام الإحصائيات —————
 
+/** بالساعات بخانتين عشريتين (للجمع في Excel) */
+const decimalHours = (minutes: number) => Math.round((minutes / 60) * 100) / 100;
+
 export function statsReport(summary: StatsSummary, title: string, subtitle: string): Report {
   const completion = summary.totalTrips ? Math.round((summary.completedTrips / summary.totalTrips) * 100) : 0;
   const zoneTotal = summary.zones.reduce((total, zone) => total + zone.trips, 0);
+  const work = summary.workHours;
+  const singleDay = new Set(work?.days.map((day) => day.date)).size === 1;
   return {
     title,
     subtitle,
@@ -43,6 +48,12 @@ export function statsReport(summary: StatsSummary, title: string, subtitle: stri
       { label: "السيارات العاملة", value: String(summary.workingVehicles?.total ?? summary.vehicles.length) },
       ...(summary.workingVehicles?.dailyAverage && summary.activeDays > 1
         ? [{ label: "متوسط السيارات يوميًا", value: `${summary.workingVehicles.dailyAverage} (أعلى ${summary.workingVehicles.dailyMax})` }]
+        : []),
+      ...(work?.days.length
+        ? [
+          { label: "ساعات عمل السيارات", value: durationText(work.totalMinutes) },
+          { label: "متوسط ساعات السيارة في اليوم", value: durationText(work.avgDayMinutes ?? 0) },
+        ]
         : []),
       { label: "متوسط المواعيد يوميًا", value: String(summary.activeDays ? Math.round(summary.totalTrips / summary.activeDays) : 0) },
       { label: "متوسط مدة الرحلة", value: summary.avgTripMinutes ? `${summary.avgTripMinutes} دقيقة` : "—" },
@@ -74,6 +85,28 @@ export function statsReport(summary: StatsSummary, title: string, subtitle: stri
       { title: "نوع المركبة", sheet: "نوع المركبة", columns: ["النوع", "الرحلات"], rows: summary.byKind.map((item) => [item.kind, item.trips]), bar: 1 },
       { title: "السيارات", sheet: "السيارات", columns: ["السيارة", "السائق", "الرحلات"], rows: summary.vehicles.map((item) => [item.plate, item.driver, item.trips]), bar: 2 },
       { title: "المباني", sheet: "المباني", columns: ["المبنى", "الرحلات"], rows: summary.buildings.map((item) => [`مبنى ${item.building}`, item.trips]), bar: 1 },
+      ...(work?.days.length
+        ? [
+          {
+            title: "ساعات عمل السيارات",
+            sheet: "ساعات العمل",
+            note: "من خروج السيارة حتى عودتها إلى المجمع، بلا تكرار الرحلات المتداخلة (العودة بعد رحلة الذهاب تقديرية)",
+            columns: ["السيارة", "السائق", "النوع", "أيام العمل", "ساعات العمل", "بالساعات", "متوسط اليوم", ...(singleDay ? ["أول خروج", "آخر عودة"] : [])],
+            rows: work.vehicles.map((item) => [
+              item.plate, item.driver, item.kind, item.days, durationText(item.minutes), decimalHours(item.minutes), durationText(item.minutes / item.days),
+              ...(singleDay ? [clockText(item.first), clockText(item.last)] : []),
+            ]),
+            bar: 5,
+          },
+          {
+            title: "ساعات عمل السيارات يوميًا",
+            sheet: "ساعات العمل يوميًا",
+            columns: ["التاريخ", "السيارة", "السائق", "أول خروج", "آخر عودة", "ساعات العمل", "بالساعات"],
+            rows: work.days.map((day) => [day.date, day.plate, day.driver, clockText(day.first), clockText(day.last), durationText(day.minutes), decimalHours(day.minutes)]),
+            bar: 6,
+          },
+        ]
+        : []),
     ],
   };
 }
