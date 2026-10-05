@@ -22,6 +22,7 @@ import { api, ApiError } from "@/lib/api";
 import { beep } from "@/lib/beep";
 import { DRIVER_LANGS, DRIVER_TEXT, useDriverLang, type DriverLang, type DriverText } from "@/lib/driverI18n";
 import { disablePush, enablePush, pushState, refreshPush, type PushState } from "@/lib/push";
+import { APP_OPEN_EVENT, APP_SHARING_EVENT, driverApp, inDriverApp } from "@/lib/driverApp";
 import { DRIVER_THEMES, useDriverTheme } from "@/lib/driverTheme";
 import { useNow } from "@/lib/useShared";
 
@@ -74,6 +75,7 @@ const guestName = (appointment: ClinicAppointment, namesEn: Record<string, strin
  * تطبيق السائق بالعربية والإنجليزية والأردية: مشاركة موقع السيارة (GPS الهاتف) مع مشرف السيارات،
  * ورحلات سيارته اليوم مع الملاحة والاتصال بالضيف، وتسجيل وصوله واستلام الضيف (بشرط تشغيل الموقع)،
  * وإشعارات الرحلات الجديدة. المتصفح يوقف التتبع إذا أُغلقت الشاشة، لذلك نطلب إبقاءها مضاءة أثناء المشاركة.
+ * في تطبيق شاشة السيارة (driverApp) تبدأ مع المشاركة خدمة ترسل الموقع وتنبّه بالرحلات والتطبيق في الخلفية.
  */
 export default function DriverPage({ profile, onLogout, onChangePassword }: {
   profile: UserProfile;
@@ -87,6 +89,11 @@ export default function DriverPage({ profile, onLogout, onChangePassword }: {
   // الرسائل التي تظهر لاحقًا (بعد تحديث الرحلات أو إرسال الموقع) بلغة السائق الحالية
   const text = useRef(t);
   text.current = t;
+  const langRef = useRef(lang);
+  langRef.current = lang;
+  const [inApp] = useState(inDriverApp);
+  /** خدمة الموقع في التطبيق تعمل بعد أول موقع (بعد إذن الموقع) */
+  const appSharing = useRef(false);
   const [status, setStatus] = useState<Status>("idle");
   const [error, setError] = useState<LocationError | null>(null);
   const [last, setLast] = useState<{ lat: number; lng: number; accuracy: number; at: Date } | null>(null);
@@ -117,6 +124,8 @@ export default function DriverPage({ profile, onLogout, onChangePassword }: {
     wakeLock.current = null;
     lastSent.current = null;
     setStatus("idle");
+    appSharing.current = false;
+    driverApp()?.setSharing(false, "", langRef.current);
     if (plate) api("location", { sharing: false }).catch(() => {});
     if (!silent) toast.success(text.current.sharingStopped);
   }
@@ -139,6 +148,10 @@ export default function DriverPage({ profile, onLogout, onChangePassword }: {
         setLast({ ...point, accuracy: Math.round(position.coords.accuracy), at: new Date(now) });
         setStatus("sharing");
         setError(null);
+        if (!appSharing.current && driverApp()) {
+          appSharing.current = true;
+          driverApp()?.setSharing(true, plate, langRef.current);
+        }
         const previous = lastSent.current;
         const moved = previous ? distanceKm(previous, point) : Infinity;
         if (previous && now - previous.at < SEND_EVERY_MS && moved < MIN_MOVE_KM) return;
@@ -232,9 +245,33 @@ export default function DriverPage({ profile, onLogout, onChangePassword }: {
     const onMessage = (event: MessageEvent) => {
       if (event.data?.type === "open" && typeof event.data.url === "string") openUrl(event.data.url);
     };
+    // إشعار من تطبيق شاشة السيارة
+    const onAppOpen = (event: Event) => {
+      const trip = (event as CustomEvent<unknown>).detail;
+      reveal(typeof trip === "string" && trip ? `trip:${trip}` : "driver-trips", 80);
+    };
     navigator.serviceWorker?.addEventListener("message", onMessage);
-    return () => navigator.serviceWorker?.removeEventListener("message", onMessage);
+    window.addEventListener(APP_OPEN_EVENT, onAppOpen);
+    return () => {
+      navigator.serviceWorker?.removeEventListener("message", onMessage);
+      window.removeEventListener(APP_OPEN_EVENT, onAppOpen);
+    };
   }, []);
+
+  // التطبيق أوقف المشاركة (زر الإيقاف في إشعاره، أو انتهت الجلسة، أو لا سيارة)؛ وبعد إعادة تحميل الصفحة تعود إن كانت تعمل فيه
+  useEffect(() => {
+    const onAppSharing = (event: Event) => {
+      if ((event as CustomEvent<unknown>).detail === false && watchId.current !== null) stop();
+    };
+    window.addEventListener(APP_SHARING_EVENT, onAppSharing);
+    if (plate && driverApp()?.isSharing() && watchId.current === null) start();
+    return () => window.removeEventListener(APP_SHARING_EVENT, onAppSharing);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // لغة إشعارات التطبيق مع لغة الصفحة
+  useEffect(() => {
+    if (appSharing.current) driverApp()?.setSharing(true, plate, lang);
+  }, [lang]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // تحديث الرحلات كل بضع ثوانٍ والتطبيق ظاهر، وفورًا عند العودة إليه
   useEffect(() => {
@@ -353,7 +390,7 @@ export default function DriverPage({ profile, onLogout, onChangePassword }: {
       >
         {plate && <LocationBar t={t} plate={plate} status={status} statusKey={statusKey} last={last} sharing={sharing} onToggle={(on) => (on ? start() : stop())} />}
       </AppHeader>
-      <main className="mx-auto max-w-md space-y-4 p-4 sm:p-6">
+      <main className="mx-auto max-w-md space-y-4 p-4 sm:p-6 md:max-w-4xl">
         <div className="flex items-center justify-between gap-2">
           <Segmented size="sm" label={t.language} value={lang} onChange={setLang} options={DRIVER_LANGS} />
           <button
@@ -376,14 +413,16 @@ export default function DriverPage({ profile, onLogout, onChangePassword }: {
               </p>
             )}
             {sharing ? (
-              <p className="flex items-center gap-1.5 px-1 text-xs text-slate-500 dark:text-slate-400"><SunMedium className="h-4 w-4 shrink-0" /> {t.keepScreen}</p>
+              <p className="flex items-center gap-1.5 px-1 text-xs text-slate-500 dark:text-slate-400">{inApp ? <><Navigation className="h-4 w-4 shrink-0" /> {t.appKeepSharing}</> : <><SunMedium className="h-4 w-4 shrink-0" /> {t.keepScreen}</>}</p>
             ) : !error && (
               <p className="flex items-start gap-2 rounded-2xl bg-amber-50 px-3.5 py-3 text-sm leading-6 text-amber-900 ring-1 ring-inset ring-amber-200 dark:bg-amber-500/10 dark:text-amber-200 dark:ring-amber-500/30">
                 <ArrowUp className="mt-1 h-4 w-4 shrink-0 animate-bounce motion-reduce:animate-none" /> {t.sharingOffHint}
               </p>
             )}
 
-            <PushCard t={t} state={push} onEnable={turnOnPush} />
+            {inApp
+              ? <p className="flex items-center gap-1.5 px-1 text-xs text-slate-500 dark:text-slate-400"><Bell className="h-4 w-4 shrink-0" /> {t.appAlerts}</p>
+              : <PushCard t={t} state={push} onEnable={turnOnPush} />}
 
             <section id="driver-trips" aria-label={t.myTrips} className="space-y-3">
               <div className="flex items-center justify-between gap-2 px-1">
@@ -392,7 +431,7 @@ export default function DriverPage({ profile, onLogout, onChangePassword }: {
               </div>
               {loadError !== null && <p role="alert" className="rounded-xl bg-red-50 p-3 text-sm text-red-700 ring-1 ring-inset ring-red-200 dark:bg-red-500/10 dark:text-red-200 dark:ring-red-500/30">{errorText(loadError, t)}</p>}
               {!trips && loadError === null && <p className="rounded-2xl bg-white p-5 text-center text-sm text-slate-500 shadow-card dark:bg-slate-900 dark:text-slate-400">{t.loading}</p>}
-              {trips && (activeTrips.length ? activeTrips.map(({ request, appointment }) => (
+              {trips && (activeTrips.length ? <div className="grid items-start gap-3 md:grid-cols-2">{activeTrips.map(({ request, appointment }) => (
                 <TripCard
                   key={request.id}
                   t={t}
@@ -409,7 +448,7 @@ export default function DriverPage({ profile, onLogout, onChangePassword }: {
                   busy={busy === request.id}
                   onAction={(action) => act(request, action)}
                 />
-              )) : (
+              ))}</div> : (
                 <div className="rounded-2xl bg-white shadow-card dark:bg-slate-900 dark:shadow-none dark:ring-1 dark:ring-white/10">
                   <EmptyState icon={CheckCircle2} title={t.noTrips} hint={push === "on" ? t.noTripsHintPush : t.noTripsHint} />
                 </div>
@@ -463,7 +502,7 @@ function LocationBar({ t, plate, status, statusKey, last, sharing, onToggle }: {
         : { strip: "bg-amber-400/[0.08]", chip: "bg-amber-400/15 text-amber-100", dot: "bg-amber-400" };
   return (
     <div className={cx("border-t border-white/10 transition-colors duration-300", tone.strip)}>
-      <div className="mx-auto flex max-w-md items-center gap-3 px-4 py-2.5 sm:px-6">
+      <div className="mx-auto flex max-w-md items-center gap-3 px-4 py-2.5 sm:px-6 md:max-w-4xl">
         <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white/10">
           {live ? <LocateFixed className="h-5 w-5 text-emerald-300" /> : <CarFront className="h-5 w-5 text-slate-200" />}
         </span>

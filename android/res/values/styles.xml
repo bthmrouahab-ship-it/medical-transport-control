@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- ألوان النظام: الكحلي للإطار، وخلفية الصفحة أثناء التحميل -->
+    <style name="AppTheme" parent="@android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/page</item>
+        <item name="android:statusBarColor">@color/navy</item>
+        <item name="android:navigationBarColor">@color/navy</item>
+        <item name="android:colorPrimary">@color/navy</item>
+        <item name="android:colorPrimaryDark">@color/navy</item>
+        <item name="android:colorAccent">@color/brand</item>
+    </style>
+    <color name="navy">#FF0B2545</color>
+    <color name="brand">#FFDA291C</color>
+    <color name="page">#FFF4F6F9</color>
+    <color name="white">#FFFFFFFF</color>
+</resources>

@@ -109,3 +109,8 @@ temp/
 # إعداد قاعدة البيانات على Hostinger (فيه كلمة المرور)
 api/config.php
 althumama-config.php
+
+# تطبيق السائق (android/build.sh): android.jar المحمّل، وملف التوقيع لا يُرفع أبدًا
+android/.cache/
+*.jks
+*.keystore

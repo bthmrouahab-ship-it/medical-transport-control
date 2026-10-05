@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { ExternalLink, Share, ShieldAlert, SquarePlus, X } from "lucide-react";
 import { installNeedsChrome, openInChromeLink } from "@/lib/browser";
+import { inDriverApp } from "@/lib/driverApp";
 import { DRIVER_TEXT, storedDriverLang } from "@/lib/driverI18n";
 import { btn, cx } from "./ui-kit";
 
@@ -42,7 +43,8 @@ export default function InstallPrompt() {
   const [installEvent, setInstallEvent] = useState<InstallPromptEvent | null>(null);
   const [ios] = useState(() => isIos() && !isStandalone());
   const [needsChrome] = useState(() => installNeedsChrome() && !isStandalone());
-  const [hidden, setHidden] = useState(() => isStandalone() || recentlyDismissed());
+  // داخل تطبيق السائق لشاشة السيارة (APK) لا معنى للتثبيت
+  const [hidden, setHidden] = useState(() => isStandalone() || recentlyDismissed() || inDriverApp());
 
   useEffect(() => {
     const onPrompt = (event: Event) => {
