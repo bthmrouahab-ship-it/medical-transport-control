@@ -11,6 +11,9 @@ DirectoryIndex index.html
   RewriteRule ^ index.html [L]
 </IfModule>
 
+# تطبيق السائق لشاشة السيارة: يُحمَّل من https://althumamacar.sifr-qr.com/driver.apk
+AddType application/vnd.android.package-archive .apk
+
 <IfModule mod_headers.c>
   Header always set X-Frame-Options "DENY"
   Header always set X-Content-Type-Options "nosniff"
@@ -26,8 +29,8 @@ DirectoryIndex index.html
   <FilesMatch "\.(js|css)$">
     Header set Cache-Control "public, max-age=31536000, immutable"
   </FilesMatch>
-  # عامل الخدمة وملف التثبيت يُحدَّثان مع كل نشر
-  <FilesMatch "^(sw\.js|manifest\.json)$">
+  # عامل الخدمة وملف التثبيت وتطبيق السائق (APK) تُحدَّث مع كل نشر
+  <FilesMatch "^(sw\.js|manifest\.json|driver\.apk)$">
     Header set Cache-Control "no-cache"
   </FilesMatch>
 </IfModule>
