@@ -14,10 +14,11 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { AlarmClock, BarChart3, Building2, CalendarClock, CalendarDays, CarFront, CheckCircle2, Clock3, MapPinned, PieChart as PieIcon, Table2, Timer, TrendingUp, Truck } from "lucide-react";
+import { AlarmClock, BarChart3, Building2, CalendarClock, CalendarDays, CarFront, CheckCircle2, Clock3, MapPinned, PieChart as PieIcon, Table2, TrendingUp, Truck } from "lucide-react";
 import { BOOKING_HINTS, DELAY_STAGES, TRIP_KINDS, clockText, durationText, type ServiceSummary, type StatsFilter, type StatsSummary } from "@shared/stats";
-import { BUS_ROLE_LABELS, type BusRole } from "@shared/transport";
+import { BUS_ROLE_LABELS, type BusRole, type VehicleKind } from "@shared/transport";
 import { Badge, Panel, Stat, btn, cx } from "./ui-kit";
+import { KindIcon, KindLabel } from "./VehiclePicker";
 
 // ألوان المخططات (الوضع الفاتح): السلسلة الأولى أزرق، الثانية برتقالي؛ النص بألوان النص لا بلون السلسلة
 const SERIES_1 = "#2a78d6";
@@ -45,8 +46,10 @@ function Pick({ onClick, label, children, className = "" }: { onClick?: () => vo
 const count = (value: number) => value.toLocaleString("en");
 const share = (part: number, total: number) => (total ? Math.round((part / total) * 100) : 0);
 
-export default function HistoryCharts({ summary, onFilter, service, trackedSince }: {
+export default function HistoryCharts({ summary, onFilter, service, trackedSince, fleetKinds }: {
   summary: StatsSummary;
+  /** نوع كل سيارة في قائمة السيارات (للسيارات بلا نوع في الملخص القديم) */
+  fleetKinds?: Map<string, VehicleKind>;
   onFilter?: (patch: Partial<StatsFilter>) => void;
   /** وقت توفر السيارات في الخدمة للفترة (null: لم يُحمَّل) */
   service?: ServiceSummary | null;
@@ -56,7 +59,7 @@ export default function HistoryCharts({ summary, onFilter, service, trackedSince
   const [showTable, setShowTable] = useState(false);
   const completion = share(summary.completedTrips, summary.totalTrips);
   // الرحلات المنجزة: رحلات السيارات ذهابًا وعودة (ملفات Excel بلا اتجاه: رحلة لكل موعد منجز)
-  const directions = summary.directions ?? { go: summary.completedTrips, back: 0, unknown: 0 };
+  const directions = summary.directions ?? { go: summary.completedTrips, back: 0, unknown: 0, backOnly: 0 };
   const carTrips = directions.go + directions.back + directions.unknown;
   const oneDay = summary.activeDays <= 1;
   const booking = summary.booking ?? { scheduled: 0, sameDay: 0, unknown: 0 };
@@ -86,7 +89,7 @@ export default function HistoryCharts({ summary, onFilter, service, trackedSince
 
   return (
     <div className="space-y-6">
-      <div className={cx("grid grid-cols-2 gap-3 sm:grid-cols-3 lg:gap-4", oneDay ? "lg:grid-cols-5" : "2xl:grid-cols-6")}>
+      <div className={cx("grid grid-cols-2 gap-3 sm:grid-cols-3 lg:gap-4", oneDay ? "lg:grid-cols-4" : "lg:grid-cols-5")}>
         <Stat icon={CalendarDays} tone="blue" label="إجمالي المواعيد" value={count(summary.totalTrips)} hint={`${summary.activeDays} يوم`} />
         <Stat
           icon={CheckCircle2}
@@ -94,7 +97,7 @@ export default function HistoryCharts({ summary, onFilter, service, trackedSince
           label="الرحلات المنجزة"
           title={`نسبة الإنجاز: ${count(summary.completedTrips)} موعد أُرسلت له سيارة من ${count(summary.totalTrips)}`}
           value={<span className="flex flex-wrap items-baseline gap-x-2">{count(carTrips)}<span className="rounded-full bg-emerald-50 px-2 py-0.5 text-sm font-semibold text-emerald-700">{completion}%</span></span>}
-          details={<>ذهاب {count(directions.go)} · عودة {count(directions.back)}{directions.unknown ? <span className="text-slate-400" title="رحلات ملفات Excel بلا اتجاه"> · Excel {count(directions.unknown)}</span> : null}</>}
+          details={<>ذهاب {count(directions.go)} · عودة {count(directions.back)}{directions.backOnly ? <span className="text-slate-400" title="طلبات عودة من المستشفى بلا رحلة ذهاب"> (منها {count(directions.backOnly)} عودة فقط)</span> : null}{directions.unknown ? <span className="text-slate-400" title="رحلات ملفات Excel بلا اتجاه"> · Excel {count(directions.unknown)}</span> : null}</>}
         />
         <Stat
           icon={CarFront}
@@ -119,7 +122,6 @@ export default function HistoryCharts({ summary, onFilter, service, trackedSince
           details={booked ? undefined : "تُحسب للمواعيد المسجلة بعد تحديث النظام"}
         />
         {!oneDay && <Stat icon={TrendingUp} tone="violet" label="متوسط المواعيد يوميًا" value={String(dailyAverage)} />}
-        <Stat icon={Timer} tone="cyan" label="متوسط مدة الرحلة" value={summary.avgTripMinutes ? `${summary.avgTripMinutes} د` : "—"} />
       </div>
 
       {/* عدة أيام: المخطط اليومي والعجلة ثم التأخير؛ يوم واحد: العجلة والتأخير جنبًا إلى جنب */}
@@ -163,7 +165,7 @@ export default function HistoryCharts({ summary, onFilter, service, trackedSince
         </Panel>
       ) : null}
 
-      <div className="grid gap-6 lg:grid-cols-2">
+      <div className={cx("grid gap-6", !oneDay && "lg:grid-cols-2")}>
         <Panel icon={Clock3} title="خروج السيارات حسب الساعة" description={peak ? `الذروة الساعة ${peak.hour}:00 (${peak.trips} رحلة)` : undefined} bodyClassName="p-5">
           <div dir="ltr" className="h-56">
             <ResponsiveContainer width="100%" height="100%">
@@ -177,7 +179,7 @@ export default function HistoryCharts({ summary, onFilter, service, trackedSince
             </ResponsiveContainer>
           </div>
         </Panel>
-        <Panel icon={BarChart3} title="متوسط المواعيد حسب اليوم" description="أيام الأسبوع التي فيها رحلات" bodyClassName="p-5">
+        {!oneDay && <Panel icon={BarChart3} title="متوسط المواعيد حسب اليوم" description="أيام الأسبوع التي فيها رحلات" bodyClassName="p-5">
           <div dir="ltr" className="h-56">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={weekdays} margin={{ top: 8, right: 8, bottom: 0, left: -16 }}>
@@ -189,7 +191,7 @@ export default function HistoryCharts({ summary, onFilter, service, trackedSince
               </BarChart>
             </ResponsiveContainer>
           </div>
-        </Panel>
+        </Panel>}
       </div>
 
       <div className="grid items-start gap-6 lg:grid-cols-[1.4fr_1fr]">
@@ -268,10 +270,16 @@ export default function HistoryCharts({ summary, onFilter, service, trackedSince
         <Panel icon={Truck} title="السيارات الأكثر عملًا" count={summary.vehicles.length || undefined} description={summary.vehicles.length ? `${summary.vehicles.length} سيارة عملت في الفترة (ومنها سيارات العودة)` : undefined} bodyClassName="px-3 py-2">
           {!summary.vehicles.length && <NoData />}
           <ul className="max-h-72 divide-y divide-slate-100 overflow-auto text-sm">
-            {summary.vehicles.slice(0, 20).map((item) => (
+            {summary.vehicles.slice(0, 20).map((vehicle) => ({ ...vehicle, kind: vehicle.kind ?? fleetKinds?.get(vehicle.plate) ?? null })).map((item) => (
               <li key={item.plate}>
                 <Pick onClick={pick({ plate: item.plate })} label={`السيارة ${item.plate}`} className="flex justify-between gap-3 rounded-lg px-2 py-2.5">
-                  <span className="min-w-0 truncate"><span dir="ltr" className="font-semibold text-ink">{item.plate}</span> <span className="text-xs text-slate-500">{item.driver}</span></span>
+                  <span className="flex min-w-0 items-center gap-2.5">
+                    {item.kind ? <KindIcon vehicle={{ kind: item.kind }} size="sm" /> : <span className="h-6 w-6 shrink-0" />}
+                    <span className="min-w-0">
+                      <span className="block truncate"><span dir="ltr" className="font-semibold text-ink">{item.plate}</span> <span className="text-xs text-slate-500">{item.driver}</span></span>
+                      {item.kind && <span className="block text-[11px]"><KindLabel vehicle={{ kind: item.kind }} /></span>}
+                    </span>
+                  </span>
                   <span className="font-semibold text-ink tabular">{item.trips}</span>
                 </Pick>
               </li>
@@ -355,11 +363,11 @@ type WheelSlice = { name: string; value: number; fill: string };
  * عجلة المواعيد والرحلات: الحلقة الداخلية المواعيد (المنجزة وما لم يُنجز)، والخارجية رحلات السيارات
  * المنجزة ذهابًا وعودة. الأرقام مكتوبة بجانبها (لا يُعتمد على اللون وحده).
  */
-function TripsWheel({ summary, directions, oneDay }: { summary: StatsSummary; directions: { go: number; back: number; unknown: number }; oneDay: boolean }) {
+function TripsWheel({ summary, directions, oneDay }: { summary: StatsSummary; directions: NonNullable<StatsSummary["directions"]>; oneDay: boolean }) {
   const open = summary.totalTrips - summary.completedTrips;
   const appointments: WheelSlice[] = [
     { name: "مواعيد منجزة", value: summary.completedTrips, fill: SERIES_1 },
-    { name: "لم تُرسل لها سيارة", value: open, fill: REST },
+    { name: "مواعيد غير منجزة", value: open, fill: REST },
   ].filter((slice) => slice.value > 0);
   const trips: WheelSlice[] = [
     { name: "رحلات ذهاب", value: directions.go, fill: GO },
@@ -367,12 +375,33 @@ function TripsWheel({ summary, directions, oneDay }: { summary: StatsSummary; di
     { name: "رحلات بلا اتجاه (Excel)", value: directions.unknown, fill: "#e2e8f0" },
   ].filter((slice) => slice.value > 0);
   const carTrips = directions.go + directions.back + directions.unknown;
-  const rows = [
+  // المواعيد المنجزة برحلة عودة فقط (طلب العودة فقط من المستشفى): لذلك قد تزيد المنجزة على رحلات الذهاب
+  const backOnly = directions.backOnly;
+  type Row = { label: string; value: number; fill: string | null; note: string | null; title?: string; subs?: { label: string; value: number; title?: string }[] };
+  const rows: Row[] = [
     { label: "المواعيد", value: summary.totalTrips, fill: null, note: null },
-    { label: "منجزة", value: summary.completedTrips, fill: SERIES_1, note: `${share(summary.completedTrips, summary.totalTrips)}%` },
-    { label: "بلا سيارة", value: open, fill: REST, note: `${share(open, summary.totalTrips)}%` },
-    { label: "ذهاب", value: directions.go, fill: GO, note: `${share(directions.go, carTrips)}%` },
-    { label: "عودة", value: directions.back, fill: BACK, note: `${share(directions.back, carTrips)}%` },
+    {
+      label: "منجزة",
+      value: summary.completedTrips,
+      fill: SERIES_1,
+      note: `${share(summary.completedTrips, summary.totalTrips)}%`,
+      title: "مواعيد أُرسلت لها سيارة",
+      subs: backOnly
+        ? [
+          ...(!directions.unknown ? [{ label: "برحلة ذهاب", value: summary.completedTrips - backOnly }] : []),
+          { label: "عودة فقط من المستشفى", value: backOnly, title: "طلب عودة من المستشفى بلا رحلة ذهاب (ذهب الضيف بنفسه أو بالإسعاف)" },
+        ]
+        : undefined,
+    },
+    { label: "غير منجزة", value: open, fill: REST, note: `${share(open, summary.totalTrips)}%`, title: "لم تُرسل لها سيارة" },
+    { label: "رحلات ذهاب", value: directions.go, fill: GO, note: `${share(directions.go, carTrips)}%` },
+    {
+      label: "رحلات عودة",
+      value: directions.back,
+      fill: BACK,
+      note: `${share(directions.back, carTrips)}%`,
+      subs: backOnly ? [{ label: "منها لطلبات العودة فقط", value: backOnly }] : undefined,
+    },
     ...(directions.unknown ? [{ label: "Excel بلا اتجاه", value: directions.unknown, fill: "#e2e8f0", note: null }] : []),
   ];
   return (
@@ -397,15 +426,23 @@ function TripsWheel({ summary, directions, oneDay }: { summary: StatsSummary; di
         </div>
         <ul className="divide-y divide-slate-100 text-sm">
           {rows.map((row) => (
-            <li key={row.label} className="flex items-center justify-between gap-3 py-2">
-              <span className="flex items-center gap-2 text-slate-600">
-                {row.fill ? <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: row.fill }} /> : <span className="h-2.5 w-2.5 shrink-0" />}
-                {row.label}
-              </span>
-              <span className="flex shrink-0 items-baseline gap-2">
-                {row.note && <span className="text-xs text-slate-400">{row.note}</span>}
-                <span className="font-semibold tabular text-ink">{count(row.value)}</span>
-              </span>
+            <li key={row.label} className="py-2">
+              <div title={row.title} className="flex items-center justify-between gap-3">
+                <span className="flex items-center gap-2 text-slate-600">
+                  {row.fill ? <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: row.fill }} /> : <span className="h-2.5 w-2.5 shrink-0" />}
+                  {row.label}
+                </span>
+                <span className="flex shrink-0 items-baseline gap-2">
+                  {row.note && <span className="text-xs text-slate-400">{row.note}</span>}
+                  <span className="font-semibold tabular text-ink">{count(row.value)}</span>
+                </span>
+              </div>
+              {row.subs?.map((sub) => (
+                <div key={sub.label} title={sub.title} className="mt-1 flex items-center justify-between gap-3 ps-[18px] text-xs text-slate-500">
+                  <span>{sub.label}</span>
+                  <span className="font-medium tabular text-slate-600">{count(sub.value)}</span>
+                </div>
+              ))}
             </li>
           ))}
         </ul>

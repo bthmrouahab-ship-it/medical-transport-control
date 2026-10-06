@@ -161,6 +161,7 @@ export default function StatsPanel({ canEdit, actor, hospitals, fleet, appointme
     };
   }, [range.since, range.until]);
   const operations = useMemo(() => summarizeOperations(filteredTrips, opsLog), [filteredTrips, opsLog]);
+  const fleetKinds = useMemo(() => new Map(fleet.map((vehicle) => [vehicle.plate, vehicle.kind])), [fleet]);
 
   const service = useMemo((): ServiceSummary | null => {
     if (!serviceLog) return null;
@@ -313,7 +314,7 @@ export default function StatsPanel({ canEdit, actor, hospitals, fleet, appointme
         <div className="flex min-h-64 items-center justify-center rounded-2xl bg-white text-slate-400 shadow-card ring-1 ring-slate-200/80"><Loader2 className="h-6 w-6 animate-spin" /><span className="sr-only">جارٍ التحميل</span></div>
       ) : summary.totalTrips ? (
         <>
-          <HistoryCharts summary={summary} onFilter={update} service={service} trackedSince={serviceLog?.trackedSince ?? null} />
+          <HistoryCharts summary={summary} onFilter={update} service={service} trackedSince={serviceLog?.trackedSince ?? null} fleetKinds={fleetKinds} />
           <OperationsStats ops={operations} onFilter={update} />
           <StatsAppointments trips={filteredTrips} appointments={appointments} requests={requests} />
         </>

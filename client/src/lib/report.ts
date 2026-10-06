@@ -51,7 +51,7 @@ export function statsReport(summary: StatsSummary, title: string, subtitle: stri
   const zoneTotal = summary.zones.reduce((total, zone) => total + zone.trips, 0);
   const work = summary.workHours;
   const singleDay = new Set(work?.days.map((day) => day.date)).size === 1;
-  const directions = summary.directions ?? { go: summary.completedTrips, back: 0, unknown: 0 };
+  const directions = summary.directions ?? { go: summary.completedTrips, back: 0, unknown: 0, backOnly: 0 };
   const booking = summary.booking;
   const delays = summary.delays;
   const kinds = summary.workingVehicles?.byKind.filter((item) => item.vehicles).map((item) => `${item.kind} ${item.vehicles}`).join(" · ");
@@ -65,6 +65,8 @@ export function statsReport(summary: StatsSummary, title: string, subtitle: stri
       { label: "رحلات الذهاب", value: directions.go.toLocaleString("en") },
       { label: "رحلات العودة", value: directions.back.toLocaleString("en") },
       { label: "المواعيد المنجزة", value: summary.completedTrips.toLocaleString("en") },
+      ...(directions.backOnly ? [{ label: "منها طلبات عودة فقط من المستشفى (بلا رحلة ذهاب)", value: directions.backOnly.toLocaleString("en") }] : []),
+      { label: "المواعيد غير المنجزة", value: (summary.totalTrips - summary.completedTrips).toLocaleString("en") },
       { label: "نسبة الإنجاز", value: `${completion}%` },
       ...(booking && booking.scheduled + booking.sameDay
         ? [
@@ -121,7 +123,7 @@ export function statsReport(summary: StatsSummary, title: string, subtitle: stri
         rows: summary.byKind.map((item) => [item.kind, item.trips, summary.workingVehicles?.byKind.find((entry) => entry.kind === item.kind)?.vehicles ?? ""]),
         bar: 1,
       },
-      { title: "السيارات", sheet: "السيارات", columns: ["السيارة", "السائق", "الرحلات"], rows: summary.vehicles.map((item) => [item.plate, item.driver, item.trips]), bar: 2 },
+      { title: "السيارات", sheet: "السيارات", columns: ["السيارة", "النوع", "السائق", "الرحلات"], rows: summary.vehicles.map((item) => [item.plate, item.kind ?? "", item.driver, item.trips]), bar: 3 },
       { title: "المباني", sheet: "المباني", columns: ["المبنى", "الرحلات"], rows: summary.buildings.map((item) => [`مبنى ${item.building}`, item.trips]), bar: 1 },
       ...(work?.days.length
         ? [
