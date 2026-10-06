@@ -134,14 +134,16 @@ export function Panel({ id, title, description, icon: IconComponent, tone = "neu
 }
 
 /** بطاقة رقم (مؤشر): العنوان، ثم الرقم، وأيقونة بلون معناه. */
-export function Stat({ label, value, icon: IconComponent, tone = "neutral", hint }: { label: string; value: ReactNode; icon: Icon; tone?: Tone; hint?: ReactNode }) {
+/** details: سطر تفصيل يظهر دائمًا ويلتف (مثل ذهاب وعودة، أو أنواع السيارات) */
+export function Stat({ label, value, icon: IconComponent, tone = "neutral", hint, details, title }: { label: string; value: ReactNode; icon: Icon; tone?: Tone; hint?: ReactNode; details?: ReactNode; title?: string }) {
   return (
-    <div className="flex items-center gap-3 rounded-2xl bg-white p-3.5 shadow-card ring-1 ring-slate-900/[0.03] sm:gap-4 sm:p-4">
+    <div title={title} className="flex items-center gap-3 rounded-2xl bg-white p-3.5 shadow-card ring-1 ring-slate-900/[0.03] sm:gap-4 sm:p-4">
       <span className={cx("flex h-9 w-9 shrink-0 items-center justify-center rounded-xl sm:h-11 sm:w-11", TONES[tone].icon)}><IconComponent className="h-[18px] w-[18px] sm:h-5 sm:w-5" /></span>
       <div className="min-w-0">
         <p className="text-xs font-medium leading-snug text-slate-500 sm:text-[13px]">{label}</p>
         <p className="text-2xl font-semibold leading-tight text-ink">{value}</p>
         {hint && <p className="hidden truncate text-xs text-slate-400 sm:block">{hint}</p>}
+        {details && <p className="mt-0.5 text-xs leading-5 text-slate-600">{details}</p>}
       </div>
     </div>
   );

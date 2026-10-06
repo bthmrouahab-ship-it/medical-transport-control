@@ -1,6 +1,7 @@
-import { clockText, durationText, type StatsSummary } from "@shared/stats";
+import { BOOKING_LABELS, DELAY_LABELS, DELAY_STAGES, bookingOf, clockText, durationText, requestTiming, type ServiceSummary, type StatsSummary } from "@shared/stats";
 import type { GuestRecord, guestStats } from "@shared/guests";
-import { statusText, type ClinicAppointment, type VehicleRequest } from "@shared/transport";
+import { DEFAULT_HOSPITALS, type Hospital } from "@shared/hospitals";
+import { BUS_ROLE_LABELS, statusText, type ClinicAppointment, type VehicleRequest } from "@shared/transport";
 import { ACTIVITY_ROLES, ACTIVITY_TYPES, DETAIL_LABELS, activityDate, activityTime, type ActivityItem } from "./activity";
 
 /**
@@ -32,20 +33,36 @@ const hm = (iso?: string) => (iso && !Number.isNaN(Date.parse(iso)) ? activityTi
 /** بالساعات بخانتين عشريتين (للجمع في Excel) */
 const decimalHours = (minutes: number) => Math.round((minutes / 60) * 100) / 100;
 
-export function statsReport(summary: StatsSummary, title: string, subtitle: string): Report {
+export function statsReport(summary: StatsSummary, title: string, subtitle: string, service: ServiceSummary | null = null): Report {
   const completion = summary.totalTrips ? Math.round((summary.completedTrips / summary.totalTrips) * 100) : 0;
   const zoneTotal = summary.zones.reduce((total, zone) => total + zone.trips, 0);
   const work = summary.workHours;
   const singleDay = new Set(work?.days.map((day) => day.date)).size === 1;
+  const directions = summary.directions ?? { go: summary.completedTrips, back: 0, unknown: 0 };
+  const booking = summary.booking;
+  const delays = summary.delays;
+  const kinds = summary.workingVehicles?.byKind.filter((item) => item.vehicles).map((item) => `${item.kind} ${item.vehicles}`).join(" · ");
+  const workOf = new Map((work?.vehicles ?? []).map((item) => [item.plate, item.minutes]));
   return {
     title,
     subtitle,
     kpis: [
       { label: "إجمالي المواعيد", value: summary.totalTrips.toLocaleString("en") },
-      { label: "الرحلات المنجزة", value: summary.completedTrips.toLocaleString("en") },
+      { label: "الرحلات المنجزة (ذهاب وعودة)", value: (directions.go + directions.back + directions.unknown).toLocaleString("en") },
+      { label: "رحلات الذهاب", value: directions.go.toLocaleString("en") },
+      { label: "رحلات العودة", value: directions.back.toLocaleString("en") },
+      { label: "المواعيد المنجزة", value: summary.completedTrips.toLocaleString("en") },
       { label: "نسبة الإنجاز", value: `${completion}%` },
+      ...(booking && booking.scheduled + booking.sameDay
+        ? [
+          { label: "مواعيد مجدولة (قبل يومها)", value: booking.scheduled.toLocaleString("en") },
+          { label: "مواعيد عاجلة (في يومها)", value: booking.sameDay.toLocaleString("en") },
+        ]
+        : []),
+      ...(delays?.trips ? [{ label: "رحلات فيها تأخير", value: `${delays.late} من ${delays.trips}` }] : []),
+      ...(delays?.lateToAppointment.measured ? [{ label: "وصل الضيف بعد موعده", value: `${delays.lateToAppointment.trips} من ${delays.lateToAppointment.measured}` }] : []),
       { label: "أيام العمل", value: String(summary.activeDays) },
-      { label: "السيارات العاملة", value: String(summary.workingVehicles?.total ?? summary.vehicles.length) },
+      { label: "السيارات العاملة", value: `${summary.workingVehicles?.total ?? summary.vehicles.length}${kinds ? ` (${kinds})` : ""}` },
       ...(summary.workingVehicles?.dailyAverage && summary.activeDays > 1
         ? [{ label: "متوسط السيارات يوميًا", value: `${summary.workingVehicles.dailyAverage} (أعلى ${summary.workingVehicles.dailyMax})` }]
         : []),
@@ -55,7 +72,8 @@ export function statsReport(summary: StatsSummary, title: string, subtitle: stri
           { label: "متوسط ساعات السيارة في اليوم", value: durationText(work.avgDayMinutes ?? 0) },
         ]
         : []),
-      { label: "متوسط المواعيد يوميًا", value: String(summary.activeDays ? Math.round(summary.totalTrips / summary.activeDays) : 0) },
+      ...(service?.days.length ? [{ label: "التوفر في الخدمة", value: durationText(service.totalMinutes) }] : []),
+      ...(summary.activeDays > 1 ? [{ label: "متوسط المواعيد يوميًا", value: String(Math.round(summary.totalTrips / summary.activeDays)) }] : []),
       { label: "متوسط مدة الرحلة", value: summary.avgTripMinutes ? `${summary.avgTripMinutes} دقيقة` : "—" },
     ],
     sections: [
@@ -113,6 +131,45 @@ export function statsReport(summary: StatsSummary, title: string, subtitle: stri
           },
         ]
         : []),
+      ...(delays?.trips
+        ? [{
+          title: "تأخير الرحلات",
+          sheet: "التأخير",
+          note: `${delays.late} من ${delays.trips} رحلة سيارة فيها تأخير (من رحلات النظام)`,
+          columns: ["متى", "المرحلة", "الشرط", "الرحلات", "متوسط التأخير (د)"],
+          rows: DELAY_STAGES.map((item) => {
+            const stat = delays.stages.find((entry) => entry.stage === item.stage)!;
+            return [item.when, item.label, item.hint, stat.trips, stat.avgMinutes ?? ""];
+          }),
+          bar: 3,
+        }]
+        : []),
+      ...(service?.days.length
+        ? [
+          {
+            title: "التوفر في الخدمة",
+            sheet: "التوفر في الخدمة",
+            note: "من تشغيل السيارة (متاحة ولها سائق) حتى إيقافها، ونسبة التشغيل: ساعات العمل من ساعات التوفر",
+            columns: ["السيارة", "السائق", "النوع", "تخصيص الباص", "أيام الخدمة", "التوفر في الخدمة", "بالساعات", "ساعات العمل", "نسبة التشغيل", ...(singleDay ? ["التشغيل", "الإيقاف"] : [])],
+            rows: service.vehicles.map((item) => {
+              const worked = workOf.get(item.plate) ?? 0;
+              return [
+                item.plate, item.driver, item.kind, item.busRoles.map((role) => BUS_ROLE_LABELS[role]).join("، "), item.days, durationText(item.minutes), decimalHours(item.minutes),
+                worked ? durationText(worked) : "", item.minutes ? `${Math.round((Math.min(worked, item.minutes) / item.minutes) * 100)}%` : "",
+                ...(singleDay ? [clockText(item.first), clockText(item.last)] : []),
+              ];
+            }),
+            bar: 6,
+          },
+          {
+            title: "التوفر في الخدمة يوميًا",
+            sheet: "التوفر يوميًا",
+            columns: ["التاريخ", "السيارة", "السائق", "النوع", "تخصيص الباص", "التشغيل", "الإيقاف", "التوفر في الخدمة", "بالساعات"],
+            rows: service.days.map((day) => [day.date, day.plate, day.driver, day.kind, day.busRole ? BUS_ROLE_LABELS[day.busRole] : "", clockText(day.first), clockText(day.last), durationText(day.minutes), decimalHours(day.minutes)]),
+            bar: 8,
+          },
+        ]
+        : []),
     ],
   };
 }
@@ -127,6 +184,7 @@ export function tripsSection(
   to?: string,
   /** ضيف الموعد من القائمة (للرقم الصحي والعمر: في الإحصائيات فقط) */
   guestOf?: (appointment: ClinicAppointment) => GuestRecord | undefined,
+  hospitals: Hospital[] = DEFAULT_HOSPITALS,
 ): ReportSection {
   const inPeriod = (date: string) => (!from || date >= from) && (!to || date <= to);
   // أقدم عملية أولًا حتى يُحفظ أول تسجيل لكل مرحلة
@@ -166,6 +224,9 @@ export function tripsSection(
       };
       const cancel = find("appointment.cancel");
       const guest = appointment.category === "غير طبية" ? undefined : guestOf?.(appointment);
+      const booking = bookingOf(appointment);
+      const stages = Array.from(new Set(requests.filter((request) => request.appointmentId === appointment.id)
+        .flatMap((request) => requestTiming(request, appointment, hospitals)?.stages ?? [])));
       return [
         appointment.appointmentDate,
         appointment.appointmentAt,
@@ -180,6 +241,7 @@ export function tripsSection(
         appointment.assistance.join("، "),
         statusText(appointment.status),
         who(find("appointment.create")),
+        booking ? BOOKING_LABELS[booking] : "",
         step("request.create", "ذهاب", out?.createdAt ?? ""),
         step("request.dispatch", "ذهاب", out?.notificationSentAt ?? ""),
         car(out, "ذهاب"),
@@ -192,6 +254,7 @@ export function tripsSection(
         step("request.pickup", "عودة", hm(back?.pickedUpAt)),
         arrival("عودة", back),
         appointment.status === "ملغي" ? `${appointment.cancelReason ?? ""}${appointment.cancelledBy ? ` (${appointment.cancelledBy}${cancel ? ` ${hm(cancel.at)}` : ""})` : ""}` : "",
+        stages.map((stage) => DELAY_LABELS[stage]).join("، "),
       ];
     });
   return {
@@ -199,9 +262,9 @@ export function tripsSection(
     sheet: "الرحلات",
     note: "كل مرحلة: الوقت ثم من نفّذها",
     columns: [
-      "التاريخ", "وقت الموعد", "الضيف", "الرقم الصحي", "العمر", "المبنى", "الشقة", "الموبايل", "الوجهة", "نوع الرحلة", "الاحتياجات", "حالة الموعد", "إضافة الموعد",
+      "التاريخ", "وقت الموعد", "الضيف", "الرقم الصحي", "العمر", "المبنى", "الشقة", "الموبايل", "الوجهة", "نوع الرحلة", "الاحتياجات", "حالة الموعد", "إضافة الموعد", "التسجيل",
       "طلب الذهاب", "إرسال سيارة الذهاب", "سيارة الذهاب", "وصول السيارة للاستلام", "استلام الضيف", "الوصول إلى الوجهة",
-      "طلب العودة", "إرسال سيارة العودة", "سيارة العودة", "استلام العودة", "الوصول إلى المجمع", "إلغاء الموعد",
+      "طلب العودة", "إرسال سيارة العودة", "سيارة العودة", "استلام العودة", "الوصول إلى المجمع", "إلغاء الموعد", "التأخير",
     ],
     rows,
   };
@@ -280,6 +343,8 @@ export async function downloadExcel(report: Report, fileName: string) {
   XLSX.utils.book_append_sheet(workbook, summary, "الملخص");
   for (const section of report.sections) {
     const sheet = XLSX.utils.aoa_to_sheet([section.columns, ...section.rows]);
+    // زر الفلترة في عنوان كل عمود
+    if (section.rows.length && sheet["!ref"]) sheet["!autofilter"] = { ref: sheet["!ref"] };
     sheet["!cols"] = section.columns.map((column, index) => ({
       wch: Math.min(60, Math.max(column.length + 2, ...section.rows.slice(0, 300).map((row) => String(row[index] ?? "").length + 2))),
     }));
@@ -291,7 +356,7 @@ export async function downloadExcel(report: Report, fileName: string) {
 const escapeHtml = (value: Cell) => String(value).replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]!);
 
 /** أعمدة النص الطويل في الجداول العريضة: تلتف أسطرها، وبقية الخانات في سطر واحد. */
-const LONG_COLUMNS = new Set(["العملية", "التغييرات", "إلغاء الموعد"]);
+const LONG_COLUMNS = new Set(["العملية", "التغييرات", "إلغاء الموعد", "الشرط", "التأخير"]);
 
 function sectionHtml(section: ReportSection) {
   const max = section.bar === undefined ? 0 : Math.max(1, ...section.rows.map((row) => Number(row[section.bar!]) || 0));

@@ -61,6 +61,8 @@ function normalize_fleet_drivers(PDO $pdo, int $rev): void
         if ($next !== $vehicle) save_doc($pdo, 'fleet', $plate, $next, $rev);
     }
     sync_driver_accounts($pdo, $drivers, $plateOf, $rev);
+    // وقت توفر السيارات في الخدمة (الإحصائيات)
+    record_vehicle_states($pdo);
 }
 
 /**

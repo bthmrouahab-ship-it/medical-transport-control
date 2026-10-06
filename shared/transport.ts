@@ -86,6 +86,8 @@ export type ClinicAppointment = {
    * بعد تسجيل استلام الضيف في الذهاب (auto_returns في api/index.php)، بدل أن يطلبها مشرف المبنى.
    */
   returnAt?: string;
+  /** وقت تسجيل الموعد (ISO)؛ يكتبه الخادم وحده عند الإضافة، للإحصائيات (مجدول قبل يومه أو عاجل في يومه) */
+  addedAt?: string;
 };
 
 /** أنواع المواعيد الجاهزة في نموذج العيادة (خانة اختيارية، ومعها «أخرى» تُكتب). تُحفظ بالعربية. */
@@ -215,6 +217,9 @@ export type VehicleRequest = {
   nurseOnly?: boolean;
   /** السائق سجّل وصوله إلى نقطة الاستلام من تطبيقه (ISO)؛ وقت استلامه الضيف هو pickedUpAt */
   driverArrivedAt?: string;
+  /** يكتبها الخادم وحده للإحصائيات: وقت تسجيل وصول السيارة إلى نقطة الاستلام (مشرف المبنى)، ووقت اقتراب سيارة العودة أو النقل من المستشفى بالـ GPS */
+  pickupArrivedAt?: string;
+  nearPickupAt?: string;
   /** موقع هاتف السائق لحظة تسجيل الوصول، ولحظة تسجيل الاستلام */
   arrivalGps?: GpsPoint;
   pickupGps?: GpsPoint;
@@ -404,6 +409,7 @@ export function migrateAppointment(value: unknown, index = 0): ClinicAppointment
     ...(toText(raw.appointmentType) ? { appointmentType: toText(raw.appointmentType).slice(0, APPOINTMENT_TYPE_MAX) } : {}),
     ...(toText(raw.seriesId) ? { seriesId: toText(raw.seriesId) } : {}),
     ...(/^\d{2}:\d{2}$/.test(toText(raw.returnAt)) ? { returnAt: toText(raw.returnAt) } : {}),
+    ...(toText(raw.addedAt) && !Number.isNaN(Date.parse(toText(raw.addedAt))) ? { addedAt: toText(raw.addedAt) } : {}),
   };
 }
 
@@ -589,6 +595,8 @@ export function migrateRequest(value: unknown): VehicleRequest | null {
   };
   const check = {
     driverArrivedAt: isoTime(raw.driverArrivedAt),
+    pickupArrivedAt: isoTime(raw.pickupArrivedAt),
+    nearPickupAt: isoTime(raw.nearPickupAt),
     arrivalGps: gps(raw.arrivalGps),
     pickupGps: gps(raw.pickupGps),
     arrivalCheck: reply(raw.arrivalCheck),

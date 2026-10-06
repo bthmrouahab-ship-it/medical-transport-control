@@ -17,6 +17,7 @@ require __DIR__ . '/lib/activity.php';
 require __DIR__ . '/lib/push.php';
 require __DIR__ . '/lib/driver.php';
 require __DIR__ . '/lib/drivers.php';
+require __DIR__ . '/lib/tracking.php';
 
 /** محاولات خاطئة قبل الإيقاف: للحساب الواحد، ولعنوان الشبكة (موظفو المكتب قد يشتركون في عنوان واحد) */
 const LOGIN_MAX_FAILURES = ['u' => 10, 'ip' => 50];
@@ -56,6 +57,7 @@ try {
         'POST private-cars.import' => 'route_private_cars_import',
         'POST special-needs.import' => 'route_special_needs_import',
         'GET guests-stats' => 'route_guests_stats',
+        'GET service-log' => 'route_service_log',
     ];
     $handler = $handlers["$method $route"] ?? null;
     if (!$handler) throw new ApiException(404, 'طلب غير معروف', 'not_found');
@@ -476,6 +478,8 @@ function route_write(PDO $pdo, array $body): array
             if ($error = authorize_write($user, $col, $id, $before, $after, $docOf)) throw new ApiException(403, $error, 'permission_denied');
             // الوصف قبل الحفظ (يقرأ الموعد المرتبط بالطلب كما كان)، والتسجيل بعده في نفس المعاملة
             $entry = describe_write($pdo, $col, $id, $before, $after);
+            // وقت تسجيل الموعد ووصول السيارة إلى نقطة الاستلام: يكتبها الخادم وحده (للإحصائيات)
+            $after = stamp_tracking($col, $before, $after);
             save_doc($pdo, $col, $id, $after, $rev);
             if ($entry) log_activity($pdo, empty($entry[4]) ? $user : null, $entry[0], $entry[1], $entry[2], $id, $entry[3]);
             if ($col === 'requests') queue_request_pushes($pdo, $before, $after);
@@ -819,6 +823,8 @@ function route_location(PDO $pdo, array $body): array
         }
         $precise = $sharing && ($after['accuracy'] === null || $after['accuracy'] <= ARRIVAL_MAX_ACCURACY_M);
         $arrived = $precise ? detect_arrivals($pdo, $plate, (float)$after['lat'], (float)$after['lng'], $rev, $user) : 0;
+        // سيارة العودة أو النقل وصلت قرب المستشفى ولم يُسجَّل وصولها بعد (لإحصائيات التأخير)
+        if ($precise) detect_pickup_proximity($pdo, $plate, (float)$after['lat'], (float)$after['lng'], $rev);
         $pdo->commit();
     } catch (Throwable $error) {
         $pdo->rollBack();

@@ -3,21 +3,29 @@ import {
   Bar,
   BarChart,
   CartesianGrid,
+  Cell,
   Legend,
   Line,
   LineChart,
+  Pie,
+  PieChart,
   ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis,
 } from "recharts";
-import { BarChart3, Building2, CalendarDays, CarFront, CheckCircle2, Clock3, MapPinned, Table2, Timer, TrendingUp, Truck } from "lucide-react";
-import { clockText, durationText, type StatsFilter, type StatsSummary } from "@shared/stats";
-import { Panel, Stat, btn, cx } from "./ui-kit";
+import { AlarmClock, BarChart3, Building2, CalendarClock, CalendarDays, CarFront, CheckCircle2, Clock3, MapPinned, PieChart as PieIcon, Table2, Timer, TrendingUp, Truck } from "lucide-react";
+import { BOOKING_HINTS, DELAY_STAGES, TRIP_KINDS, clockText, durationText, type ServiceSummary, type StatsFilter, type StatsSummary } from "@shared/stats";
+import { BUS_ROLE_LABELS, type BusRole } from "@shared/transport";
+import { Badge, Panel, Stat, btn, cx } from "./ui-kit";
 
 // ألوان المخططات (الوضع الفاتح): السلسلة الأولى أزرق، الثانية برتقالي؛ النص بألوان النص لا بلون السلسلة
 const SERIES_1 = "#2a78d6";
 const SERIES_2 = "#eb6834";
+// العجلة: الرحلات ذهابًا (أخضر مزرق) وعودة (برتقالي)، والمواعيد المنجزة (أزرق) والباقي رمادي (لوحة مفحوصة لعمى الألوان)
+const GO = "#0f9d8a";
+const BACK = "#eb6834";
+const REST = "#cbd5e1";
 const GRID = "#e2e8f0";
 const AXIS = "#64748b";
 
@@ -34,9 +42,25 @@ function Pick({ onClick, label, children, className = "" }: { onClick?: () => vo
   return <button type="button" onClick={onClick} title={`عرض ${label} فقط`} className={cx("w-full text-start transition hover:bg-slate-50", className)}>{children}</button>;
 }
 
-export default function HistoryCharts({ summary, onFilter }: { summary: StatsSummary; onFilter?: (patch: Partial<StatsFilter>) => void }) {
+const count = (value: number) => value.toLocaleString("en");
+const share = (part: number, total: number) => (total ? Math.round((part / total) * 100) : 0);
+
+export default function HistoryCharts({ summary, onFilter, service, trackedSince }: {
+  summary: StatsSummary;
+  onFilter?: (patch: Partial<StatsFilter>) => void;
+  /** وقت توفر السيارات في الخدمة للفترة (null: لم يُحمَّل) */
+  service?: ServiceSummary | null;
+  /** بداية تسجيل التوفر في الخدمة (ISO) */
+  trackedSince?: string | null;
+}) {
   const [showTable, setShowTable] = useState(false);
-  const completion = summary.totalTrips ? Math.round((summary.completedTrips / summary.totalTrips) * 100) : 0;
+  const completion = share(summary.completedTrips, summary.totalTrips);
+  // الرحلات المنجزة: رحلات السيارات ذهابًا وعودة (ملفات Excel بلا اتجاه: رحلة لكل موعد منجز)
+  const directions = summary.directions ?? { go: summary.completedTrips, back: 0, unknown: 0 };
+  const carTrips = directions.go + directions.back + directions.unknown;
+  const oneDay = summary.activeDays <= 1;
+  const booking = summary.booking ?? { scheduled: 0, sameDay: 0, unknown: 0 };
+  const booked = booking.scheduled + booking.sameDay;
   const dailyAverage = summary.activeDays ? Math.round(summary.totalTrips / summary.activeDays) : 0;
   // ساعات العمل المعتادة، وتتسع إذا وُجدت رحلات قبلها أو بعدها
   const busyHours = summary.byHour.filter((item) => item.trips > 0).map((item) => item.hour);
@@ -54,39 +78,74 @@ export default function HistoryCharts({ summary, onFilter }: { summary: StatsSum
   const vehicleDays = summary.daily.filter((day) => day.vehicles !== undefined);
   // ساعات العمل: أول خروج وآخر عودة لليوم الواحد، ومتوسط الساعات في اليوم للفترة
   const work = summary.workHours;
-  const singleDay = new Set(work?.days.map((day) => day.date)).size === 1;
+  const singleDay = new Set([...(work?.days ?? []), ...(service?.days ?? [])].map((day) => day.date)).size === 1;
+  const kindsText = TRIP_KINDS.filter((kind) => kindVehicles(kind)).map((kind) => `${kind} ${kindVehicles(kind)}`).join(" · ");
+  const roleBuses = working?.roleBuses ?? [];
+  const delays = summary.delays;
+  const hourRows = mergeHours(work?.vehicles ?? [], service?.vehicles ?? []);
 
   return (
     <div className="space-y-6">
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5 lg:gap-4">
-        <Stat icon={CalendarDays} tone="blue" label="إجمالي المواعيد" value={summary.totalTrips.toLocaleString("en")} hint={`${summary.activeDays} يوم`} />
-        <Stat icon={CheckCircle2} tone="green" label="نسبة الإنجاز" value={`${completion}%`} hint={`${summary.completedTrips.toLocaleString("en")} رحلة منجزة`} />
+      <div className={cx("grid grid-cols-2 gap-3 sm:grid-cols-3 lg:gap-4", oneDay ? "lg:grid-cols-5" : "2xl:grid-cols-6")}>
+        <Stat icon={CalendarDays} tone="blue" label="إجمالي المواعيد" value={count(summary.totalTrips)} hint={`${summary.activeDays} يوم`} />
+        <Stat
+          icon={CheckCircle2}
+          tone="green"
+          label="الرحلات المنجزة"
+          title={`نسبة الإنجاز: ${count(summary.completedTrips)} موعد أُرسلت له سيارة من ${count(summary.totalTrips)}`}
+          value={<span className="flex flex-wrap items-baseline gap-x-2">{count(carTrips)}<span className="rounded-full bg-emerald-50 px-2 py-0.5 text-sm font-semibold text-emerald-700">{completion}%</span></span>}
+          details={<>ذهاب {count(directions.go)} · عودة {count(directions.back)}{directions.unknown ? <span className="text-slate-400" title="رحلات ملفات Excel بلا اتجاه"> · Excel {count(directions.unknown)}</span> : null}</>}
+        />
         <Stat
           icon={CarFront}
           tone="neutral"
           label="السيارات العاملة"
           value={working?.total ?? summary.vehicles.length}
           hint={summary.activeDays > 1 && working?.dailyAverage ? `متوسط ${working.dailyAverage} يوميًا` : undefined}
+          details={kindsText || undefined}
+          title={roleBuses.length ? `منها ${roleBuses.map((bus) => `${BUS_ROLE_LABELS[bus.busRole]} ${bus.plate}`).join("، ")} (في الخدمة بلا رحلات مسجلة)` : undefined}
         />
-        <Stat icon={TrendingUp} tone="violet" label="متوسط المواعيد يوميًا" value={String(dailyAverage)} />
+        <Stat
+          icon={CalendarClock}
+          tone="amber"
+          label="تسجيل المواعيد"
+          title={`مجدولة: ${BOOKING_HINTS.scheduled} · عاجلة: ${BOOKING_HINTS.sameDay}${booking.unknown ? ` · ${count(booking.unknown)} موعد سُجّل قبل حفظ وقت التسجيل` : ""}`}
+          value={booked ? (
+            <span className="flex items-end gap-4">
+              <span className="leading-none">{count(booking.scheduled)}<span className="mt-1 block text-[11px] font-medium text-slate-500">مجدولة</span></span>
+              <span className="leading-none">{count(booking.sameDay)}<span className="mt-1 block text-[11px] font-medium text-amber-700">عاجلة</span></span>
+            </span>
+          ) : "—"}
+          details={booked ? undefined : "تُحسب للمواعيد المسجلة بعد تحديث النظام"}
+        />
+        {!oneDay && <Stat icon={TrendingUp} tone="violet" label="متوسط المواعيد يوميًا" value={String(dailyAverage)} />}
         <Stat icon={Timer} tone="cyan" label="متوسط مدة الرحلة" value={summary.avgTripMinutes ? `${summary.avgTripMinutes} د` : "—"} />
       </div>
 
-      <Panel icon={TrendingUp} title="المواعيد يوميًا" description="الإجمالي والمنجز لكل يوم" bodyClassName="p-5">
-        <div dir="ltr" className="h-64">
-          <ResponsiveContainer width="100%" height="100%">
-            <LineChart data={summary.daily} margin={{ top: 8, right: 12, bottom: 0, left: -12 }}>
-              <CartesianGrid stroke={GRID} vertical={false} />
-              <XAxis dataKey="date" tickFormatter={shortDate} {...axisProps} minTickGap={20} />
-              <YAxis {...axisProps} allowDecimals={false} />
-              <Tooltip {...tooltipStyle} cursor={{ stroke: AXIS, strokeDasharray: "3 3" }} labelFormatter={(date) => `${date}`} />
-              <Legend wrapperStyle={{ fontSize: 12, color: AXIS }} />
-              <Line type="monotone" dataKey="total" name="إجمالي المواعيد" stroke={SERIES_1} strokeWidth={2} dot={summary.daily.length < 15} activeDot={{ r: 5, stroke: "#ffffff", strokeWidth: 2 }} />
-              <Line type="monotone" dataKey="completed" name="المنجزة" stroke={SERIES_2} strokeWidth={2} dot={summary.daily.length < 15} activeDot={{ r: 5, stroke: "#ffffff", strokeWidth: 2 }} />
-            </LineChart>
-          </ResponsiveContainer>
-        </div>
-      </Panel>
+      {/* عدة أيام: المخطط اليومي والعجلة ثم التأخير؛ يوم واحد: العجلة والتأخير جنبًا إلى جنب */}
+      <div className={cx("grid items-start gap-6", summary.daily.length > 1 ? "lg:grid-cols-[1.6fr_1fr]" : delays?.trips ? "lg:grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)]" : "lg:max-w-xl")}>
+        {summary.daily.length > 1 && (
+          <Panel icon={TrendingUp} title="المواعيد يوميًا" description="الإجمالي والمنجز لكل يوم" bodyClassName="p-5">
+            <div dir="ltr" className="h-64">
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={summary.daily} margin={{ top: 8, right: 12, bottom: 0, left: -12 }}>
+                  <CartesianGrid stroke={GRID} vertical={false} />
+                  <XAxis dataKey="date" tickFormatter={shortDate} {...axisProps} minTickGap={20} />
+                  <YAxis {...axisProps} allowDecimals={false} />
+                  <Tooltip {...tooltipStyle} cursor={{ stroke: AXIS, strokeDasharray: "3 3" }} labelFormatter={(date) => `${date}`} />
+                  <Legend wrapperStyle={{ fontSize: 12, color: AXIS }} />
+                  <Line type="monotone" dataKey="total" name="إجمالي المواعيد" stroke={SERIES_1} strokeWidth={2} dot={summary.daily.length < 15} activeDot={{ r: 5, stroke: "#ffffff", strokeWidth: 2 }} />
+                  <Line type="monotone" dataKey="completed" name="المنجزة" stroke={SERIES_2} strokeWidth={2} dot={summary.daily.length < 15} activeDot={{ r: 5, stroke: "#ffffff", strokeWidth: 2 }} />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          </Panel>
+        )}
+        <TripsWheel summary={summary} directions={directions} oneDay={summary.daily.length <= 1} />
+        {summary.daily.length <= 1 && delays && delays.trips > 0 && <DelaysPanel summary={summary} />}
+      </div>
+
+      {summary.daily.length > 1 && delays && delays.trips > 0 && <DelaysPanel summary={summary} />}
 
       {vehicleDays.length > 1 && working?.dailyMax ? (
         <Panel icon={CarFront} title="السيارات العاملة يوميًا" description={`عدد السيارات التي خرجت في كل يوم بلا تكرار · متوسط ${working.dailyAverage} وأعلى ${working.dailyMax} في اليوم`} bodyClassName="p-5">
@@ -234,49 +293,51 @@ export default function HistoryCharts({ summary, onFilter }: { summary: StatsSum
         </Panel>
       </div>
 
-      {work?.vehicles.length ? (
+      {hourRows.length ? (
         <Panel
           icon={Clock3}
-          title="ساعات عمل السيارات"
-          count={work.vehicles.length}
-          description={`المجموع ${durationText(work.totalMinutes)}${work.avgDayMinutes !== null && !singleDay ? ` · متوسط ${durationText(work.avgDayMinutes)} للسيارة في اليوم` : ""} · من خروج السيارة حتى عودتها إلى المجمع (العودة بعد رحلة الذهاب تقديرية)`}
+          title="ساعات السيارات: التوفر في الخدمة والعمل"
+          count={hourRows.length}
+          description={(
+            <>
+              العمل {durationText(work?.totalMinutes ?? 0)}{work?.avgDayMinutes != null && !singleDay ? ` (متوسط ${durationText(work.avgDayMinutes)} للسيارة في اليوم)` : ""}: من خروج السيارة حتى عودتها إلى المجمع
+              {service ? <> · التوفر {durationText(service.totalMinutes)}: من تشغيل السيارة (متاحة ولها سائق) حتى إيقافها{trackedSince ? <>، يُسجَّل منذ <span dir="ltr">{trackedSince.slice(0, 10)}</span></> : null}</> : null}
+            </>
+          )}
           bodyClassName="p-0"
         >
-          <div className="max-h-96 overflow-auto">
-            <table className="w-full text-start text-sm">
+          <div className="max-h-[28rem] overflow-auto">
+            <table className="w-full min-w-[640px] text-start text-sm">
               <thead className="sticky top-0 bg-slate-50 text-xs text-slate-500">
                 <tr>
                   <th className="px-5 py-2.5 text-start font-medium">السيارة</th>
                   {singleDay ? (
                     <>
-                      <th className="py-2.5 text-start font-medium">أول خروج</th>
-                      <th className="py-2.5 text-start font-medium">آخر عودة</th>
+                      <th className="py-2.5 text-start font-medium">في الخدمة</th>
+                      <th className="py-2.5 text-start font-medium">أول خروج · آخر عودة</th>
                     </>
-                  ) : (
-                    <>
-                      <th className="py-2.5 text-start font-medium">أيام العمل</th>
-                      <th className="py-2.5 text-start font-medium">متوسط اليوم</th>
-                    </>
-                  )}
-                  <th className="px-5 py-2.5 text-start font-medium">ساعات العمل</th>
+                  ) : <th className="py-2.5 text-start font-medium">أيام الخدمة · العمل</th>}
+                  <th className="py-2.5 text-start font-medium">التوفر في الخدمة</th>
+                  <th className="py-2.5 text-start font-medium">ساعات العمل</th>
+                  <th className="px-5 py-2.5 text-start font-medium" title="ساعات العمل من ساعات التوفر في الخدمة">نسبة التشغيل</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {work.vehicles.map((item) => (
-                  <tr key={item.plate} onClick={pick({ plate: item.plate })} title={onFilter ? `عرض السيارة ${item.plate} فقط` : undefined} className={onFilter ? "cursor-pointer hover:bg-slate-50" : undefined}>
-                    <td className="px-5 py-2.5"><span dir="ltr" className="font-semibold text-ink">{item.plate}</span> <span className="text-xs text-slate-500">{item.driver}</span></td>
+                {hourRows.map((row) => (
+                  <tr key={row.plate} onClick={pick({ plate: row.plate })} title={onFilter ? `عرض السيارة ${row.plate} فقط` : undefined} className={onFilter ? "cursor-pointer hover:bg-slate-50" : undefined}>
+                    <td className="px-5 py-2.5">
+                      <span dir="ltr" className="font-semibold text-ink">{row.plate}</span> <span className="text-xs text-slate-500">{row.driver}</span>
+                      <span className="mt-0.5 flex flex-wrap gap-1 text-[11px] text-slate-500">{row.kind}{row.roles.map((role) => <span key={role}>{roleBadge(role)}</span>)}</span>
+                    </td>
                     {singleDay ? (
                       <>
-                        <td className="py-2.5 tabular text-slate-600"><span dir="ltr">{clockText(item.first) || "—"}</span></td>
-                        <td className="py-2.5 tabular text-slate-600"><span dir="ltr">{clockText(item.last) || "—"}</span></td>
+                        <td className="py-2.5 tabular text-slate-600"><span dir="ltr">{row.serviceFirst !== null ? `${clockText(row.serviceFirst)} – ${clockText(row.serviceLast)}` : "—"}</span></td>
+                        <td className="py-2.5 tabular text-slate-600"><span dir="ltr">{row.workFirst !== null ? `${clockText(row.workFirst)} – ${clockText(row.workLast)}` : "—"}</span></td>
                       </>
-                    ) : (
-                      <>
-                        <td className="py-2.5 tabular text-slate-600">{item.days}</td>
-                        <td className="py-2.5 tabular text-slate-600">{durationText(item.minutes / item.days)}</td>
-                      </>
-                    )}
-                    <td className="px-5 py-2.5 font-semibold tabular text-ink">{durationText(item.minutes)}</td>
+                    ) : <td className="py-2.5 tabular text-slate-600">{row.serviceDays || "—"} · {row.workDays || "—"}</td>}
+                    <td className="py-2.5 tabular text-slate-700">{row.serviceMinutes ? durationText(row.serviceMinutes) : "—"}</td>
+                    <td className="py-2.5 font-semibold tabular text-ink">{row.workMinutes ? durationText(row.workMinutes) : "—"}</td>
+                    <td className="px-5 py-2.5 tabular text-slate-600">{row.serviceMinutes ? `${share(Math.min(row.workMinutes, row.serviceMinutes), row.serviceMinutes)}%` : "—"}</td>
                   </tr>
                 ))}
               </tbody>
@@ -286,4 +347,155 @@ export default function HistoryCharts({ summary, onFilter }: { summary: StatsSum
       ) : null}
     </div>
   );
+}
+
+type WheelSlice = { name: string; value: number; fill: string };
+
+/**
+ * عجلة المواعيد والرحلات: الحلقة الداخلية المواعيد (المنجزة وما لم يُنجز)، والخارجية رحلات السيارات
+ * المنجزة ذهابًا وعودة. الأرقام مكتوبة بجانبها (لا يُعتمد على اللون وحده).
+ */
+function TripsWheel({ summary, directions, oneDay }: { summary: StatsSummary; directions: { go: number; back: number; unknown: number }; oneDay: boolean }) {
+  const open = summary.totalTrips - summary.completedTrips;
+  const appointments: WheelSlice[] = [
+    { name: "مواعيد منجزة", value: summary.completedTrips, fill: SERIES_1 },
+    { name: "لم تُرسل لها سيارة", value: open, fill: REST },
+  ].filter((slice) => slice.value > 0);
+  const trips: WheelSlice[] = [
+    { name: "رحلات ذهاب", value: directions.go, fill: GO },
+    { name: "رحلات عودة", value: directions.back, fill: BACK },
+    { name: "رحلات بلا اتجاه (Excel)", value: directions.unknown, fill: "#e2e8f0" },
+  ].filter((slice) => slice.value > 0);
+  const carTrips = directions.go + directions.back + directions.unknown;
+  const rows = [
+    { label: "المواعيد", value: summary.totalTrips, fill: null, note: null },
+    { label: "منجزة", value: summary.completedTrips, fill: SERIES_1, note: `${share(summary.completedTrips, summary.totalTrips)}%` },
+    { label: "بلا سيارة", value: open, fill: REST, note: `${share(open, summary.totalTrips)}%` },
+    { label: "ذهاب", value: directions.go, fill: GO, note: `${share(directions.go, carTrips)}%` },
+    { label: "عودة", value: directions.back, fill: BACK, note: `${share(directions.back, carTrips)}%` },
+    ...(directions.unknown ? [{ label: "Excel بلا اتجاه", value: directions.unknown, fill: "#e2e8f0", note: null }] : []),
+  ];
+  return (
+    <Panel icon={PieIcon} title={oneDay ? "مواعيد اليوم ورحلاته" : "المواعيد والرحلات"} description="الداخل: المواعيد المنجزة من الإجمالي · الخارج: رحلات الذهاب والعودة" bodyClassName="p-5">
+      <div className="grid items-center gap-5 sm:grid-cols-[200px_minmax(0,1fr)] lg:grid-cols-1 xl:grid-cols-[200px_minmax(0,1fr)]">
+        <div className="relative mx-auto h-52 w-52" dir="ltr">
+          <ResponsiveContainer width="100%" height="100%">
+            <PieChart>
+              <Tooltip {...tooltipStyle} formatter={(value, name) => [count(Number(value)), name]} />
+              <Pie data={appointments} dataKey="value" nameKey="name" innerRadius="46%" outerRadius="66%" startAngle={90} endAngle={-270} stroke="#ffffff" strokeWidth={2} isAnimationActive={false}>
+                {appointments.map((slice) => <Cell key={slice.name} fill={slice.fill} />)}
+              </Pie>
+              <Pie data={trips} dataKey="value" nameKey="name" innerRadius="72%" outerRadius="94%" startAngle={90} endAngle={-270} stroke="#ffffff" strokeWidth={2} isAnimationActive={false}>
+                {trips.map((slice) => <Cell key={slice.name} fill={slice.fill} />)}
+              </Pie>
+            </PieChart>
+          </ResponsiveContainer>
+          <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center text-center leading-tight">
+            <span className="text-2xl font-bold tabular text-ink">{count(summary.totalTrips)}</span>
+            <span className="text-[11px] text-slate-500">موعد</span>
+          </div>
+        </div>
+        <ul className="divide-y divide-slate-100 text-sm">
+          {rows.map((row) => (
+            <li key={row.label} className="flex items-center justify-between gap-3 py-2">
+              <span className="flex items-center gap-2 text-slate-600">
+                {row.fill ? <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: row.fill }} /> : <span className="h-2.5 w-2.5 shrink-0" />}
+                {row.label}
+              </span>
+              <span className="flex shrink-0 items-baseline gap-2">
+                {row.note && <span className="text-xs text-slate-400">{row.note}</span>}
+                <span className="font-semibold tabular text-ink">{count(row.value)}</span>
+              </span>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </Panel>
+  );
+}
+
+/** تأخير الرحلات ومتى كان: عند الإرسال، أو عند الاستلام (السيارة من المجمع، أو السائق لم يسجّل وصوله، أو تأخر الوصول، أو تأخر الضيف). */
+function DelaysPanel({ summary }: { summary: StatsSummary }) {
+  const delays = summary.delays!;
+  const lateShare = share(delays.late, delays.trips);
+  const maxTrips = Math.max(1, ...delays.stages.map((item) => item.trips));
+  const groups = ["عند الإرسال", "عند الاستلام"].map((when) => ({ when, stages: DELAY_STAGES.filter((item) => item.when === when) }));
+  const late = delays.lateToAppointment;
+  return (
+    <Panel
+      tone={delays.late ? "red" : "green"}
+      icon={AlarmClock}
+      title="تأخير الرحلات"
+      count={delays.late || undefined}
+      description={`${count(delays.late)} من ${count(delays.trips)} رحلة سيارة (${lateShare}%) فيها تأخير · من رحلات النظام فقط · الرحلة الواحدة قد تتأخر في أكثر من مرحلة`}
+      bodyClassName="p-0"
+    >
+      <div className="grid gap-px bg-slate-100 md:grid-cols-[minmax(0,1fr)_260px]">
+        <div className="space-y-4 bg-white p-4 sm:p-5">
+          {groups.map((group) => (
+            <section key={group.when} aria-label={group.when}>
+              <h3 className="mb-2 text-xs font-semibold text-slate-500">{group.when}</h3>
+              <ul className="space-y-3">
+                {group.stages.map((item) => {
+                  const stat = delays.stages.find((entry) => entry.stage === item.stage)!;
+                  return (
+                    <li key={item.stage}>
+                      <div className="flex items-start justify-between gap-3 text-sm">
+                        <span className="min-w-0">
+                          <span className="font-medium text-ink">{item.label}</span>
+                          <span className="block text-xs leading-5 text-slate-500">{item.hint}</span>
+                        </span>
+                        <span className="shrink-0 text-end">
+                          <span className="font-semibold tabular text-ink">{count(stat.trips)}</span>
+                          <span className="block text-xs text-slate-500">{stat.avgMinutes !== null ? `متوسط ${stat.avgMinutes} د` : "—"}</span>
+                        </span>
+                      </div>
+                      <div className="mt-1.5 h-1.5 rounded-full bg-slate-100"><div className="h-1.5 rounded-full bg-red-400" style={{ width: `${(stat.trips / maxTrips) * 100}%` }} /></div>
+                    </li>
+                  );
+                })}
+              </ul>
+            </section>
+          ))}
+        </div>
+        <div className="space-y-3 bg-white p-4 sm:p-5">
+          <div className="rounded-xl bg-slate-50 px-4 py-3 ring-1 ring-inset ring-slate-200/70">
+            <p className="text-xs text-slate-500">رحلات فيها تأخير</p>
+            <p className="mt-0.5 text-2xl font-bold tabular text-ink">{count(delays.late)} <span className="text-sm font-medium text-slate-500">{lateShare}%</span></p>
+          </div>
+          <div className="rounded-xl bg-slate-50 px-4 py-3 ring-1 ring-inset ring-slate-200/70">
+            <p className="text-xs text-slate-500">وصل الضيف بعد موعده</p>
+            <p className="mt-0.5 text-2xl font-bold tabular text-ink">{late.measured ? count(late.trips) : "—"}{late.avgMinutes !== null && <span className="ms-1.5 text-sm font-medium text-slate-500">متوسط {late.avgMinutes} د</span>}</p>
+            <p className="text-xs leading-5 text-slate-500">{late.measured ? `من ${count(late.measured)} رحلة ذهاب طبية سُجّل وصولها بالـ GPS أو بالتأكيد` : "لا توجد رحلات ذهاب سُجّل وصولها"}</p>
+          </div>
+          {delays.withoutArrival > 0 && (
+            <p className="text-xs leading-5 text-slate-500">{count(delays.withoutArrival)} رحلة بلا وقت مسجل لوصول السيارة إلى نقطة الاستلام (قبل حفظه في النظام، أو لم تصل بعد)، فلا تُحسب مراحل الاستلام فيها.</p>
+          )}
+        </div>
+      </div>
+    </Panel>
+  );
+}
+
+/** تخصيص الباص بجانب السيارة */
+export const roleBadge = (role: BusRole) => <Badge tone="amber">{BUS_ROLE_LABELS[role]}</Badge>;
+
+type HourRow = {
+  plate: string; driver: string; kind: string; roles: BusRole[];
+  serviceMinutes: number; serviceDays: number; serviceFirst: number | null; serviceLast: number | null;
+  workMinutes: number; workDays: number; workFirst: number | null; workLast: number | null;
+};
+
+/** سيارات ساعات العمل وسيارات التوفر في الخدمة في صف واحد لكل سيارة (الأطول توفرًا ثم الأكثر عملًا أولًا). */
+function mergeHours(work: NonNullable<StatsSummary["workHours"]>["vehicles"], service: ServiceSummary["vehicles"]): HourRow[] {
+  const rows = new Map<string, HourRow>();
+  const row = (plate: string) => rows.get(plate) ?? { plate, driver: "", kind: "", roles: [], serviceMinutes: 0, serviceDays: 0, serviceFirst: null, serviceLast: null, workMinutes: 0, workDays: 0, workFirst: null, workLast: null };
+  for (const item of service) {
+    rows.set(item.plate, { ...row(item.plate), driver: item.driver, kind: item.kind, roles: item.busRoles, serviceMinutes: item.minutes, serviceDays: item.days, serviceFirst: item.first, serviceLast: item.last });
+  }
+  for (const item of work) {
+    const entry = row(item.plate);
+    rows.set(item.plate, { ...entry, driver: entry.driver || item.driver, kind: entry.kind || item.kind, workMinutes: item.minutes, workDays: item.days, workFirst: item.first, workLast: item.last });
+  }
+  return Array.from(rows.values()).sort((a, b) => b.serviceMinutes - a.serviceMinutes || b.workMinutes - a.workMinutes);
 }
