@@ -22,6 +22,7 @@ import {
   type TripStat,
 } from "@shared/stats";
 import { localDateString, mergeVehicle, type ClinicAppointment, type Vehicle, type VehicleRequest } from "@shared/transport";
+import { summarizeOperations, type OpsEvent } from "@shared/operations";
 import { saveStates } from "@/lib/appStore";
 import { useDrivers } from "@/lib/useShared";
 import { assignDrivers, newDriverId, type Driver } from "@shared/drivers";
@@ -35,6 +36,7 @@ import HistoryCharts from "./HistoryCharts";
 import ActivityLog from "./ActivityLog";
 import GuestStats from "./GuestStats";
 import StatsAppointments from "./StatsAppointments";
+import OperationsStats from "./OperationsStats";
 
 type Preset = "all" | "today" | "7d" | "30d" | "month" | "lastMonth" | "year" | "custom";
 
@@ -140,6 +142,27 @@ export default function StatsPanel({ canEdit, actor, hospitals, fleet, appointme
       alive = false;
     };
   }, [range.since, range.until]);
+  // سير العمل: الإلغاء وتغيير السيارات وإزالة الضيوف من سجل العمليات (من أسبوع قبل الفترة: إلغاء طلبات حُجزت مبكرًا)
+  const [opsLog, setOpsLog] = useState<OpsEvent[] | null>(null);
+  useEffect(() => {
+    let alive = true;
+    setOpsLog(null);
+    const query: Record<string, string> = {};
+    if (range.since) query.since = new Date(new Date(range.since).getTime() - 7 * 86400000).toISOString();
+    if (range.until) query.until = range.until;
+    api<{ events: OpsEvent[] }>("ops-log", undefined, query)
+      .then((response) => alive && setOpsLog(response.events))
+      .catch((error) => {
+        console.error("[stats] ops", error);
+        if (alive) setOpsLog([]);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [range.since, range.until]);
+  const operations = useMemo(() => summarizeOperations(filteredTrips, opsLog), [filteredTrips, opsLog]);
+  const fleetKinds = useMemo(() => new Map(fleet.map((vehicle) => [vehicle.plate, vehicle.kind])), [fleet]);
+
   const service = useMemo((): ServiceSummary | null => {
     if (!serviceLog) return null;
     const all = serviceHours(serviceLog.events, filter.from, filter.to || localDateString());
@@ -189,7 +212,7 @@ export default function StatsPanel({ canEdit, actor, hospitals, fleet, appointme
     setExporting(format);
     try {
       const { items, truncated } = await fetchAllActivity(range);
-      const report = statsReport(summary, "إحصائيات سيارات مجمع الثمامة", `${periodLabel} · أنشأه ${actor} في ${stamp()}`, service);
+      const report = statsReport(summary, "إحصائيات سيارات مجمع الثمامة", `${periodLabel} · أنشأه ${actor} في ${stamp()}`, service, operations);
       const index = guestIndex(guestRecords ?? []);
       report.sections.push(
         ...guestSections(guestSummary),
@@ -291,7 +314,8 @@ export default function StatsPanel({ canEdit, actor, hospitals, fleet, appointme
         <div className="flex min-h-64 items-center justify-center rounded-2xl bg-white text-slate-400 shadow-card ring-1 ring-slate-200/80"><Loader2 className="h-6 w-6 animate-spin" /><span className="sr-only">جارٍ التحميل</span></div>
       ) : summary.totalTrips ? (
         <>
-          <HistoryCharts summary={summary} onFilter={update} service={service} trackedSince={serviceLog?.trackedSince ?? null} />
+          <HistoryCharts summary={summary} onFilter={update} service={service} trackedSince={serviceLog?.trackedSince ?? null} fleetKinds={fleetKinds} />
+          <OperationsStats ops={operations} onFilter={update} />
           <StatsAppointments trips={filteredTrips} appointments={appointments} requests={requests} />
         </>
       ) : (

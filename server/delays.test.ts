@@ -76,8 +76,19 @@ describe("summary: completed trips by direction, booking and delays", () => {
 
   it("counts go and return trips, and scheduled and same-day appointments", () => {
     expect(summary.completedTrips).toBe(2);
-    expect(summary.directions).toEqual({ go: 2, back: 1, unknown: 0 });
+    expect(summary.directions).toEqual({ go: 2, back: 1, unknown: 0, backOnly: 0 });
     expect(summary.booking).toEqual({ scheduled: 1, sameDay: 1, unknown: 1 });
+  });
+
+  it("appointments completed with a return trip only (return-only requests from the hospital)", () => {
+    const backOnly = summarizeTrips(tripsFromSystem(
+      [appointment("A1"), appointment("B1", { returnOnly: true, status: "مكتملة" })],
+      [request("R1", "A1", { notificationSentAt: "10:00" }), request("RB", "B1", { direction: "عودة", createdAt: "13:00", notificationSentAt: "13:05" })],
+      fleet, DEFAULT_HOSPITALS, at("18:00"),
+    ));
+    expect(backOnly.completedTrips).toBe(2);
+    expect(backOnly.directions).toEqual({ go: 1, back: 1, unknown: 0, backOnly: 1 });
+    expect(backOnly.vehicles[0]).toMatchObject({ plate: "111", kind: "سيدان" });
   });
 
   it("late trips by stage with their average minutes", () => {

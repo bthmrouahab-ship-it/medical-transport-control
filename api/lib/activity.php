@@ -227,6 +227,8 @@ function describe_write(PDO $pdo, string $col, string $id, ?array $before, ?arra
                 return ['request', 'request.join_nurse', "عودة $guest مع الـ Nurse في نفس الطلب" . ($plate ? " (السيارة $plate)" : ''), $details];
             }
             if ($after === null) {
+                // حالة الطلب لحظة إلغائه: الإلغاء بعد وصول السيارة إلى نقطة الاستلام (للإحصائيات)
+                $details['stage'] = $request['status'] ?? '';
                 return ['request', 'request.cancel', "إلغاء طلب السيارة ($direction) لـ $who" . ($plate ? " وكانت السيارة $plate قد أُرسلت" : ''), $details];
             }
             // إزالة ضيف من رحلة جارية: عاد طلبه إلى «بانتظار التوزيع»

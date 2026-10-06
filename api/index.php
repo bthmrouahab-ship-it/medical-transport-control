@@ -58,6 +58,7 @@ try {
         'POST special-needs.import' => 'route_special_needs_import',
         'GET guests-stats' => 'route_guests_stats',
         'GET service-log' => 'route_service_log',
+        'GET ops-log' => 'route_ops_log',
     ];
     $handler = $handlers["$method $route"] ?? null;
     if (!$handler) throw new ApiException(404, 'طلب غير معروف', 'not_found');

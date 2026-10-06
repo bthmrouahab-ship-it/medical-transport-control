@@ -13,6 +13,7 @@ import {
   type VehicleRequest,
 } from "./transport";
 import { LATE_MINUTES, UNKNOWN_TRAVEL_MINUTES, driveMinutes, neededAt, tripPhase } from "./trips";
+import { appointmentOutcome, approvalInfo, returnOutcome, ridesOf, type ApprovalInfo, type Outcome, type ReturnOutcome, type Ride } from "./operations";
 
 /**
  * سجلات الرحلات للإحصائيات: رحلة واحدة لكل موعد، بلا اسم المريض أو رقمه أو شقته.
@@ -56,6 +57,16 @@ export type TripStat = {
   booking?: Booking;
   /** رحلات النظام: مراحل كل رحلة سيارة للموعد وتأخيرها */
   timings?: RequestTiming[];
+  /** رحلات النظام: مصير الموعد (أُرسلت سيارة، أُلغي، استُبعد، انتهت المهلة…) */
+  outcome?: Outcome;
+  /** رحلات النظام: سبب إلغاء الموعد ومن ألغاه */
+  cancel?: { reason: string; by: string };
+  /** رحلات النظام: العودة إلى المجمع لضيف استُلم في الذهاب */
+  returnOutcome?: ReturnOutcome;
+  /** رحلات النظام: رحلات السيارات للموعد بعدد الأشخاص ومقاعد السيارة (للجمع والإشغال) */
+  rides?: Ride[];
+  /** رحلات النظام: موافقة مسؤول العيادة على الموعد الطبي */
+  approval?: ApprovalInfo;
 };
 
 /** المواعيد المجدولة (سُجّلت قبل يوم الموعد) والعاجلة (سُجّلت في يوم الموعد نفسه) */
@@ -301,13 +312,15 @@ export type StatsSummary = {
   byKind: { kind: TripKind; trips: number }[];
   destinations: DestinationStat[];
   zones: { zone: string; trips: number }[];
-  vehicles: { plate: string; driver: string; trips: number }[];
+  /** kind: نوع السيارة من رحلاتها (السيارات في الملخص القديم بلا نوع) */
+  vehicles: { plate: string; driver: string; trips: number; kind?: TripKind | null }[];
   /** السيارات التي عملت في الفترة: عددها بلا تكرار، وحسب نوعها، ومتوسطها وأعلاها في اليوم */
   workingVehicles?: WorkingVehicles;
   /** ساعات عمل السيارات في كل يوم وفي الفترة */
   workHours?: WorkHours;
   /** رحلات السيارات المنجزة ذهابًا وعودة (من النظام)، وما لا يُعرف اتجاهه (ملفات Excel والملخص القديم) */
-  directions?: { go: number; back: number; unknown: number };
+  /** backOnly: مواعيد منجزة برحلة عودة فقط بلا رحلة ذهاب (طلب العودة فقط من المستشفى) */
+  directions?: { go: number; back: number; unknown: number; backOnly: number };
   /** المواعيد المجدولة والعاجلة (من النظام)، وما لا يُعرف وقت تسجيله */
   booking?: Record<Booking | "unknown", number>;
   /** تأخير رحلات السيارات ومراحله (من النظام) */
@@ -456,14 +469,17 @@ function hourOf(time: string | undefined) {
 export function tripsFromSystem(
   appointments: ClinicAppointment[],
   requests: VehicleRequest[],
-  fleet: Pick<Vehicle, "plate" | "kind">[],
+  fleet: (Pick<Vehicle, "plate" | "kind"> & Partial<Pick<Vehicle, "fullCapacity">>)[],
   hospitals: Hospital[] = DEFAULT_HOSPITALS,
   now = new Date(),
 ): TripStat[] {
   const byAppointment = new Map<string, VehicleRequest[]>();
   for (const request of requests) byAppointment.set(request.appointmentId, [...(byAppointment.get(request.appointmentId) ?? []), request]);
+  // مواعيد نُقل ضيفها إلى موعده التالي (طلب ذهاب يبدأ من مستشفاها)
+  const transfers = new Set(requests.flatMap((request) => (request.fromAppointmentId ? [request.fromAppointmentId] : [])));
   return appointments.map((appointment) => {
-    const sent = (byAppointment.get(appointment.id) ?? []).filter((request) => request.vehiclePlate);
+    const own = byAppointment.get(appointment.id) ?? [];
+    const sent = own.filter((request) => request.vehiclePlate);
     const request = sent.find((item) => item.direction === "ذهاب") ?? sent[0];
     const nonMedical = appointment.category === "غير طبية";
     const hospital = nonMedical
@@ -486,6 +502,10 @@ export function tripsFromSystem(
     // مدة الرحلة: رحلة سيارة الذهاب من إرسالها حتى عودتها إلى المجمع
     const main = request ? systemLeg(request, appointment, hospitals, kindOf(request.vehiclePlate!), now) : null;
     const building = appointment.buildingNumber.trim();
+    const outcome = appointmentOutcome(appointment, own, now);
+    const back = returnOutcome(appointment, own, transfers, now);
+    const rides = ridesOf(appointment, own, (plate) => fleet.find((vehicle) => vehicle.plate === plate) ?? { kind: kindOf(plate) });
+    const approval = approvalInfo(appointment, now);
     return {
       date: appointment.appointmentDate,
       hour: hourOf(request?.notificationSentAt) ?? hourOf(appointment.appointmentAt),
@@ -504,6 +524,11 @@ export function tripsFromSystem(
       returnTrips: sent.filter((item) => item.direction === "عودة").length,
       ...(booking ? { booking } : {}),
       ...(timings.length ? { timings } : {}),
+      outcome,
+      ...(outcome === "cancelled" ? { cancel: { reason: appointment.cancelReason?.trim() ?? "", by: appointment.cancelledBy?.trim() ?? "" } } : {}),
+      ...(back ? { returnOutcome: back } : {}),
+      ...(rides.length ? { rides } : {}),
+      ...(approval ? { approval } : {}),
     };
   });
 }
@@ -683,7 +708,7 @@ export function summarizeTrips(trips: TripStat[], hospitals: Hospital[] = DEFAUL
   // ساعات العمل: رحلات كل سيارة في كل يوم
   const vehicleDays = new Map<string, VehicleDayEntry>();
   let completedTrips = 0;
-  const directions = { go: 0, back: 0, unknown: 0 };
+  const directions = { go: 0, back: 0, unknown: 0, backOnly: 0 };
   const booking: Record<Booking | "unknown", number> = { scheduled: 0, sameDay: 0, unknown: 0 };
   const timings: RequestTiming[] = [];
   let unmatched = 0;
@@ -715,6 +740,7 @@ export function summarizeTrips(trips: TripStat[], hospitals: Hospital[] = DEFAUL
     if (trip.goTrips !== undefined || trip.returnTrips !== undefined) {
       directions.go += trip.goTrips ?? 0;
       directions.back += trip.returnTrips ?? 0;
+      if (trip.kind && !trip.goTrips && trip.returnTrips) directions.backOnly += 1;
     } else if (trip.kind) directions.unknown += 1;
     if (!trip.kind) continue;
     completedTrips += 1;
@@ -816,6 +842,7 @@ export function summarizeTrips(trips: TripStat[], hospitals: Hospital[] = DEFAUL
       plate,
       driver: Array.from(vehicle.drivers).sort((a, b) => b[1] - a[1]).map(([name]) => name).slice(0, 3).join(" / "),
       trips: vehicle.trips,
+      kind: plateKinds.get(plate) ?? null,
     }))),
     workingVehicles: {
       total: new Set([...Array.from(vehicles.keys()), ...Array.from(roleBuses.keys())]).size,
