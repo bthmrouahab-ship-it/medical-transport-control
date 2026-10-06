@@ -1,7 +1,18 @@
 import { DEFAULT_HOSPITALS, ORIGIN, matchHospital, normalizePlaceName, type Hospital } from "./hospitals";
 import type { HistorySummary } from "./history";
-import { appointmentDateTime, appointmentHospital, type ClinicAppointment, type Vehicle, type VehicleRequest } from "./transport";
-import { UNKNOWN_TRAVEL_MINUTES, driveMinutes, tripPhase } from "./trips";
+import {
+  BUS_ROLES,
+  appointmentDateTime,
+  appointmentHospital,
+  isNonMedical,
+  isReturnOnly,
+  localDateString,
+  type BusRole,
+  type ClinicAppointment,
+  type Vehicle,
+  type VehicleRequest,
+} from "./transport";
+import { LATE_MINUTES, UNKNOWN_TRAVEL_MINUTES, driveMinutes, neededAt, tripPhase } from "./trips";
 
 /**
  * سجلات الرحلات للإحصائيات: رحلة واحدة لكل موعد، بلا اسم المريض أو رقمه أو شقته.
@@ -36,7 +47,202 @@ export type TripStat = {
   legs?: TripLeg[];
   /** من الملخص القديم: العدد اليومي ونوع المركبة فقط، بلا ساعة أو وجهة أو سيارة */
   legacy?: boolean;
+  /** رحلات النظام: رقم الموعد (لجدول المواعيد بالتفصيل) */
+  appointmentId?: string;
+  /** رحلات النظام: رحلات السيارات المنجزة (أُرسلت لها سيارة) ذهابًا وعودة؛ النقل بين موعدين ذهاب */
+  goTrips?: number;
+  returnTrips?: number;
+  /** رحلات النظام: سُجّل الموعد قبل يومه (مجدول) أو في يومه نفسه (عاجل)؛ بلا الخانة لما سُجّل قبل حفظ وقت التسجيل */
+  booking?: Booking;
+  /** رحلات النظام: مراحل كل رحلة سيارة للموعد وتأخيرها */
+  timings?: RequestTiming[];
 };
+
+/** المواعيد المجدولة (سُجّلت قبل يوم الموعد) والعاجلة (سُجّلت في يوم الموعد نفسه) */
+export type Booking = "scheduled" | "sameDay";
+export const BOOKING_LABELS: Record<Booking, string> = { scheduled: "مجدولة", sameDay: "عاجلة" };
+export const BOOKING_HINTS: Record<Booking, string> = { scheduled: "سُجّلت قبل يوم الموعد", sameDay: "سُجّلت في يوم الموعد نفسه" };
+
+/** نوع تسجيل الموعد من وقت إضافته (addedAt، يكتبه الخادم)، أو null إن لم يُعرف. */
+export function bookingOf(appointment: Pick<ClinicAppointment, "addedAt" | "appointmentDate">): Booking | null {
+  const added = appointment.addedAt ? new Date(appointment.addedAt) : null;
+  if (!added || Number.isNaN(added.getTime())) return null;
+  return localDateString(added) < appointment.appointmentDate ? "scheduled" : "sameDay";
+}
+
+/**
+ * مراحل تأخير رحلة السيارة (رحلات النظام فقط):
+ * - dispatch: أُرسلت السيارة بعد وقت الحاجة إليها (neededAt) لعدم وجود سيارة متاحة.
+ * - fromComplex: رحلة عودة أو نقل تأخر وصول السيارة إلى المستشفى لأنها انطلقت من المجمع.
+ * - unregistered: السيارة كانت عند المستشفى (GPS) قبل أن يُسجَّل وصولها.
+ * - arrival: تأخر وصول السيارة إلى المبنى في رحلة الذهاب.
+ * - guest: وصلت السيارة وتأخر الضيف في النزول.
+ */
+export type DelayStage = "dispatch" | "fromComplex" | "unregistered" | "arrival" | "guest";
+export const DISPATCH_LATE_MINUTES = 15;
+export const GUEST_LATE_MINUTES = 10;
+export const UNREGISTERED_MINUTES = 5;
+export const DELAY_STAGES: { stage: DelayStage; label: string; when: string; hint: string }[] = [
+  { stage: "dispatch", label: "تأخر الإرسال", when: "عند الإرسال", hint: `لا توجد سيارة متاحة: أُرسلت السيارة بعد وقت الحاجة إليها بـ ${DISPATCH_LATE_MINUTES} دقيقة أو أكثر` },
+  { stage: "fromComplex", label: "السيارة ذاهبة من المجمع إلى المستشفى", when: "عند الاستلام", hint: `رحلة عودة أو نقل: وصلت السيارة إلى المستشفى بعد ${LATE_MINUTES} دقيقة أو أكثر من إرسالها` },
+  { stage: "unregistered", label: "السائق وصل ولم يسجّل وصوله", when: "عند الاستلام", hint: `موقع السيارة (GPS) عند المستشفى قبل تسجيل وصولها بـ ${UNREGISTERED_MINUTES} دقائق أو أكثر` },
+  { stage: "arrival", label: "تأخر وصول السيارة إلى المبنى", when: "عند الاستلام", hint: `رحلة ذهاب: وصلت السيارة إلى المبنى بعد ${LATE_MINUTES} دقيقة أو أكثر من إرسالها` },
+  { stage: "guest", label: "السائق وصل والضيف تأخر في النزول", when: "عند الاستلام", hint: `استُلم الضيف بعد وصول السيارة بـ ${GUEST_LATE_MINUTES} دقائق أو أكثر` },
+];
+export const DELAY_LABELS = Object.fromEntries(DELAY_STAGES.map((item) => [item.stage, item.label])) as Record<DelayStage, string>;
+
+/** مراحل رحلة سيارة بالدقائق (null = لا يُعرف)، والمراحل المتأخرة منها. */
+export type RequestTiming = {
+  requestId: string;
+  direction: "ذهاب" | "عودة" | "نقل";
+  plate: string;
+  /** من وقت الحاجة إلى السيارة حتى إرسالها */
+  dispatchWait: number | null;
+  /** من الإرسال حتى تسجيل وصول السيارة إلى نقطة الاستلام */
+  toPickup: number | null;
+  /** من وجود السيارة عند المستشفى (GPS) حتى تسجيل وصولها */
+  unregistered: number | null;
+  /** من وصول السيارة حتى استلام الضيف */
+  guestWait: number | null;
+  /** رحلة ذهاب طبية بوصول مسجل (GPS أو مؤكد): دقائق وصول الضيف بعد موعده (صفر أو أقل: في موعده) */
+  lateToAppointment: number | null;
+  stages: DelayStage[];
+};
+
+const toDate = (value: string | undefined) => {
+  const date = value ? new Date(value) : null;
+  return date && !Number.isNaN(date.getTime()) ? date : null;
+};
+const minutesBetween = (from: Date | null, to: Date | null) => (from && to ? Math.round((to.getTime() - from.getTime()) / 60000) : null);
+const notNegative = (value: number | null) => (value === null ? null : Math.max(0, value));
+/** وقت «HH:MM» في يوم الموعد */
+function clockOn(date: string, time: string | undefined) {
+  const match = time?.match(/^(\d{1,2}):(\d{2})$/);
+  return match ? appointmentDateTime({ appointmentDate: date, appointmentAt: `${match[1].padStart(2, "0")}:${match[2]}` }) : null;
+}
+
+/** مراحل رحلة سيارة أُرسلت (للإحصائيات): الإرسال، والوصول إلى نقطة الاستلام، والاستلام، والوصول إلى الموعد. */
+export function requestTiming(request: VehicleRequest, appointment: ClinicAppointment, hospitals: Hospital[] = DEFAULT_HOSPITALS): RequestTiming | null {
+  if (!request.vehiclePlate) return null;
+  const direction = request.fromAppointmentId ? "نقل" : request.direction;
+  const sent = clockOn(appointment.appointmentDate, request.notificationSentAt);
+  // وصول السيارة: كما سجّله السائق من تطبيقه (ما لم ينفه مشرف المبنى)، أو كما سجّله مشرف المبنى
+  const arrival = (request.arrivalCheck === "denied" ? null : toDate(request.driverArrivedAt)) ?? toDate(request.pickupArrivedAt);
+  const near = toDate(request.nearPickupAt);
+  const pickedUp = toDate(request.pickedUpAt);
+  const dispatchWait = notNegative(minutesBetween(neededAt(request, appointment, hospitals), sent));
+  const toPickup = notNegative(minutesBetween(sent, arrival));
+  const unregistered = near && arrival && arrival > near ? minutesBetween(near, arrival) : null;
+  const guestWait = notNegative(minutesBetween(arrival, pickedUp));
+  const arrived = pickedUp && (request.arrivalSource === "gps" || request.arrivalSource === "manual") ? toDate(request.arrivedAt) : null;
+  const lateBy = direction === "ذهاب" && !isNonMedical(appointment) && !isReturnOnly(appointment) ? minutesBetween(appointmentDateTime(appointment), arrived) : null;
+  const stages: DelayStage[] = [];
+  if (dispatchWait !== null && dispatchWait >= DISPATCH_LATE_MINUTES) stages.push("dispatch");
+  if (unregistered !== null && unregistered >= UNREGISTERED_MINUTES) stages.push("unregistered");
+  else if (toPickup !== null && toPickup >= LATE_MINUTES) stages.push(direction === "ذهاب" ? "arrival" : "fromComplex");
+  if (guestWait !== null && guestWait >= GUEST_LATE_MINUTES) stages.push("guest");
+  return {
+    requestId: request.id,
+    direction,
+    plate: request.vehiclePlate,
+    dispatchWait,
+    toPickup,
+    unregistered,
+    guestWait,
+    lateToAppointment: lateBy,
+    stages,
+  };
+}
+
+/** دقائق المرحلة المتأخرة في رحلة */
+export function stageMinutes(timing: RequestTiming, stage: DelayStage) {
+  if (stage === "dispatch") return timing.dispatchWait;
+  if (stage === "unregistered") return timing.unregistered;
+  if (stage === "guest") return timing.guestWait;
+  return timing.toPickup;
+}
+
+export type DelaySummary = {
+  /** رحلات السيارات من النظام في الفترة (أُرسلت لها سيارة) */
+  trips: number;
+  /** رحلات فيها مرحلة متأخرة واحدة على الأقل */
+  late: number;
+  stages: { stage: DelayStage; trips: number; avgMinutes: number | null }[];
+  /** رحلات ذهاب طبية وصل فيها الضيف بعد موعده، من الرحلات التي سُجّل وصولها */
+  lateToAppointment: { trips: number; avgMinutes: number | null; measured: number };
+  /** رحلات بلا وقت مسجل لوصول السيارة إلى نقطة الاستلام (قبل حفظه في النظام) */
+  withoutArrival: number;
+};
+
+// ————— توفر السيارات في الخدمة —————
+
+/** حالة سيارة في الخدمة عند تغيّرها (من الخادم: service-log) */
+export type ServiceEvent = { at: string; plate: string; kind: string; available: boolean; hasDriver: boolean; busRole: string; driver: string };
+/** وقت سيارة في الخدمة (متاحة ولها سائق) في يوم: الدقائق، وأول تشغيل وآخر إيقاف بالدقائق منذ منتصف الليل */
+export type ServiceDay = { date: string; plate: string; kind: string; busRole: BusRole | null; driver: string; minutes: number; first: number; last: number };
+export type ServiceVehicle = { plate: string; kind: string; busRoles: BusRole[]; driver: string; days: number; minutes: number; first: number | null; last: number | null };
+export type ServiceSummary = { days: ServiceDay[]; vehicles: ServiceVehicle[]; totalMinutes: number };
+
+const DAY_MS = 24 * 60 * 60000;
+const roleOf = (value: string): BusRole | null => (BUS_ROLES.includes(value as BusRole) ? value as BusRole : null);
+/** الباصات المخصصة لا تُسجَّل لها رحلات (باص العيادة وباص المجمع)، فتُعد سيارات عاملة في أيام خدمتها */
+export const SERVICE_ROLES: BusRole[] = ["clinic", "shuttle", "nonMedical"];
+
+/**
+ * وقت كل سيارة في الخدمة (متاحة ولها سائق) في كل يوم من الفترة، من تغيّرات حالتها.
+ * الحالة قبل أول تغيير في الفترة هي آخر حالة قبلها (يرسلها الخادم أولًا)، والسيارة في الخدمة الآن حتى «الآن».
+ */
+export function serviceHours(events: ServiceEvent[], from: string, to: string, now = new Date()): ServiceSummary {
+  const start = from ? appointmentDateTime({ appointmentDate: from, appointmentAt: "00:00" }).getTime() : -Infinity;
+  const end = Math.min(now.getTime(), to ? appointmentDateTime({ appointmentDate: to, appointmentAt: "00:00" }).getTime() + DAY_MS : Infinity);
+  const byPlate = new Map<string, ServiceEvent[]>();
+  for (const event of [...events].sort((a, b) => a.at.localeCompare(b.at))) byPlate.set(event.plate, [...(byPlate.get(event.plate) ?? []), event]);
+  const dayMap = new Map<string, ServiceDay>();
+  const addInterval = (event: ServiceEvent, intervalStart: number, intervalEnd: number) => {
+    let cursor = Math.max(intervalStart, start);
+    const stop = Math.min(intervalEnd, end);
+    while (cursor < stop) {
+      const date = localDateString(new Date(cursor));
+      const midnight = appointmentDateTime({ appointmentDate: date, appointmentAt: "00:00" }).getTime();
+      const dayEnd = Math.min(stop, midnight + DAY_MS);
+      const key = `${date}|${event.plate}`;
+      const first = Math.round((cursor - midnight) / 60000);
+      const last = Math.round((dayEnd - midnight) / 60000);
+      const day = dayMap.get(key) ?? { date, plate: event.plate, kind: event.kind, busRole: null, driver: event.driver, minutes: 0, first, last };
+      day.minutes += (dayEnd - cursor) / 60000;
+      day.first = Math.min(day.first, first);
+      day.last = Math.max(day.last, last);
+      day.kind = event.kind || day.kind;
+      day.driver = event.driver || day.driver;
+      day.busRole = roleOf(event.busRole) ?? day.busRole;
+      dayMap.set(key, day);
+      cursor = dayEnd;
+    }
+  };
+  for (const list of Array.from(byPlate.values())) {
+    list.forEach((event, index) => {
+      if (!event.available || !event.hasDriver) return;
+      const next = list[index + 1];
+      addInterval(event, Date.parse(event.at), next ? Date.parse(next.at) : Infinity);
+    });
+  }
+  const days = Array.from(dayMap.values())
+    .map((day) => ({ ...day, minutes: Math.round(day.minutes) }))
+    .filter((day) => day.minutes > 0)
+    .sort((a, b) => a.date.localeCompare(b.date) || b.minutes - a.minutes);
+  const vehicles = new Map<string, ServiceVehicle>();
+  for (const day of days) {
+    const vehicle = vehicles.get(day.plate) ?? { plate: day.plate, kind: day.kind, busRoles: [], driver: day.driver, days: 0, minutes: 0, first: day.first, last: day.last };
+    vehicle.days += 1;
+    vehicle.minutes += day.minutes;
+    vehicle.driver = day.driver || vehicle.driver;
+    if (day.busRole && !vehicle.busRoles.includes(day.busRole)) vehicle.busRoles.push(day.busRole);
+    vehicles.set(day.plate, vehicle);
+  }
+  const list = Array.from(vehicles.values()).map((vehicle) => (vehicle.days === 1 ? vehicle : { ...vehicle, first: null, last: null }))
+    .sort((a, b) => b.minutes - a.minutes);
+  return { days, vehicles: list, totalMinutes: days.reduce((total, day) => total + day.minutes, 0) };
+}
 
 /** مستند يوم في المجموعة statsDays: رحلات يوم واحد من ملف Excel. */
 export type StatsDay = { date: string; source: string; importedAt: string; trips: TripStat[] };
@@ -100,6 +306,12 @@ export type StatsSummary = {
   workingVehicles?: WorkingVehicles;
   /** ساعات عمل السيارات في كل يوم وفي الفترة */
   workHours?: WorkHours;
+  /** رحلات السيارات المنجزة ذهابًا وعودة (من النظام)، وما لا يُعرف اتجاهه (ملفات Excel والملخص القديم) */
+  directions?: { go: number; back: number; unknown: number };
+  /** المواعيد المجدولة والعاجلة (من النظام)، وما لا يُعرف وقت تسجيله */
+  booking?: Record<Booking | "unknown", number>;
+  /** تأخير رحلات السيارات ومراحله (من النظام) */
+  delays?: DelaySummary;
   buildings: { building: string; trips: number }[];
   unmatchedDestinations: number;
   /** رحلات منجزة من الملخص القديم لا تظهر في الساعات والوجهات والسيارات والمباني */
@@ -198,6 +410,8 @@ export type WorkingVehicles = {
   /** من الأيام التي لها تفاصيل السيارات فقط */
   dailyAverage: number | null;
   dailyMax: number | null;
+  /** الباصات المخصصة (العيادة والمجمع والرحلات غير الطبية) التي كانت في الخدمة، ومنها ما لم تُسجَّل له رحلات */
+  roleBuses: { plate: string; busRole: BusRole }[];
 };
 
 /** كل السيارات التي خدمت الموعد: سيارة الذهاب ثم سيارات العودة أو النقل */
@@ -267,6 +481,8 @@ export function tripsFromSystem(
       }
     }
     const legs = sent.flatMap((item) => systemLeg(item, appointment, hospitals, kindOf(item.vehiclePlate!), now) ?? []);
+    const timings = sent.flatMap((item) => requestTiming(item, appointment, hospitals) ?? []);
+    const booking = bookingOf(appointment);
     // مدة الرحلة: رحلة سيارة الذهاب من إرسالها حتى عودتها إلى المجمع
     const main = request ? systemLeg(request, appointment, hospitals, kindOf(request.vehiclePlate!), now) : null;
     const building = appointment.buildingNumber.trim();
@@ -283,6 +499,11 @@ export function tripsFromSystem(
       nonMedical,
       ...(otherVehicles.length ? { otherVehicles } : {}),
       ...(legs.length ? { legs } : {}),
+      appointmentId: appointment.id,
+      goTrips: sent.filter((item) => item.direction === "ذهاب").length,
+      returnTrips: sent.filter((item) => item.direction === "عودة").length,
+      ...(booking ? { booking } : {}),
+      ...(timings.length ? { timings } : {}),
     };
   });
 }
@@ -444,7 +665,11 @@ function summarizeWorkHours(entries: VehicleDayEntry[]): WorkHours {
   return { days, vehicles, totalMinutes, avgDayMinutes: days.length ? Math.round(totalMinutes / days.length) : null };
 }
 
-export function summarizeTrips(trips: TripStat[], hospitals: Hospital[] = DEFAULT_HOSPITALS, legacy: HistorySummary | null = null): StatsSummary {
+/**
+ * service: أيام الباصات المخصصة في الخدمة (serviceHours) تُعد سيارات عاملة ولو بلا رحلات في النظام
+ * (باص العيادة وباص المجمع)، في أيامها وفي الفترة.
+ */
+export function summarizeTrips(trips: TripStat[], hospitals: Hospital[] = DEFAULT_HOSPITALS, legacy: HistorySummary | null = null, service: ServiceDay[] = []): StatsSummary {
   const daily = new Map<string, DailyStat>();
   const hours = new Map<number, number>();
   const kinds = new Map<TripKind, number>();
@@ -458,6 +683,9 @@ export function summarizeTrips(trips: TripStat[], hospitals: Hospital[] = DEFAUL
   // ساعات العمل: رحلات كل سيارة في كل يوم
   const vehicleDays = new Map<string, VehicleDayEntry>();
   let completedTrips = 0;
+  const directions = { go: 0, back: 0, unknown: 0 };
+  const booking: Record<Booking | "unknown", number> = { scheduled: 0, sameDay: 0, unknown: 0 };
+  const timings: RequestTiming[] = [];
   let unmatched = 0;
   let withoutDetails = 0;
   let minutesTotal = 0;
@@ -482,6 +710,12 @@ export function summarizeTrips(trips: TripStat[], hospitals: Hospital[] = DEFAUL
     daily.set(trip.date, day);
     day.total += 1;
     if (!trip.legacy && !dayPlates.has(trip.date)) dayPlates.set(trip.date, new Set());
+    if (trip.appointmentId) booking[trip.booking ?? "unknown"] += 1;
+    if (trip.timings) timings.push(...trip.timings);
+    if (trip.goTrips !== undefined || trip.returnTrips !== undefined) {
+      directions.go += trip.goTrips ?? 0;
+      directions.back += trip.returnTrips ?? 0;
+    } else if (trip.kind) directions.unknown += 1;
     if (!trip.kind) continue;
     completedTrips += 1;
     day.completed += 1;
@@ -542,6 +776,14 @@ export function summarizeTrips(trips: TripStat[], hospitals: Hospital[] = DEFAUL
     unmatched += legacy.unmatchedDestinations;
   }
 
+  // الباصات المخصصة في الخدمة: سيارات عاملة في أيامها (ولو بلا رحلات)
+  const roleBuses = new Map<string, BusRole>();
+  for (const day of service) {
+    if (!day.busRole || !SERVICE_ROLES.includes(day.busRole) || !dayPlates.has(day.date)) continue;
+    dayPlates.get(day.date)!.add(day.plate);
+    if (!plateKinds.has(day.plate)) plateKinds.set(day.plate, "باص");
+    roleBuses.set(day.plate, day.busRole);
+  }
   for (const [date, plates] of Array.from(dayPlates)) daily.get(date)!.vehicles = plates.size;
   const days = Array.from(daily.values()).sort((a, b) => a.date.localeCompare(b.date));
   // متوسط السيارات في اليوم من الأيام التي عملت فيها سيارات (لا الأيام القادمة التي لم تُرسل لها سيارة بعد)
@@ -576,14 +818,39 @@ export function summarizeTrips(trips: TripStat[], hospitals: Hospital[] = DEFAUL
       trips: vehicle.trips,
     }))),
     workingVehicles: {
-      total: vehicles.size,
+      total: new Set([...Array.from(vehicles.keys()), ...Array.from(roleBuses.keys())]).size,
       byKind: TRIP_KINDS.map((kind) => ({ kind, vehicles: Array.from(plateKinds.values()).filter((item) => item === kind).length })),
       dailyAverage: workingDays.length ? Math.round(workingDays.reduce((total, count) => total + count, 0) / workingDays.length) : null,
       dailyMax: workingDays.length ? Math.max(...workingDays) : null,
+      roleBuses: Array.from(roleBuses, ([plate, busRole]) => ({ plate, busRole })),
     },
+    directions,
+    booking,
+    delays: summarizeDelays(timings),
     workHours: summarizeWorkHours(Array.from(vehicleDays.values())),
     buildings: sortDesc(Array.from(buildings, ([building, count]) => ({ building, trips: count }))),
     unmatchedDestinations: unmatched,
     withoutDetails,
+  };
+}
+
+/** تأخير رحلات السيارات: عدد الرحلات المتأخرة، ولكل مرحلة عددها ومتوسط دقائقها. */
+export function summarizeDelays(timings: RequestTiming[]): DelaySummary {
+  const average = (values: number[]) => (values.length ? Math.round(values.reduce((total, value) => total + value, 0) / values.length) : null);
+  const measured = timings.flatMap((timing) => (timing.lateToAppointment === null ? [] : [timing.lateToAppointment]));
+  const late = measured.filter((minutes) => minutes > 0);
+  return {
+    trips: timings.length,
+    late: timings.filter((timing) => timing.stages.length > 0).length,
+    stages: DELAY_STAGES.map(({ stage }) => {
+      const matching = timings.filter((timing) => timing.stages.includes(stage));
+      return { stage, trips: matching.length, avgMinutes: average(matching.flatMap((timing) => stageMinutes(timing, stage) ?? [])) };
+    }),
+    lateToAppointment: {
+      trips: late.length,
+      avgMinutes: average(late),
+      measured: measured.length,
+    },
+    withoutArrival: timings.filter((timing) => timing.toPickup === null).length,
   };
 }

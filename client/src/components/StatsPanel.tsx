@@ -12,8 +12,11 @@ import {
   inRange,
   matchesFilter,
   selectTrips,
+  serviceHours,
   summarizeTrips,
   tripsFromSystem,
+  type ServiceEvent,
+  type ServiceSummary,
   type StatsDay,
   type StatsFilter,
   type TripStat,
@@ -31,6 +34,7 @@ import { EmptyState, Panel, Segmented, addDays, btn, cx, inputClass, stamp } fro
 import HistoryCharts from "./HistoryCharts";
 import ActivityLog from "./ActivityLog";
 import GuestStats from "./GuestStats";
+import StatsAppointments from "./StatsAppointments";
 
 type Preset = "all" | "today" | "7d" | "30d" | "month" | "lastMonth" | "year" | "custom";
 
@@ -116,16 +120,45 @@ export default function StatsPanel({ canEdit, actor, hospitals, fleet, appointme
   );
   const periodTrips = useMemo(() => selected.trips.filter((trip) => inRange(trip.date, filter)), [selected, filter]);
   const options = useMemo(() => filterOptions(periodTrips, hospitals), [periodTrips, hospitals]);
+  const filteredTrips = useMemo(() => periodTrips.filter((trip) => matchesFilter(trip, filter, hospitals)), [periodTrips, filter, hospitals]);
+
+  // وقت توفر السيارات في الخدمة للفترة (من سجل حالات السيارات في الخادم)
+  const range = useMemo(() => dayRange(filter.from || undefined, filter.to || undefined), [filter.from, filter.to]);
+  const [serviceLog, setServiceLog] = useState<{ events: ServiceEvent[]; trackedSince: string | null } | null>(null);
+  useEffect(() => {
+    let alive = true;
+    const query: Record<string, string> = {};
+    if (range.since) query.since = range.since;
+    if (range.until) query.until = range.until;
+    api<{ events: ServiceEvent[]; trackedSince: string | null }>("service-log", undefined, query)
+      .then((response) => alive && setServiceLog(response))
+      .catch((error) => {
+        console.error("[stats] service", error);
+        if (alive) setServiceLog({ events: [], trackedSince: null });
+      });
+    return () => {
+      alive = false;
+    };
+  }, [range.since, range.until]);
+  const service = useMemo((): ServiceSummary | null => {
+    if (!serviceLog) return null;
+    const all = serviceHours(serviceLog.events, filter.from, filter.to || localDateString());
+    const keep = (item: { plate: string; kind: string }) => (filter.plate === "all" || item.plate === filter.plate) && (filter.kind === "all" || item.kind === filter.kind);
+    const days = all.days.filter(keep);
+    return { days, vehicles: all.vehicles.filter(keep), totalMinutes: days.reduce((total, day) => total + day.minutes, 0) };
+  }, [serviceLog, filter.from, filter.to, filter.plate, filter.kind]);
+
   const summary = useMemo(() => {
-    const trips = periodTrips.filter((trip) => matchesFilter(trip, filter, hospitals));
     // تفاصيل الملخص القديم تُضاف فقط عندما تشمل الفترة كل أيامه ولا توجد فلاتر أخرى
     const legacy = selected.legacy
       && (!filter.from || filter.from <= selected.legacy.from)
       && (!filter.to || filter.to >= selected.legacy.to)
       && !hasDetailFilters(filter)
       ? selected.legacy : null;
-    return summarizeTrips(trips, hospitals, legacy);
-  }, [periodTrips, filter, hospitals, selected.legacy]);
+    // الباصات المخصصة في الخدمة سيارات عاملة، ما لم تُختر وجهة أو منطقة أو مبنى أو نوع رحلة
+    const roleDays = filter.zone === "all" && filter.destination === "all" && filter.building === "all" && filter.category === "all" ? service?.days ?? [] : [];
+    return summarizeTrips(filteredTrips, hospitals, legacy, roleDays);
+  }, [filteredTrips, filter, hospitals, selected.legacy, service]);
 
   const update = (patch: Partial<StatsFilter>) => setFilter((current) => ({ ...current, ...patch }));
   function choosePreset(next: Preset) {
@@ -141,8 +174,7 @@ export default function StatsPanel({ canEdit, actor, hospitals, fleet, appointme
   // القيمة المختارة تبقى في القائمة حتى لو لم تعد لها رحلات في الفترة الجديدة
   const withSelected = (values: string[], value: string) => (value !== "all" && !values.includes(value) ? [value, ...values] : values);
 
-  // سجل العمليات والتصدير لنفس فترة الإحصائيات
-  const range = useMemo(() => dayRange(filter.from || undefined, filter.to || undefined), [filter.from, filter.to]);
+  // سجل العمليات والتصدير لنفس فترة الإحصائيات (range أعلاه)
   const periodLabel = filter.from || filter.to
     ? `الفترة ${filter.from || "البداية"} إلى ${filter.to || localDateString()}`
     : `كل الفترات${summary.totalTrips ? ` (${summary.from} إلى ${summary.to})` : ""}`;
@@ -157,11 +189,11 @@ export default function StatsPanel({ canEdit, actor, hospitals, fleet, appointme
     setExporting(format);
     try {
       const { items, truncated } = await fetchAllActivity(range);
-      const report = statsReport(summary, "إحصائيات سيارات مجمع الثمامة", `${periodLabel} · أنشأه ${actor} في ${stamp()}`);
+      const report = statsReport(summary, "إحصائيات سيارات مجمع الثمامة", `${periodLabel} · أنشأه ${actor} في ${stamp()}`, service);
       const index = guestIndex(guestRecords ?? []);
       report.sections.push(
         ...guestSections(guestSummary),
-        tripsSection(appointments, requests, items, filter.from || undefined, filter.to || undefined, (appointment) => guestOfAppointment(index, appointment)),
+        tripsSection(appointments, requests, items, filter.from || undefined, filter.to || undefined, (appointment) => guestOfAppointment(index, appointment), hospitals),
         activitySection(items, truncated),
       );
       const name = `althumama-stats-${localDateString()}`;
@@ -258,7 +290,10 @@ export default function StatsPanel({ canEdit, actor, hospitals, fleet, appointme
       {imported === null ? (
         <div className="flex min-h-64 items-center justify-center rounded-2xl bg-white text-slate-400 shadow-card ring-1 ring-slate-200/80"><Loader2 className="h-6 w-6 animate-spin" /><span className="sr-only">جارٍ التحميل</span></div>
       ) : summary.totalTrips ? (
-        <HistoryCharts summary={summary} onFilter={update} />
+        <>
+          <HistoryCharts summary={summary} onFilter={update} service={service} trackedSince={serviceLog?.trackedSince ?? null} />
+          <StatsAppointments trips={filteredTrips} appointments={appointments} requests={requests} />
+        </>
       ) : (
         <div className="rounded-2xl bg-white shadow-card ring-1 ring-slate-200/80">
           <EmptyState

@@ -55,6 +55,7 @@ describe("working vehicles in the statistics", () => {
       // اليوم القادم بلا سيارات لا يدخل في المتوسط
       dailyAverage: 3,
       dailyMax: 3,
+      roleBuses: [],
     });
     // السيارة 111: ثلاث رحلات، والسيارة 222 رحلة العودة
     expect(summary.vehicles.find((item) => item.plate === "111")?.trips).toBe(3);

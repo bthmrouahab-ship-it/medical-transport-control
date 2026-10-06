@@ -14,8 +14,11 @@ const CLINIC_ROLES = ['clinic', 'clinicLead'];
 const BUILDING_ROLES = ['buildingSupervisor', 'buildingLead'];
 /** خروج تلقائي بعد ساعة بلا نشاط */
 const IDLE_SECONDS = 3600;
-/** نسخة قاعدة البيانات (settings.schema): 2 = فصل السائقين عن السيارات (migrate_drivers في drivers.php) */
-const SCHEMA_VERSION = 2;
+/**
+ * نسخة قاعدة البيانات (settings.schema): 2 = فصل السائقين عن السيارات (migrate_drivers في drivers.php)،
+ * 3 = سجل السيارات في الخدمة ووقت تسجيل المواعيد للإحصائيات (migrate_tracking في tracking.php)
+ */
+const SCHEMA_VERSION = 3;
 /** أقصى حجم لطلب واحد (رفع ملف إحصائيات كبير يُقسَّم على عدة طلبات) */
 const MAX_BODY_BYTES = 8 * 1024 * 1024;
 
@@ -73,6 +76,7 @@ function upgrade_schema(PDO $pdo): void
         ensure_schema($pdo);
         $version = (int)$pdo->query("SELECT v FROM settings WHERE k = 'schema'")->fetchColumn();
         if ($version < 2) migrate_drivers($pdo);
+        if ($version < 3) migrate_tracking($pdo);
         $pdo->prepare("INSERT INTO settings (k, v) VALUES ('schema', ?) ON DUPLICATE KEY UPDATE v = VALUES(v)")->execute([(string)SCHEMA_VERSION]);
     } finally {
         $pdo->query("SELECT RELEASE_LOCK('althumama_schema')")->fetchColumn();
@@ -133,6 +137,19 @@ function ensure_schema(PDO $pdo): void
         summary VARCHAR(500) NOT NULL,
         details TEXT NULL,
         KEY activity_at (at)
+    ) $options");
+    // حالة كل سيارة في الخدمة عند كل تغيير (متاحة، ولها سائق، وتخصيص الباص): وقت توفرها في الإحصائيات
+    $pdo->exec("CREATE TABLE IF NOT EXISTS vehicle_events (
+        id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+        at VARCHAR(30) NOT NULL,
+        plate VARCHAR(40) NOT NULL,
+        kind VARCHAR(30) NOT NULL DEFAULT '',
+        available TINYINT(1) NOT NULL,
+        has_driver TINYINT(1) NOT NULL,
+        bus_role VARCHAR(20) NOT NULL DEFAULT '',
+        driver VARCHAR(80) NOT NULL DEFAULT '',
+        KEY vehicle_events_at (at),
+        KEY vehicle_events_plate (plate, id)
     ) $options");
     $pdo->exec("CREATE TABLE IF NOT EXISTS login_attempts (
         k VARCHAR(120) PRIMARY KEY,

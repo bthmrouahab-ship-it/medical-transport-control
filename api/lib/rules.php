@@ -10,7 +10,7 @@ const APPOINTMENT_STATUSES = ['بانتظار طلب السيارة', 'تم طل
 const APPOINTMENT_FIELDS = ['id', 'guestId', 'patientName', 'clinic', 'buildingNumber', 'apartmentNumber', 'mobile', 'appointmentDate',
     'appointmentAt', 'hospitalId', 'category', 'kind', 'assistance', 'status', 'cancelReason', 'cancelledBy', 'cancelledAt',
     'gender', 'cancer', 'returnedSelf', 'returnedSelfBy', 'returnedSelfAt', 'approval', 'approvedBy', 'approvedAt', 'excludedBy', 'excludedAt',
-    'returnOnly', 'nurse', 'appointmentType', 'seriesId', 'returnAt', '_o'];
+    'returnOnly', 'nurse', 'appointmentType', 'seriesId', 'returnAt', 'addedAt', '_o'];
 /** موافقة مسؤول العيادة: بانتظار الموافقة، أو موافق عليه (باسمه ووقته)، أو مستبعد بلا حذف (باسمه ووقته) */
 const APPROVAL_FIELDS = ['approval', 'approvedBy', 'approvedAt', 'excludedBy', 'excludedAt'];
 /** بيانات الموعد نفسه: تعديل العيادة لها يعيد الموعد إلى انتظار موافقة مسؤولها */
@@ -37,7 +37,9 @@ const TRIP_RESET_FIELDS = ['vehiclePlate', 'driver', 'groupId', 'notificationSen
 const TRIP_UNDO_APPOINTMENT_STATUS = [['تم استلام المريض', 'تم طلب السيارة'], ['مكتملة', 'طلب عودة'], ['مكتملة', 'تم استلام المريض']];
 const REQUEST_FIELDS = ['id', 'appointmentId', 'vehiclePlate', 'driver', 'direction', 'status', 'notificationMethod',
     'createdAt', 'requestedOn', 'autoReturn', 'groupId', 'notificationSentAt', 'requestedBy', 'pickedUpAt', 'etaAt', 'destLat', 'destLng', 'arrivedAt', 'arrivalSource',
-    'fromAppointmentId', 'nurseOnly', 'driverArrivedAt', 'arrivalGps', 'pickupGps', ...CHECK_FIELDS, ...VEHICLE_CHANGE_FIELDS, ...TRIP_REMOVAL_FIELDS, '_o'];
+    'fromAppointmentId', 'nurseOnly', 'driverArrivedAt', 'arrivalGps', 'pickupGps', ...CHECK_FIELDS, ...VEHICLE_CHANGE_FIELDS, ...TRIP_REMOVAL_FIELDS,
+    // يكتبها الخادم وحده للإحصائيات (stamp_tracking في tracking.php)
+    'pickupArrivedAt', 'nearPickupAt', '_o'];
 /** خانات مرحلة الطريق إلى الوجهة (تُكتب عند استلام المريض وعند الوصول) */
 const TRIP_FIELDS = ['pickedUpAt', 'etaAt', 'destLat', 'destLng', 'arrivedAt', 'arrivalSource'];
 /** driver وphone: اسم السائق المخصص للسيارة ورقمه، منسوخان من قائمة السائقين (driverId) ويحدّثهما الخادم */
