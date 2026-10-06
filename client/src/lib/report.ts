@@ -165,7 +165,7 @@ export function statsReport(summary: StatsSummary, title: string, subtitle: stri
             title: "التوفر في الخدمة",
             sheet: "التوفر في الخدمة",
             note: "من تشغيل السيارة (متاحة ولها سائق) حتى إيقافها، ونسبة التشغيل: ساعات العمل من ساعات التوفر",
-            columns: ["السيارة", "السائق", "النوع", "تخصيص الباص", "أيام الخدمة", "التوفر في الخدمة", "بالساعات", "ساعات العمل", "نسبة التشغيل", ...(singleDay ? ["التشغيل", "الإيقاف"] : [])],
+            columns: ["السيارة", "السائق", "النوع", "التخصيص", "أيام الخدمة", "التوفر في الخدمة", "بالساعات", "ساعات العمل", "نسبة التشغيل", ...(singleDay ? ["التشغيل", "الإيقاف"] : [])],
             rows: service.vehicles.map((item) => {
               const worked = workOf.get(item.plate) ?? 0;
               return [
@@ -179,7 +179,7 @@ export function statsReport(summary: StatsSummary, title: string, subtitle: stri
           {
             title: "التوفر في الخدمة يوميًا",
             sheet: "التوفر يوميًا",
-            columns: ["التاريخ", "السيارة", "السائق", "النوع", "تخصيص الباص", "التشغيل", "الإيقاف", "التوفر في الخدمة", "بالساعات"],
+            columns: ["التاريخ", "السيارة", "السائق", "النوع", "التخصيص", "التشغيل", "الإيقاف", "التوفر في الخدمة", "بالساعات"],
             rows: service.days.map((day) => [day.date, day.plate, day.driver, day.kind, day.busRole ? BUS_ROLE_LABELS[day.busRole] : "", clockText(day.first), clockText(day.last), durationText(day.minutes), decimalHours(day.minutes)]),
             bar: 8,
           },

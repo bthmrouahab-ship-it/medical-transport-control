@@ -31,7 +31,7 @@ const APPOINTMENT_FIELD_LABELS = [
     'appointmentType' => 'نوع الموعد',
 ];
 
-const VEHICLE_FIELD_LABELS = ['plate' => 'رقم السيارة', 'driver' => 'السائق', 'phone' => 'الهاتف', 'kind' => 'النوع', 'busRole' => 'تخصيص الباص'];
+const VEHICLE_FIELD_LABELS = ['plate' => 'رقم السيارة', 'driver' => 'السائق', 'phone' => 'الهاتف', 'kind' => 'النوع', 'busRole' => 'التخصيص'];
 
 const DRIVER_FIELD_LABELS = ['name' => 'الاسم', 'phone' => 'رقم الموبايل'];
 
@@ -339,6 +339,12 @@ function describe_write(PDO $pdo, string $col, string $id, ?array $before, ?arra
                     : "إعادة السيارة $plate إلى 3 أشخاص", $details];
             }
             if ($changed === ['busRole']) {
+                // سيارة المدارس: سيارة احتياجات خاصة محجوزة في أوقات المدارس
+                if (($after['kind'] ?? '') !== 'باص') {
+                    return ['vehicle', 'vehicle.bus_role', ($after['busRole'] ?? '') === SCHOOL_ROLE
+                        ? "تخصيص السيارة $plate للمدارس (الأحد إلى الخميس 11:00–14:00 و17:30–19:00)"
+                        : "إلغاء تخصيص السيارة $plate للمدارس", $details];
+                }
                 $label = BUS_ROLE_LABELS[$after['busRole'] ?? ''] ?? '';
                 return ['vehicle', 'vehicle.bus_role', $label ? "تخصيص الباص $plate: $label" : "إلغاء تخصيص الباص $plate (باص عادي)", $details];
             }

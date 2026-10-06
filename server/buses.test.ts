@@ -78,7 +78,7 @@ describe("buses", () => {
   it("group up to 14 passengers when a suitable bus is free", () => {
     const five = ["U1", "U2", "U3", "U4", "U5"].map((id, index) => outing(id, `10:${String(index * 5).padStart(2, "0")}`));
     const items = five.map((appointment) => ({ appointment, direction: "ذهاب" as const }));
-    // باص الرحلات غير الطبية متاح: رحلة واحدة لخمسة
+    // باص الجامعة (الرحلات غير الطبية) متاح: رحلة واحدة لخمسة
     expect(buildTripGroups(items, undefined, seatsFor([outings, car("A")], { now: at(10) })).map((group) => group.appointmentIds.length)).toEqual([5]);
     // بلا باص (أو قبل 9 صباحًا): 3 ثم 2
     expect(buildTripGroups(items, undefined, seatsFor([car("A")], { now: at(10) })).map((group) => group.appointmentIds.length)).toEqual([3, 2]);

@@ -16,7 +16,7 @@ import {
 } from "recharts";
 import { AlarmClock, BarChart3, Building2, CalendarClock, CalendarDays, CarFront, CheckCircle2, Clock3, MapPinned, PieChart as PieIcon, Table2, TrendingUp, Truck } from "lucide-react";
 import { BOOKING_HINTS, DELAY_STAGES, TRIP_KINDS, clockText, durationText, type ServiceSummary, type StatsFilter, type StatsSummary } from "@shared/stats";
-import { BUS_ROLE_LABELS, type BusRole, type VehicleKind } from "@shared/transport";
+import { BUS_ROLE_LABELS, type VehicleKind, type VehicleRole } from "@shared/transport";
 import { Badge, Panel, Stat, btn, cx } from "./ui-kit";
 import { KindIcon, KindLabel } from "./VehiclePicker";
 
@@ -515,10 +515,10 @@ function DelaysPanel({ summary }: { summary: StatsSummary }) {
 }
 
 /** تخصيص الباص بجانب السيارة */
-export const roleBadge = (role: BusRole) => <Badge tone="amber">{BUS_ROLE_LABELS[role]}</Badge>;
+export const roleBadge = (role: VehicleRole) => <Badge tone="amber">{BUS_ROLE_LABELS[role]}</Badge>;
 
 type HourRow = {
-  plate: string; driver: string; kind: string; roles: BusRole[];
+  plate: string; driver: string; kind: string; roles: VehicleRole[];
   serviceMinutes: number; serviceDays: number; serviceFirst: number | null; serviceLast: number | null;
   workMinutes: number; workDays: number; workFirst: number | null; workLast: number | null;
 };

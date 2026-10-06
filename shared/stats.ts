@@ -1,13 +1,15 @@
 import { DEFAULT_HOSPITALS, ORIGIN, matchHospital, normalizePlaceName, type Hospital } from "./hospitals";
 import type { HistorySummary } from "./history";
 import {
-  BUS_ROLES,
+  SCHOOL_DAYS,
+  SCHOOL_RUNS,
+  VEHICLE_ROLES,
   appointmentDateTime,
   appointmentHospital,
   isNonMedical,
   isReturnOnly,
   localDateString,
-  type BusRole,
+  type VehicleRole,
   type ClinicAppointment,
   type Vehicle,
   type VehicleRequest,
@@ -190,14 +192,14 @@ export type DelaySummary = {
 /** حالة سيارة في الخدمة عند تغيّرها (من الخادم: service-log) */
 export type ServiceEvent = { at: string; plate: string; kind: string; available: boolean; hasDriver: boolean; busRole: string; driver: string };
 /** وقت سيارة في الخدمة (متاحة ولها سائق) في يوم: الدقائق، وأول تشغيل وآخر إيقاف بالدقائق منذ منتصف الليل */
-export type ServiceDay = { date: string; plate: string; kind: string; busRole: BusRole | null; driver: string; minutes: number; first: number; last: number };
-export type ServiceVehicle = { plate: string; kind: string; busRoles: BusRole[]; driver: string; days: number; minutes: number; first: number | null; last: number | null };
+export type ServiceDay = { date: string; plate: string; kind: string; busRole: VehicleRole | null; driver: string; minutes: number; first: number; last: number };
+export type ServiceVehicle = { plate: string; kind: string; busRoles: VehicleRole[]; driver: string; days: number; minutes: number; first: number | null; last: number | null };
 export type ServiceSummary = { days: ServiceDay[]; vehicles: ServiceVehicle[]; totalMinutes: number };
 
 const DAY_MS = 24 * 60 * 60000;
-const roleOf = (value: string): BusRole | null => (BUS_ROLES.includes(value as BusRole) ? value as BusRole : null);
+const roleOf = (value: string): VehicleRole | null => (VEHICLE_ROLES.includes(value as VehicleRole) ? value as VehicleRole : null);
 /** الباصات المخصصة لا تُسجَّل لها رحلات (باص العيادة وباص المجمع)، فتُعد سيارات عاملة في أيام خدمتها */
-export const SERVICE_ROLES: BusRole[] = ["clinic", "shuttle", "nonMedical"];
+export const SERVICE_ROLES: VehicleRole[] = ["clinic", "shuttle", "nonMedical", "school"];
 
 /**
  * وقت كل سيارة في الخدمة (متاحة ولها سائق) في كل يوم من الفترة، من تغيّرات حالتها.
@@ -424,7 +426,7 @@ export type WorkingVehicles = {
   dailyAverage: number | null;
   dailyMax: number | null;
   /** الباصات المخصصة (العيادة والمجمع والرحلات غير الطبية) التي كانت في الخدمة، ومنها ما لم تُسجَّل له رحلات */
-  roleBuses: { plate: string; busRole: BusRole }[];
+  roleBuses: { plate: string; busRole: VehicleRole }[];
 };
 
 /** كل السيارات التي خدمت الموعد: سيارة الذهاب ثم سيارات العودة أو النقل */
@@ -802,12 +804,28 @@ export function summarizeTrips(trips: TripStat[], hospitals: Hospital[] = DEFAUL
     unmatched += legacy.unmatchedDestinations;
   }
 
-  // الباصات المخصصة في الخدمة: سيارات عاملة في أيامها (ولو بلا رحلات)
-  const roleBuses = new Map<string, BusRole>();
+  // الباصات المخصصة وسيارات المدارس في الخدمة: سيارات عاملة في أيامها (ولو بلا رحلات)
+  const roleBuses = new Map<string, VehicleRole>();
   for (const day of service) {
     if (!day.busRole || !SERVICE_ROLES.includes(day.busRole) || !dayPlates.has(day.date)) continue;
+    if (day.busRole === "school") {
+      // سيارة المدارس: في أيام المدارس فقط، ورحلتاها (في وقت خدمتها ذلك اليوم) من ساعات عملها
+      const [year, month, date] = day.date.split("-").map(Number);
+      if (!SCHOOL_DAYS.includes(new Date(Date.UTC(year, month - 1, date)).getUTCDay())) continue;
+      const runs = SCHOOL_RUNS.map((run): [number, number] => [Math.max(run.from, day.first), Math.min(run.to, day.last)]).filter(([start, end]) => end > start);
+      if (!runs.length) continue;
+      const key = `${day.date}|${day.plate}`;
+      const entry = vehicleDays.get(key) ?? { date: day.date, plate: day.plate, kind: "احتياجات خاصة" as TripKind, drivers: new Map<string, number>(), intervals: [], first: null, last: null };
+      for (const [start, end] of runs) {
+        entry.intervals.push([start, end]);
+        entry.first = entry.first === null ? start : Math.min(entry.first, start);
+        entry.last = entry.last === null ? end : Math.max(entry.last, end);
+      }
+      if (day.driver) entry.drivers.set(day.driver, (entry.drivers.get(day.driver) ?? 0) + runs.length);
+      vehicleDays.set(key, entry);
+    }
     dayPlates.get(day.date)!.add(day.plate);
-    if (!plateKinds.has(day.plate)) plateKinds.set(day.plate, "باص");
+    if (!plateKinds.has(day.plate)) plateKinds.set(day.plate, day.busRole === "school" ? "احتياجات خاصة" : "باص");
     roleBuses.set(day.plate, day.busRole);
   }
   for (const [date, plates] of Array.from(dayPlates)) daily.get(date)!.vehicles = plates.size;

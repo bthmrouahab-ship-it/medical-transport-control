@@ -35,9 +35,19 @@ import {
   Ribbon,
   Clock3,
   Wand2,
+  School,
 } from "lucide-react";
 import {
   BUS_ROLES,
+  SHARED_BUS_ROLES,
+  SCHOOL_ROLE,
+  isSchoolCar,
+  onSchoolRun,
+  schoolRun,
+  schoolRunSoon,
+  schoolRunText,
+  schoolSoonWarning,
+  vehicleRoleOf,
   BUS_ROLE_LABELS,
   CHANGE_VEHICLE_REASONS,
   REMOVE_FROM_TRIP_REASONS,
@@ -193,11 +203,14 @@ const minutesText = (minutes: number) => (minutes <= 1 ? "دقيقة" : minutes 
 type DriverMessage = { vehicle: Vehicle; count: number; message: string };
 
 /** تخصيص الباص («باص المجمع»...) إن وُجد */
-const roleOf = (vehicle: Vehicle) => (busRoleOf(vehicle) ? BUS_ROLE_LABELS[busRoleOf(vehicle)!] : undefined);
+const roleOf = (vehicle: Vehicle) => (vehicleRoleOf(vehicle) ? BUS_ROLE_LABELS[vehicleRoleOf(vehicle)!] : undefined);
 
 /** خيار سيارة لرحلة: متاحة لها الآن، أو غير متاحة مع السبب (مشغولة، أو قاعدة الباصات والمقاعد) */
-/** why: لا تناسب الرحلة (معطّلة)، warning: تناسبها بعد موافقة المشرف (سيارة عادية لضيف احتياجات خاصة) */
-type VehicleChoice = { vehicle: Vehicle; why: string | null; warning?: string | null };
+/**
+ * why: لا تناسب الرحلة (معطّلة)، warning: تناسبها بعد موافقة المشرف (regular: سيارة عادية لضيف احتياجات خاصة،
+ * school: سيارة المدارس تخرج لرحلتها قريبًا)
+ */
+type VehicleChoice = { vehicle: Vehicle; why: string | null; warning?: string | null; regular?: boolean; school?: boolean };
 
 export function FleetSupervisorPage({ vehicles, appointments, requests, date, onDateChange, onManager, onUpdate, onDispatch, onDispatchMany, onArrived, onEndTrip, onChangeVehicle, onRemoveFromTrip, onAddToTrip, onExport, onAddTrips, onStopSeries }: {
   vehicles: Vehicle[];
@@ -283,8 +296,10 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
   const offHours = (vehicle: Vehicle) => vehicle.kind === "باص" && busOffNow;
   // باص العيادة في خدمتها، فلا يُحسب بين السيارات المتاحة للتوزيع
   const forClinic = (vehicle: Vehicle) => busRoleOf(vehicle) === "clinic";
+  // سيارة المدارس في رحلتها (الأحد إلى الخميس 11:00–14:00 و17:30–19:00): في الخدمة ولا تُرسل
+  const atSchool = (vehicle: Vehicle) => onSchoolRun(vehicle, now);
   // السيارة بلا سائق لا تُرسل حتى يختار مشرف السيارات سائقها
-  const dispatchable = vehicles.filter((vehicle) => vehicle.available && hasDriver(vehicle) && !isBusy(vehicle.plate) && !offHours(vehicle) && !forClinic(vehicle));
+  const dispatchable = vehicles.filter((vehicle) => vehicle.available && hasDriver(vehicle) && !isBusy(vehicle.plate) && !offHours(vehicle) && !forClinic(vehicle) && !atSchool(vehicle));
   /** خارج الخدمة: موقوفة، أو بلا سائق وليست في رحلة */
   const offDuty = (vehicle: Vehicle) => !vehicle.available || (!hasDriver(vehicle) && !isBusy(vehicle.plate));
   // رحلات كل سيارة في اليوم المختار: السيارة الأقل رحلات تُقترح أولًا حتى يتوزع العمل
@@ -326,16 +341,22 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
       .map((vehicle) => {
         const until = availability.get(vehicle.plate)?.until;
         const why = isBusy(vehicle.plate) ? `مشغولة${until ? ` حتى ${timeLabel(until)}` : ""}` : vehicleRestriction(vehicle, riders, { ...rules, regularForSpecial: true });
-        return { vehicle, why, warning: why ? null : regularForSpecialWarning(vehicle, riders.appointments) };
+        const regular = why ? null : regularForSpecialWarning(vehicle, riders.appointments);
+        const school = why ? null : schoolSoonWarning(vehicle, now);
+        return { vehicle, why, warning: regular ?? school, regular: Boolean(regular), school: Boolean(school) };
       })
       .sort((a, b) => Number(Boolean(a.why)) - Number(Boolean(b.why)) || Number(Boolean(a.warning)) - Number(Boolean(b.warning))
         || (accessible ? 0 : Number(a.vehicle.kind === "احتياجات خاصة") - Number(b.vehicle.kind === "احتياجات خاصة")));
   };
   /** سيارة عادية لضيف احتياجات خاصة: تُرسل بعد موافقة المشرف على التنبيه */
-  const confirmRegular = (choice: VehicleChoice, trips: Trip[]) => !choice.warning || window.confirm(
+  /** سيارة المدارس تخرج لرحلتها قريبًا: تُرسل بعد موافقة المشرف */
+  const confirmSchool = (choice: VehicleChoice) => !choice.school || window.confirm(
+    `السيارة ${choice.vehicle.plate} سيارة المدارس وتخرج لرحلتها ${schoolRunSoon(now)?.starts ?? ""}.\nإرسالها في هذه الرحلة رغم ذلك؟`,
+  );
+  const confirmRegular = (choice: VehicleChoice, trips: Trip[]) => confirmSchool(choice) && (!choice.regular || window.confirm(
     `${trips.filter((trip) => trip.appointment.kind === "احتياجات خاصة").map((trip) => trip.appointment.patientName).join("، ")} يحتاج سيارة احتياجات خاصة.\n`
     + `إرسال السيارة ${choice.vehicle.plate} (${choice.vehicle.kind}) رغم ذلك؟`,
-  );
+  ));
   /**
    * رحلة عودة (أو نقل) لها سيارة ذاهبة الآن إلى نفس المكان أو قريب منه، وتناسب ضيفها (نوعها ومقاعدها):
    * بعد وصولها تُقترح للضيف («توجيه السيارة»)، فلا تُرسل سيارة من داخل المجمع إلا بعد تنبيه المشرف.
@@ -477,12 +498,25 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
     setEditing(null);
   }
 
-  /** تخصيص الباص: باص المجمع أو باص الرحلات غير الطبية أو باص العيادة (باص واحد لكل تخصيص)، أو باص عادي. */
+  /**
+   * تخصيص الباص: باص المجمع أو باص العيادة (باص واحد لكل تخصيص)، أو باص الجامعة (أكثر من باص: SHARED_BUS_ROLES)،
+   * أو باص عادي.
+   */
   function setBusRole(bus: Vehicle, role: BusRole | "") {
     const clear = ({ busRole: _busRole, ...vehicle }: Vehicle): Vehicle => vehicle;
+    const single = role && !SHARED_BUS_ROLES.includes(role);
     onUpdate(vehicles.map((vehicle) => vehicle.plate === bus.plate ? (role ? { ...vehicle, busRole: role } : clear(vehicle))
-      : role && vehicle.busRole === role ? clear(vehicle) : vehicle));
+      : single && vehicle.busRole === role ? clear(vehicle) : vehicle));
     toast.success(role ? `الباص ${bus.plate} أصبح ${BUS_ROLE_LABELS[role]}` : `الباص ${bus.plate} أصبح باصًا عاديًا`);
+  }
+
+  /** سيارة المدارس: سيارة احتياجات خاصة محجوزة في أوقات المدارس (لا تُرسل فيها) وتبقى في الخدمة. */
+  function setSchoolCar(car: Vehicle, school: boolean) {
+    const clear = ({ busRole: _busRole, ...vehicle }: Vehicle): Vehicle => vehicle;
+    onUpdate(vehicles.map((vehicle) => (vehicle.plate === car.plate ? (school ? { ...vehicle, busRole: SCHOOL_ROLE } : clear(vehicle)) : vehicle)));
+    toast.success(school ? `السيارة ${car.plate} أصبحت سيارة المدارس` : `السيارة ${car.plate} لم تعد سيارة المدارس`, {
+      description: school ? `لا تُرسل من الأحد إلى الخميس ${schoolRunText}، وتبقى في الخدمة` : undefined,
+    });
   }
 
   /** توجيه سيارة خارج المجمع إلى ضيف ينتظر العودة (من القائمة أو من زر التنبيه). */
@@ -532,30 +566,37 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
     if (!hasDriver(vehicle) && !state?.busy) return { tone: "amber" as const, text: "بلا سائق · اختر سائقها من «السائقون»" };
     if (!state?.busy) {
       if (forClinic(vehicle)) return { tone: "neutral" as const, text: "في خدمة العيادة" };
+      const school = isSchoolCar(vehicle) ? schoolRun(now) : null;
+      if (school) return { tone: "blue" as const, text: `في رحلة المدارس حتى ${school.until}` };
       if (offHours(vehicle)) return { tone: "neutral" as const, text: "الباصات غير متاحة من 6 إلى 9 صباحًا" };
       if (busRoleOf(vehicle) === "shuttle") {
         return { tone: "violet" as const, text: isRushHour(now) ? "يلف داخل المجمع · وقت الذروة: يمكن إرساله إلى مستشفى الثمامة" : "يلف داخل المجمع" };
       }
       const place = locationStates.get(vehicle.plate);
+      // سيارة المدارس قبل رحلتها: متاحة، مع وقت خروجها للمدارس
+      const soon = isSchoolCar(vehicle) ? schoolRunSoon(now) : null;
+      const schoolNote = soon ? ` · تخرج للمدارس ${soon.starts}` : "";
       if (place?.kind === "outside") {
-        return { tone: "cyan" as const, text: `متاحة خارج المجمع · عائدة من ${place.from || "الوجهة"} · تصل ${timeLabel(place.backAt)}${place.canRedirect ? "" : " · قطعت نصف الطريق"}` };
+        return { tone: "cyan" as const, text: `متاحة خارج المجمع · عائدة من ${place.from || "الوجهة"} · تصل ${timeLabel(place.backAt)}${place.canRedirect ? "" : " · قطعت نصف الطريق"}${schoolNote}` };
       }
-      return { tone: "green" as const, text: "متاحة داخل المجمع" };
+      return { tone: soon ? "amber" as const : "green" as const, text: `متاحة داخل المجمع${schoolNote}` };
     }
     if (state.toPickup) return { tone: "blue" as const, text: "في الطريق إلى الاستلام" };
     return { tone: "blue" as const, text: state.until ? `في رحلة · تتفرغ ${timeLabel(state.until)}` : "في رحلة" };
   };
   const vehicleCounts = {
     all: vehicles.length,
+    school: vehicles.filter((vehicle) => vehicle.available && hasDriver(vehicle) && !isBusy(vehicle.plate) && atSchool(vehicle)).length,
     inside: dispatchable.filter((vehicle) => !isOutside(vehicle.plate)).length,
     outside: dispatchable.filter((vehicle) => isOutside(vehicle.plate)).length,
-    busy: vehicles.filter((vehicle) => !offDuty(vehicle) && isBusy(vehicle.plate)).length,
+    // سيارة المدارس في رحلتها تُعد في رحلة
+    busy: vehicles.filter((vehicle) => !offDuty(vehicle) && (isBusy(vehicle.plate) || atSchool(vehicle))).length,
     off: vehicles.filter(offDuty).length,
   };
   const shownVehicles = vehicles.filter((vehicle) => vehicleFilter === "all"
-    || (vehicleFilter === "inside" && !offDuty(vehicle) && !isBusy(vehicle.plate) && !isOutside(vehicle.plate))
-    || (vehicleFilter === "outside" && !offDuty(vehicle) && !isBusy(vehicle.plate) && isOutside(vehicle.plate))
-    || (vehicleFilter === "busy" && !offDuty(vehicle) && isBusy(vehicle.plate))
+    || (vehicleFilter === "inside" && !offDuty(vehicle) && !isBusy(vehicle.plate) && !atSchool(vehicle) && !isOutside(vehicle.plate))
+    || (vehicleFilter === "outside" && !offDuty(vehicle) && !isBusy(vehicle.plate) && !atSchool(vehicle) && isOutside(vehicle.plate))
+    || (vehicleFilter === "busy" && !offDuty(vehicle) && (isBusy(vehicle.plate) || atSchool(vehicle)))
     || (vehicleFilter === "off" && offDuty(vehicle)));
   const withoutDriver = vehicles.filter((vehicle) => !hasDriver(vehicle)).length;
   const trackingCount = activeGroups.filter((trips) => trips.some((trip) => {
@@ -620,7 +661,7 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
         <StatusBar
           label="حالة التوزيع الآن"
           items={[
-            { key: "available", label: "سيارات متاحة", value: dispatchable.length, tone: "green", hint: `${vehicleCounts.inside} داخل المجمع · ${vehicleCounts.outside} خارجه${busOffNow ? " · الباصات من 9:00" : ""}`, onClick: () => jump("fleet-vehicles") },
+            { key: "available", label: "سيارات متاحة", value: dispatchable.length, tone: "green", hint: `${vehicleCounts.inside} داخل المجمع · ${vehicleCounts.outside} خارجه${busOffNow ? " · الباصات من 9:00" : ""}${vehicleCounts.school ? ` · ${vehicleCounts.school} في رحلة المدارس` : ""}`, onClick: () => jump("fleet-vehicles") },
             { key: "active", label: "رحلات جارية", value: activeGroups.length, tone: "blue", hint: trackingCount ? `${trackingCount} بمتابعة GPS` : "من الإرسال حتى الوجهة", onClick: () => jump("fleet-active") },
             { key: "pending", label: "بانتظار التوزيع", value: pending.length, tone: "amber", hint: date === today ? "طلبات اليوم" : "طلبات التاريخ المحدد", onClick: () => jump("fleet-pending") },
             { key: "late", label: "متأخرة", value: latePending.length + lateTrips.length, tone: "red", hint: `${latePending.length} تنتظر سيارة · ${lateTrips.length} في الطريق`, onClick: () => jump(latePending.length ? "fleet-pending" : "fleet-active") },
@@ -731,7 +772,7 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
                           options={choices}
                           value={ready.some((vehicle) => vehicle.plate === selectedPlate) ? selectedPlate : ""}
                           onChange={(plate) => setSelectedVehicles((current) => ({ ...current, [trip.request.id]: plate }))}
-                          placeholder={!ready.length ? "لا توجد سيارة متاحة" : choices.some((choice) => !choice.why && !choice.warning) ? "اختر سيارة" : "لا سيارة احتياجات خاصة متاحة · اختر سيارة عادية"}
+                          placeholder={!ready.length ? "لا توجد سيارة متاحة" : choices.some((choice) => !choice.why && !choice.regular) ? "اختر سيارة" : "لا سيارة احتياجات خاصة متاحة · اختر سيارة عادية"}
                           driverOf={(vehicle) => driverOf(vehicle.plate)}
                           details={(vehicle) => `${placeText(vehicle.plate)} · ${tripsText(load.get(vehicle.plate) ?? 0)}`}
                           roleOf={roleOf}
@@ -965,8 +1006,22 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
                           className="ms-[26px] h-8 max-w-[calc(100%-26px)] rounded-lg border border-slate-300 bg-white px-2 text-xs text-ink outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-600/15"
                         >
                           <option value="">باص عادي</option>
-                          {BUS_ROLES.map((role) => <option key={role} value={role}>{BUS_ROLE_LABELS[role]}{role === "shuttle" ? " (يلف داخل المجمع)" : role === "clinic" ? " (في خدمة العيادة)" : ""}</option>)}
+                          {BUS_ROLES.map((role) => <option key={role} value={role}>{BUS_ROLE_LABELS[role]}{role === "shuttle" ? " (يلف داخل المجمع)" : role === "clinic" ? " (في خدمة العيادة)" : " (الرحلات غير الطبية)"}</option>)}
                         </select>
+                      )}
+                      {vehicle.kind === "احتياجات خاصة" && (
+                        <button
+                          type="button"
+                          aria-pressed={isSchoolCar(vehicle)}
+                          aria-label={isSchoolCar(vehicle) ? `إلغاء تخصيص السيارة ${vehicle.plate} للمدارس` : `تخصيص السيارة ${vehicle.plate} للمدارس`}
+                          title={`سيارة المدارس: لا تُرسل من الأحد إلى الخميس ${schoolRunText}، وتبقى في الخدمة`}
+                          onClick={() => setSchoolCar(vehicle, !isSchoolCar(vehicle))}
+                          className={cx("ms-[26px] inline-flex h-7 max-w-[calc(100%-26px)] items-center gap-1 rounded-lg px-2 text-[11px] font-medium ring-1 ring-inset transition",
+                            isSchoolCar(vehicle) ? "bg-violet-50 text-violet-800 ring-violet-200 hover:bg-violet-100" : "bg-white text-slate-500 ring-slate-300 hover:bg-slate-50 hover:text-ink")}
+                        >
+                          <School className="h-3.5 w-3.5 shrink-0" />
+                          <span className="truncate">{isSchoolCar(vehicle) ? "سيارة المدارس" : "تخصيص للمدارس"}</span>
+                        </button>
                       )}
                     </div>
                     <Switch

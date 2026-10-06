@@ -51,9 +51,13 @@ const DRIVER_FIELDS = ['id', 'name', 'phone', 'uid', '_o'];
 /** من يرى قائمة السائقين: المدير ومشرف السيارات (يخصصهم للسيارات) */
 const DRIVER_LIST_ROLES = ['admin', 'fleetSupervisor'];
 const VEHICLE_KINDS = ['سيدان', 'احتياجات خاصة', 'باص'];
-/** تخصيص الباص: باص المجمع، أو باص الرحلات غير الطبية، أو باص العيادة (نفس القيم في shared/transport.ts) */
+/**
+ * تخصيص السيارة (نفس القيم في shared/transport.ts): للباص باص المجمع أو باص الجامعة (الرحلات غير الطبية) أو باص العيادة،
+ * ولسيارة الاحتياجات الخاصة «سيارة المدارس» (محجوزة في أوقات المدارس وتبقى في الخدمة)
+ */
 const BUS_ROLE_VALUES = ['shuttle', 'nonMedical', 'clinic'];
-const BUS_ROLE_LABELS = ['shuttle' => 'باص المجمع', 'nonMedical' => 'باص الرحلات غير الطبية', 'clinic' => 'باص العيادة'];
+const SCHOOL_ROLE = 'school';
+const BUS_ROLE_LABELS = ['shuttle' => 'باص المجمع', 'nonMedical' => 'باص الجامعة', 'clinic' => 'باص العيادة', 'school' => 'سيارة المدارس'];
 /** إنهاء مشرف السيارات لرحلة عالقة يقدّم حالة الموعد كما عند استلام الضيف: [قبل => بعد] */
 const TRIP_END_APPOINTMENT_STATUS = ['تم طلب السيارة' => 'تم استلام المريض', 'طلب عودة' => 'مكتملة', 'تم استلام المريض' => 'مكتملة'];
 const HOSPITAL_FIELDS = ['id', 'name', 'nameEn', 'zone', 'lat', 'lng', 'aliases', 'verified', '_o'];
@@ -412,11 +416,13 @@ function valid_full_capacity(array $vehicle): bool
         || (is_bool($vehicle['fullCapacity']) && ($vehicle['kind'] ?? null) === 'سيدان');
 }
 
-/** تخصيص الباص صالح: غير موجود، أو قيمة معروفة لسيارة من نوع باص. */
+/** تخصيص السيارة صالح: غير موجود، أو تخصيص باص لسيارة من نوع باص، أو سيارة المدارس لسيارة احتياجات خاصة. */
 function valid_bus_role(array $vehicle): bool
 {
-    return !array_key_exists('busRole', $vehicle)
-        || (in_array($vehicle['busRole'], BUS_ROLE_VALUES, true) && ($vehicle['kind'] ?? null) === 'باص');
+    if (!array_key_exists('busRole', $vehicle)) return true;
+    $kind = $vehicle['kind'] ?? null;
+    return (in_array($vehicle['busRole'], BUS_ROLE_VALUES, true) && $kind === 'باص')
+        || ($vehicle['busRole'] === SCHOOL_ROLE && $kind === 'احتياجات خاصة');
 }
 
 function is_iso($value): bool
@@ -781,7 +787,7 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
                     && in_array($after['kind'] ?? null, VEHICLE_KINDS, true) && valid_bus_role($after) && valid_full_capacity($after)
                     && valid_vehicle_driver($after, $docOf) ? null : 'بيانات السيارة غير صالحة';
             }
-            // مشرف السيارات يغيّر إتاحة السيارة، وتخصيص الباص (باص المجمع أو الرحلات غير الطبية أو العيادة)،
+            // مشرف السيارات يغيّر إتاحة السيارة، وتخصيصها (باص المجمع أو الجامعة أو العيادة، أو سيارة المدارس)،
             // وتشغيل السيدان بطاقتها الكاملة (4 أشخاص)، والسائق الذي يقودها (في بداية الشفت)
             if ($role === 'fleetSupervisor' && $before !== null) {
                 return only($changed, ['available', 'busRole', 'fullCapacity', ...VEHICLE_DRIVER_FIELDS]) && is_bool($after['available'] ?? null)
