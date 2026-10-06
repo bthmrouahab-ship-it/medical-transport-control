@@ -89,7 +89,6 @@ export function statsReport(summary: StatsSummary, title: string, subtitle: stri
         : []),
       ...(service?.days.length ? [{ label: "التوفر في الخدمة", value: durationText(service.totalMinutes) }] : []),
       ...(summary.activeDays > 1 ? [{ label: "متوسط المواعيد يوميًا", value: String(Math.round(summary.totalTrips / summary.activeDays)) }] : []),
-      { label: "متوسط مدة الرحلة", value: summary.avgTripMinutes ? `${summary.avgTripMinutes} دقيقة` : "—" },
       ...operationsKpis(ops),
     ],
     sections: [
