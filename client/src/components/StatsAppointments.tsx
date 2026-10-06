@@ -1,11 +1,14 @@
 import { useMemo, useState } from "react";
 import { CalendarSearch, Filter, X } from "lucide-react";
 import { BOOKING_LABELS, DELAY_LABELS, stageMinutes, type DelayStage, type TripStat } from "@shared/stats";
+import { OUTCOMES, RETURN_OUTCOMES, type Outcome, type ReturnOutcome } from "@shared/operations";
 import { RETURN_ONLY_LABEL, isNonMedical, isReturnOnly, statusText, type ClinicAppointment, type VehicleRequest } from "@shared/transport";
 import { FILTER_LABELS_AR, FilterTable, useColumnFilters, type FilterColumn } from "./ExcelFilter";
 import { Badge, EmptyState, Panel, btn } from "./ui-kit";
 
 const PAGE = 100;
+const outcomeMeta = (outcome: Outcome) => OUTCOMES.find((item) => item.outcome === outcome)!;
+const returnMeta = (outcome: ReturnOutcome) => RETURN_OUTCOMES.find((item) => item.outcome === outcome)!;
 
 type Row = {
   id: string;
@@ -17,6 +20,9 @@ type Row = {
   category: string;
   booking: string;
   status: string;
+  outcome: Outcome | null;
+  cancelReason: string;
+  back: ReturnOutcome | null;
   plates: string;
   trips: string;
   stages: DelayStage[];
@@ -56,6 +62,9 @@ export default function StatsAppointments({ trips, appointments, requests }: {
         category: isNonMedical(appointment) ? "غير طبية" : isReturnOnly(appointment) ? RETURN_ONLY_LABEL : "طبية",
         booking: trip.booking ? BOOKING_LABELS[trip.booking] : "",
         status: statusText(appointment.status),
+        outcome: trip.outcome ?? null,
+        cancelReason: trip.cancel?.reason ?? "",
+        back: trip.returnOutcome ?? null,
         plates: plates.join("، "),
         trips: trip.goTrips || trip.returnTrips ? `ذهاب ${trip.goTrips ?? 0} · عودة ${trip.returnTrips ?? 0}` : "",
         stages,
@@ -79,6 +88,23 @@ export default function StatsAppointments({ trips, appointments, requests }: {
       cell: (row) => (row.booking ? <Badge tone={row.booking === BOOKING_LABELS.sameDay ? "amber" : "blue"}>{row.booking}</Badge> : <span className="text-slate-300">—</span>),
     },
     { key: "status", label: "الحالة", value: (row) => row.status },
+    {
+      key: "outcome",
+      label: "النتيجة",
+      value: (row) => (row.outcome ? outcomeMeta(row.outcome).label : ""),
+      cell: (row) => (row.outcome ? (
+        <span className="flex min-w-[130px] flex-col items-start gap-0.5">
+          <Badge tone={outcomeMeta(row.outcome).tone}>{outcomeMeta(row.outcome).label}</Badge>
+          {row.cancelReason && <span className="max-w-[200px] whitespace-normal text-xs text-slate-500">{row.cancelReason}</span>}
+        </span>
+      ) : <span className="text-slate-300">—</span>),
+    },
+    {
+      key: "back",
+      label: "العودة",
+      value: (row) => (row.back ? returnMeta(row.back).label : ""),
+      cell: (row) => (row.back ? <Badge tone={returnMeta(row.back).tone}>{returnMeta(row.back).label}</Badge> : <span className="text-slate-300">—</span>),
+    },
     { key: "plates", label: "السيارة", value: (row) => row.plates, cell: (row) => (row.plates ? <span dir="ltr" className="tabular">{row.plates}</span> : <span className="text-slate-300">—</span>) },
     { key: "trips", label: "الرحلات", value: (row) => row.trips, cell: (row) => <span className="whitespace-nowrap text-xs text-slate-600">{row.trips || "—"}</span> },
     {

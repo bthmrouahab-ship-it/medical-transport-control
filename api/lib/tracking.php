@@ -162,6 +162,52 @@ function migrate_tracking(PDO $pdo): void
     }
 }
 
+/** فترة الإحصائيات من الطلب (since وuntil بتوقيت UTC بصيغة ISO)، أو 400. */
+function stats_range(): array
+{
+    $since = (string)($_GET['since'] ?? '');
+    $until = (string)($_GET['until'] ?? '');
+    foreach ([$since, $until] as $time) {
+        if ($time !== '' && !preg_match('/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/', $time)) throw new ApiException(400, 'بيانات غير صالحة', 'bad_request');
+    }
+    return [$since, $until];
+}
+
+/** ما يحتاجه حساب سير العمل في الإحصائيات من سجل العمليات: إلغاء طلب السيارة، وتغيير السيارة، وإزالة ضيف من رحلة */
+const OPS_ACTIONS = ['request.cancel', 'request.change_car', 'request.remove_from_trip'];
+
+/**
+ * أحداث سير العمل لفترة الإحصائيات (المدير ومشرف السيارات)، بلا بيانات الضيف: رقم الموعد والطلب والاتجاه
+ * والسيارة (والسابقة عند التغيير) والسبب وحالة الطلب عند إلغائه ومن نفّذها.
+ */
+function route_ops_log(PDO $pdo): array
+{
+    require_role(current_user($pdo), ['admin', 'fleetSupervisor']);
+    [$since, $until] = stats_range();
+    $marks = implode(', ', array_fill(0, count(OPS_ACTIONS), '?'));
+    $stmt = $pdo->prepare("SELECT at, action, ref, user_name, details FROM activity
+        WHERE action IN ($marks) AND (? = '' OR at >= ?) AND (? = '' OR at < ?) ORDER BY id LIMIT 50000");
+    $stmt->execute([...OPS_ACTIONS, $since, $since, $until, $until]);
+    $events = [];
+    foreach ($stmt->fetchAll() as $row) {
+        $details = $row['details'] ? (json_decode($row['details'], true) ?: []) : [];
+        $text = fn(string $key) => is_scalar($details[$key] ?? null) ? (string)$details[$key] : '';
+        $events[] = [
+            'at' => (string)$row['at'],
+            'action' => (string)$row['action'],
+            'appointment' => $text('appointment'),
+            'request' => (string)$row['ref'],
+            'direction' => $text('direction'),
+            'plate' => $text('plate'),
+            'previous' => $text('previous'),
+            'reason' => $text('reason'),
+            'stage' => $text('stage'),
+            'by' => (string)$row['user_name'],
+        ];
+    }
+    return ['events' => $events];
+}
+
 /**
  * حالات السيارات في الخدمة لفترة الإحصائيات (المدير ومشرف السيارات): حالة كل سيارة قبل بداية الفترة،
  * ثم كل تغيير فيها، ومتى بدأ التسجيل.
@@ -169,11 +215,7 @@ function migrate_tracking(PDO $pdo): void
 function route_service_log(PDO $pdo): array
 {
     require_role(current_user($pdo), ['admin', 'fleetSupervisor']);
-    $since = (string)($_GET['since'] ?? '');
-    $until = (string)($_GET['until'] ?? '');
-    foreach ([$since, $until] as $time) {
-        if ($time !== '' && !preg_match('/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/', $time)) throw new ApiException(400, 'بيانات غير صالحة', 'bad_request');
-    }
+    [$since, $until] = stats_range();
     $columns = 'e.at, e.plate, e.kind, e.available, e.has_driver, e.bus_role, e.driver';
     $events = [];
     if ($since !== '') {

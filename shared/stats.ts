@@ -13,6 +13,7 @@ import {
   type VehicleRequest,
 } from "./transport";
 import { LATE_MINUTES, UNKNOWN_TRAVEL_MINUTES, driveMinutes, neededAt, tripPhase } from "./trips";
+import { appointmentOutcome, approvalInfo, returnOutcome, ridesOf, type ApprovalInfo, type Outcome, type ReturnOutcome, type Ride } from "./operations";
 
 /**
  * سجلات الرحلات للإحصائيات: رحلة واحدة لكل موعد، بلا اسم المريض أو رقمه أو شقته.
@@ -56,6 +57,16 @@ export type TripStat = {
   booking?: Booking;
   /** رحلات النظام: مراحل كل رحلة سيارة للموعد وتأخيرها */
   timings?: RequestTiming[];
+  /** رحلات النظام: مصير الموعد (أُرسلت سيارة، أُلغي، استُبعد، انتهت المهلة…) */
+  outcome?: Outcome;
+  /** رحلات النظام: سبب إلغاء الموعد ومن ألغاه */
+  cancel?: { reason: string; by: string };
+  /** رحلات النظام: العودة إلى المجمع لضيف استُلم في الذهاب */
+  returnOutcome?: ReturnOutcome;
+  /** رحلات النظام: رحلات السيارات للموعد بعدد الأشخاص ومقاعد السيارة (للجمع والإشغال) */
+  rides?: Ride[];
+  /** رحلات النظام: موافقة مسؤول العيادة على الموعد الطبي */
+  approval?: ApprovalInfo;
 };
 
 /** المواعيد المجدولة (سُجّلت قبل يوم الموعد) والعاجلة (سُجّلت في يوم الموعد نفسه) */
@@ -456,14 +467,17 @@ function hourOf(time: string | undefined) {
 export function tripsFromSystem(
   appointments: ClinicAppointment[],
   requests: VehicleRequest[],
-  fleet: Pick<Vehicle, "plate" | "kind">[],
+  fleet: (Pick<Vehicle, "plate" | "kind"> & Partial<Pick<Vehicle, "fullCapacity">>)[],
   hospitals: Hospital[] = DEFAULT_HOSPITALS,
   now = new Date(),
 ): TripStat[] {
   const byAppointment = new Map<string, VehicleRequest[]>();
   for (const request of requests) byAppointment.set(request.appointmentId, [...(byAppointment.get(request.appointmentId) ?? []), request]);
+  // مواعيد نُقل ضيفها إلى موعده التالي (طلب ذهاب يبدأ من مستشفاها)
+  const transfers = new Set(requests.flatMap((request) => (request.fromAppointmentId ? [request.fromAppointmentId] : [])));
   return appointments.map((appointment) => {
-    const sent = (byAppointment.get(appointment.id) ?? []).filter((request) => request.vehiclePlate);
+    const own = byAppointment.get(appointment.id) ?? [];
+    const sent = own.filter((request) => request.vehiclePlate);
     const request = sent.find((item) => item.direction === "ذهاب") ?? sent[0];
     const nonMedical = appointment.category === "غير طبية";
     const hospital = nonMedical
@@ -486,6 +500,10 @@ export function tripsFromSystem(
     // مدة الرحلة: رحلة سيارة الذهاب من إرسالها حتى عودتها إلى المجمع
     const main = request ? systemLeg(request, appointment, hospitals, kindOf(request.vehiclePlate!), now) : null;
     const building = appointment.buildingNumber.trim();
+    const outcome = appointmentOutcome(appointment, own, now);
+    const back = returnOutcome(appointment, own, transfers, now);
+    const rides = ridesOf(appointment, own, (plate) => fleet.find((vehicle) => vehicle.plate === plate) ?? { kind: kindOf(plate) });
+    const approval = approvalInfo(appointment, now);
     return {
       date: appointment.appointmentDate,
       hour: hourOf(request?.notificationSentAt) ?? hourOf(appointment.appointmentAt),
@@ -504,6 +522,11 @@ export function tripsFromSystem(
       returnTrips: sent.filter((item) => item.direction === "عودة").length,
       ...(booking ? { booking } : {}),
       ...(timings.length ? { timings } : {}),
+      outcome,
+      ...(outcome === "cancelled" ? { cancel: { reason: appointment.cancelReason?.trim() ?? "", by: appointment.cancelledBy?.trim() ?? "" } } : {}),
+      ...(back ? { returnOutcome: back } : {}),
+      ...(rides.length ? { rides } : {}),
+      ...(approval ? { approval } : {}),
     };
   });
 }

@@ -2,6 +2,19 @@ import { BOOKING_LABELS, DELAY_LABELS, DELAY_STAGES, bookingOf, clockText, durat
 import type { GuestRecord, guestStats } from "@shared/guests";
 import { DEFAULT_HOSPITALS, type Hospital } from "@shared/hospitals";
 import { BUS_ROLE_LABELS, statusText, type ClinicAppointment, type VehicleRequest } from "@shared/transport";
+import {
+  CANCEL_STAGES,
+  CANCEL_STAGE_LABELS,
+  OUTCOMES,
+  OUTCOME_LABELS,
+  RETURN_OUTCOMES,
+  RETURN_OUTCOME_LABELS,
+  appointmentOutcome,
+  approvalInfo,
+  cancelStage,
+  returnOutcome,
+  type OperationsSummary,
+} from "@shared/operations";
 import { ACTIVITY_ROLES, ACTIVITY_TYPES, DETAIL_LABELS, activityDate, activityTime, type ActivityItem } from "./activity";
 
 /**
@@ -33,7 +46,7 @@ const hm = (iso?: string) => (iso && !Number.isNaN(Date.parse(iso)) ? activityTi
 /** بالساعات بخانتين عشريتين (للجمع في Excel) */
 const decimalHours = (minutes: number) => Math.round((minutes / 60) * 100) / 100;
 
-export function statsReport(summary: StatsSummary, title: string, subtitle: string, service: ServiceSummary | null = null): Report {
+export function statsReport(summary: StatsSummary, title: string, subtitle: string, service: ServiceSummary | null = null, ops: OperationsSummary | null = null): Report {
   const completion = summary.totalTrips ? Math.round((summary.completedTrips / summary.totalTrips) * 100) : 0;
   const zoneTotal = summary.zones.reduce((total, zone) => total + zone.trips, 0);
   const work = summary.workHours;
@@ -75,6 +88,7 @@ export function statsReport(summary: StatsSummary, title: string, subtitle: stri
       ...(service?.days.length ? [{ label: "التوفر في الخدمة", value: durationText(service.totalMinutes) }] : []),
       ...(summary.activeDays > 1 ? [{ label: "متوسط المواعيد يوميًا", value: String(Math.round(summary.totalTrips / summary.activeDays)) }] : []),
       { label: "متوسط مدة الرحلة", value: summary.avgTripMinutes ? `${summary.avgTripMinutes} دقيقة` : "—" },
+      ...operationsKpis(ops),
     ],
     sections: [
       {
@@ -170,8 +184,132 @@ export function statsReport(summary: StatsSummary, title: string, subtitle: stri
           },
         ]
         : []),
+      ...operationsSections(ops),
     ],
   };
+}
+
+// ————— سير العمل: مصير المواعيد والإلغاء والعودة والجمع وتغيير السيارات وموافقة العيادة —————
+
+const pct = (part: number, total: number) => `${total ? Math.round((part / total) * 100) : 0}%`;
+
+function operationsKpis(ops: OperationsSummary | null): Report["kpis"] {
+  if (!ops?.appointments) return [];
+  const count = (value: number) => value.toLocaleString("en");
+  const unserved = ops.outcomes.filter((item) => item.outcome !== "served" && item.outcome !== "open").reduce((sum, item) => sum + item.count, 0);
+  const { cancel, grouping, incidents, approval } = ops;
+  return [
+    { label: "مواعيد لم تُخدم بسيارة", value: `${count(unserved)} (${pct(unserved, ops.appointments)})` },
+    { label: "مواعيد ملغاة", value: `${count(cancel.total)} (${pct(cancel.total, ops.appointments)})` },
+    ...(cancel.wastedCars !== null ? [{ label: "سيارات أُرسلت ثم أُلغي طلبها", value: count(cancel.wastedCars) }] : []),
+    ...(grouping.trips
+      ? [
+        { label: "رحلات مجمّعة", value: `${count(grouping.grouped)} من ${count(grouping.trips)} (${pct(grouping.grouped, grouping.trips)})` },
+        { label: "متوسط الأشخاص في الرحلة", value: (grouping.persons / grouping.trips).toFixed(1) },
+        { label: "إشغال المقاعد", value: pct(grouping.persons, grouping.seats) },
+      ]
+      : []),
+    ...(incidents.changes !== null ? [{ label: "تغيير السيارة بعد إرسالها", value: `${count(incidents.changes)} (منها ${count(incidents.faults)} أعطال وحوادث)` }] : []),
+    ...(incidents.removals !== null ? [{ label: "إزالة ضيف من رحلة", value: count(incidents.removals) }] : []),
+    ...(approval.total
+      ? [
+        { label: "مواعيد استبعدها مسؤول العيادة", value: `${count(approval.excluded)} (${pct(approval.excluded, approval.total)})` },
+        { label: "بانتظار موافقة مسؤول العيادة", value: `${count(approval.pending)}${approval.pendingPast ? ` (منها ${count(approval.pendingPast)} فات وقتها)` : ""}` },
+        ...(approval.avgWaitMinutes !== null ? [{ label: "متوسط انتظار الموافقة", value: durationText(approval.avgWaitMinutes) }] : []),
+      ]
+      : []),
+  ];
+}
+
+function operationsSections(ops: OperationsSummary | null): ReportSection[] {
+  if (!ops?.appointments) return [];
+  const { cancel, returns, grouping, incidents, approval } = ops;
+  const average = (persons: number, trips: number) => (trips ? Math.round((persons / trips) * 10) / 10 : "");
+  return [
+    {
+      title: "مصير المواعيد",
+      sheet: "مصير المواعيد",
+      note: "مواعيد النظام في الفترة والفلاتر المختارة",
+      columns: ["النتيجة", "الشرح", "المواعيد", "النسبة"],
+      rows: OUTCOMES.map((meta) => {
+        const value = ops.outcomes.find((item) => item.outcome === meta.outcome)!.count;
+        return [meta.label, meta.hint, value, pct(value, ops.appointments)];
+      }),
+      bar: 2,
+    },
+    ...(cancel.total
+      ? [{
+        title: "إلغاء المواعيد",
+        sheet: "الإلغاء",
+        note: `${cancel.total} موعدًا ملغى · سيارات أُرسلت ثم أُلغي طلبها: ${cancel.wastedCars ?? "—"}`,
+        columns: ["القسم", "البند", "المواعيد", "النسبة"],
+        rows: [
+          ...(cancel.stages ?? []).map((item) => ["متى أُلغي", CANCEL_STAGES.find((meta) => meta.stage === item.stage)!.label, item.count, pct(item.count, cancel.total)]),
+          ...cancel.reasons.map((item) => ["السبب", item.name, item.count, pct(item.count, cancel.total)]),
+          ...cancel.by.map((item) => ["من ألغى", item.name, item.count, pct(item.count, cancel.total)]),
+        ],
+        bar: 2,
+      }]
+      : []),
+    ...(returns.total
+      ? [{
+        title: "العودة إلى المجمع",
+        sheet: "العودة",
+        note: `${returns.total} ضيفًا استُلموا في رحلة الذهاب`,
+        columns: ["العودة", "الشرح", "الضيوف", "النسبة"],
+        rows: RETURN_OUTCOMES.map((meta) => {
+          const value = returns.items.find((item) => item.outcome === meta.outcome)!.count;
+          return [meta.label, meta.hint, value, pct(value, returns.total)];
+        }),
+        bar: 2,
+      }]
+      : []),
+    ...(grouping.trips
+      ? [{
+        title: "جمع الضيوف وإشغال المقاعد",
+        sheet: "الجمع",
+        note: `الرحلة المجمّعة رحلة واحدة · وفّر الجمع ${grouping.requests - grouping.trips} رحلة · الإشغال من مقاعد السيارة المعتمدة`,
+        columns: ["نوع السيارة", "الرحلات", "المجمّعة", "نسبة المجمّعة", "الأشخاص", "المقاعد", "متوسط الأشخاص", "الإشغال"],
+        rows: [
+          ...grouping.byKind.map((item) => [item.kind, item.trips, item.grouped, pct(item.grouped, item.trips), item.persons, item.seats, average(item.persons, item.trips), pct(item.persons, item.seats)]),
+          ["الكل", grouping.trips, grouping.grouped, pct(grouping.grouped, grouping.trips), grouping.persons, grouping.seats, average(grouping.persons, grouping.trips), pct(grouping.persons, grouping.seats)],
+        ],
+        bar: 1,
+      }]
+      : []),
+    ...(incidents.changes || incidents.removals
+      ? [
+        {
+          title: "تغيير السيارات وإزالة الضيوف حسب السيارة",
+          sheet: "تغيير السيارات",
+          note: "تغييرها: تغيّرت هذه السيارة في رحلة بعد إرسالها (الرحلة المجمّعة مرة واحدة)",
+          columns: ["السيارة", "تغييرها", "منها أعطال وحوادث", "إزالة ضيف"],
+          rows: incidents.vehicles.map((item) => [item.plate, item.changes, item.faults, item.removals]),
+          bar: 1,
+        },
+        {
+          title: "أسباب تغيير السيارة وإزالة الضيف",
+          sheet: "أسباب التغيير",
+          columns: ["الإجراء", "السبب", "العدد"],
+          rows: [
+            ...incidents.changeReasons.map((item) => ["تغيير السيارة", item.name, item.count]),
+            ...incidents.removeReasons.map((item) => ["إزالة ضيف من رحلة", item.name, item.count]),
+          ],
+          bar: 2,
+        },
+      ]
+      : []),
+    ...(approval.people.length
+      ? [{
+        title: "موافقة مسؤول العيادة",
+        sheet: "موافقة العيادة",
+        note: `موافق عليها ${approval.approved} · مستبعدة ${approval.excluded} · بانتظار الموافقة ${approval.pending}${approval.medianWaitMinutes !== null ? ` · وسيط الانتظار ${durationText(approval.medianWaitMinutes)}` : ""}`,
+        columns: ["المسؤول", "موافقة", "استبعاد"],
+        rows: approval.people.map((item) => [item.name, item.approved, item.excluded]),
+        bar: 1,
+      }]
+      : []),
+  ];
 }
 
 // ————— الرحلات بتفاصيلها: من طلبها ومن أرسل السيارة ومتى في كل مرحلة —————
@@ -196,6 +334,8 @@ export function tripsSection(
   const who = (item?: ActivityItem) => (item ? `${hm(item.at)} · ${item.userName}` : "");
   // عودة الـ Nurse فقط ليست رحلة الضيف: لا تظهر في أعمدة عودته
   const nurseIds = new Set(requests.filter((request) => request.nurseOnly).map((request) => request.id));
+  const transfers = new Set(requests.flatMap((request) => (request.fromAppointmentId ? [request.fromAppointmentId] : [])));
+  const APPROVAL_TEXT = { pending: "بانتظار الموافقة", approved: "موافق عليه", excluded: "مستبعد" } as const;
   const rows = appointments
     .filter((appointment) => inPeriod(appointment.appointmentDate))
     .sort((a, b) => `${a.appointmentDate} ${a.appointmentAt}`.localeCompare(`${b.appointmentDate} ${b.appointmentAt}`))
@@ -225,8 +365,12 @@ export function tripsSection(
       const cancel = find("appointment.cancel");
       const guest = appointment.category === "غير طبية" ? undefined : guestOf?.(appointment);
       const booking = bookingOf(appointment);
-      const stages = Array.from(new Set(requests.filter((request) => request.appointmentId === appointment.id)
-        .flatMap((request) => requestTiming(request, appointment, hospitals)?.stages ?? [])));
+      const own = requests.filter((request) => request.appointmentId === appointment.id);
+      const stages = Array.from(new Set(own.flatMap((request) => requestTiming(request, appointment, hospitals)?.stages ?? [])));
+      const outcome = appointmentOutcome(appointment, own);
+      const cancels = list.filter((item) => item.action === "request.cancel").map((item) => ({ plate: item.details.plate, stage: item.details.stage }));
+      const returned = returnOutcome(appointment, own, transfers);
+      const approval = approvalInfo(appointment);
       return [
         appointment.appointmentDate,
         appointment.appointmentAt,
@@ -255,6 +399,9 @@ export function tripsSection(
         arrival("عودة", back),
         appointment.status === "ملغي" ? `${appointment.cancelReason ?? ""}${appointment.cancelledBy ? ` (${appointment.cancelledBy}${cancel ? ` ${hm(cancel.at)}` : ""})` : ""}` : "",
         stages.map((stage) => DELAY_LABELS[stage]).join("، "),
+        outcome === "cancelled" ? `${OUTCOME_LABELS[outcome]} · ${CANCEL_STAGE_LABELS[cancelStage(cancels)]}` : OUTCOME_LABELS[outcome],
+        returned ? RETURN_OUTCOME_LABELS[returned] : "",
+        approval ? `${APPROVAL_TEXT[approval.state]}${approval.by ? ` · ${approval.by}` : ""}` : "",
       ];
     });
   return {
@@ -264,7 +411,7 @@ export function tripsSection(
     columns: [
       "التاريخ", "وقت الموعد", "الضيف", "الرقم الصحي", "العمر", "المبنى", "الشقة", "الموبايل", "الوجهة", "نوع الرحلة", "الاحتياجات", "حالة الموعد", "إضافة الموعد", "التسجيل",
       "طلب الذهاب", "إرسال سيارة الذهاب", "سيارة الذهاب", "وصول السيارة للاستلام", "استلام الضيف", "الوصول إلى الوجهة",
-      "طلب العودة", "إرسال سيارة العودة", "سيارة العودة", "استلام العودة", "الوصول إلى المجمع", "إلغاء الموعد", "التأخير",
+      "طلب العودة", "إرسال سيارة العودة", "سيارة العودة", "استلام العودة", "الوصول إلى المجمع", "إلغاء الموعد", "التأخير", "النتيجة", "العودة", "موافقة العيادة",
     ],
     rows,
   };
@@ -356,7 +503,7 @@ export async function downloadExcel(report: Report, fileName: string) {
 const escapeHtml = (value: Cell) => String(value).replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]!);
 
 /** أعمدة النص الطويل في الجداول العريضة: تلتف أسطرها، وبقية الخانات في سطر واحد. */
-const LONG_COLUMNS = new Set(["العملية", "التغييرات", "إلغاء الموعد", "الشرط", "التأخير"]);
+const LONG_COLUMNS = new Set(["العملية", "التغييرات", "إلغاء الموعد", "الشرط", "التأخير", "الشرح", "النتيجة"]);
 
 function sectionHtml(section: ReportSection) {
   const max = section.bar === undefined ? 0 : Math.max(1, ...section.rows.map((row) => Number(row[section.bar!]) || 0));
