@@ -891,6 +891,25 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
               );
               toast.success(`أُلغيت ${appointmentIds.length} رحلة متكررة`, { description: reason });
             }}
+            onEditTrip={(appointment) => {
+              // تاريخ في يوم قادم: طلبها (إن وُجد) محجوز مسبقًا من اليوم، فالسيارة مطلوبة من وقت الانطلاق في يومها
+              const today = localDateString();
+              const nextRequests = appointment.appointmentDate > today
+                ? requests.map((request) => (request.appointmentId === appointment.id && request.status === "بانتظار التوزيع" && !request.requestedOn ? { ...request, requestedOn: today } : request))
+                : requests;
+              updateBoth(appointments.map((item) => (item.id === appointment.id ? appointment : item)).sort(byAppointmentTime), nextRequests);
+              toast.success("تم تعديل الرحلة", { description: `${appointment.patientName} · ${appointment.clinic} · ${appointment.appointmentDate} ${appointment.appointmentAt}` });
+              setSelectedDate(appointment.appointmentDate);
+            }}
+            onDeleteTrip={(appointment) => {
+              // طلبها أولًا (يُحذف والرحلة ما زالت محفوظة)، ثم الرحلة
+              updateBoth(
+                appointments.filter((item) => item.id !== appointment.id),
+                requests.filter((request) => request.appointmentId !== appointment.id),
+                "requests",
+              );
+              toast.success("تم حذف الرحلة", { description: `${appointment.patientName} · ${appointment.clinic}` });
+            }}
           />
         )}
       </main>

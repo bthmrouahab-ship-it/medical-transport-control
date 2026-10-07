@@ -70,7 +70,7 @@ function route_driver_trips(PDO $pdo): array
         if (!$appointment) continue;
         $active = in_array($request['status'] ?? null, DRIVER_ACTIVE_STATUSES, true) && empty($request['arrivedAt']);
         if (($appointment['appointmentDate'] ?? '') !== $today && !$active) continue;
-        unset($request['requestedBy']);
+        unset($request['requestedBy'], $request['requestedByName']);
         // عودة الضيف بعد أن عادت الـ Nurse وحدها: لا تُحسب الـ Nurse في عدد الأشخاص
         if (($request['direction'] ?? '') === 'عودة' && empty($request['nurseOnly']) && nurse_went_back($pdo, (string)($request['appointmentId'] ?? ''))) {
             $request['nurseBack'] = true;

@@ -16,6 +16,9 @@ const APPROVAL_FIELDS = ['approval', 'approvedBy', 'approvedAt', 'excludedBy', '
 /** بيانات الموعد نفسه: تعديل العيادة لها يعيد الموعد إلى انتظار موافقة مسؤولها */
 const APPOINTMENT_CONTENT_FIELDS = ['guestId', 'patientName', 'clinic', 'buildingNumber', 'apartmentNumber', 'mobile', 'appointmentDate', 'appointmentAt',
     'hospitalId', 'category', 'kind', 'assistance', 'gender', 'cancer', 'returnOnly', 'nurse', 'appointmentType'];
+/** بيانات الرحلة غير الطبية التي يعدّلها مشرف السيارات قبل إرسال سيارتها (الضيف والوجهة والتاريخ والوقت والاحتياجات) */
+const NON_MEDICAL_EDIT_FIELDS = ['guestId', 'patientName', 'clinic', 'buildingNumber', 'apartmentNumber', 'mobile', 'appointmentDate', 'appointmentAt',
+    'gender', 'nurse', 'kind', 'assistance', 'returnAt'];
 /** الضيف عاد إلى المجمع بنفسه بلا سيارة عودة (يسجّله مشرف المبنى باسمه ووقته) */
 const SELF_RETURN_FIELDS = ['returnedSelf', 'returnedSelfBy', 'returnedSelfAt'];
 /** خانات إلغاء الموعد (السبب إلزامي، ومن ألغاه، ومتى) */
@@ -36,9 +39,9 @@ const TRIP_RESET_FIELDS = ['vehiclePlate', 'driver', 'groupId', 'notificationSen
 /** حالة الموعد قبل استلام الضيف: إزالة ضيف سُجّل استلامه من الرحلة تعيدها (الذهاب، والعودة، والموعد الأول في النقل) */
 const TRIP_UNDO_APPOINTMENT_STATUS = [['تم استلام المريض', 'تم طلب السيارة'], ['مكتملة', 'طلب عودة'], ['مكتملة', 'تم استلام المريض']];
 const REQUEST_FIELDS = ['id', 'appointmentId', 'vehiclePlate', 'driver', 'direction', 'status', 'notificationMethod',
-    'createdAt', 'requestedOn', 'autoReturn', 'groupId', 'notificationSentAt', 'requestedBy', 'pickedUpAt', 'etaAt', 'destLat', 'destLng', 'arrivedAt', 'arrivalSource',
+    'createdAt', 'requestedOn', 'autoReturn', 'groupId', 'notificationSentAt', 'requestedBy', 'requestedByName', 'pickedUpAt', 'etaAt', 'destLat', 'destLng', 'arrivedAt', 'arrivalSource',
     'fromAppointmentId', 'nurseOnly', 'driverArrivedAt', 'arrivalGps', 'pickupGps', ...CHECK_FIELDS, ...VEHICLE_CHANGE_FIELDS, ...TRIP_REMOVAL_FIELDS,
-    // يكتبها الخادم وحده للإحصائيات (stamp_tracking في tracking.php)
+    // يكتبها الخادم وحده للإحصائيات (stamp_tracking في tracking.php)، واسم من طلب السيارة (stamp_requester)
     'pickupArrivedAt', 'nearPickupAt', '_o'];
 /** خانات مرحلة الطريق إلى الوجهة (تُكتب عند استلام المريض وعند الوصول) */
 const TRIP_FIELDS = ['pickedUpAt', 'etaAt', 'destLat', 'destLng', 'arrivedAt', 'arrivalSource'];
@@ -121,6 +124,32 @@ function unit_key($building, $apartment): string
 }
 
 /** شقق السيارات الخاصة (مفتاح unit_key ← true). $refresh بعد تغيير القائمة في نفس الطلب */
+/** أسماء الحسابات (رقم الحساب ← الاسم الظاهر): اسم مشرف المبنى الذي طلب السيارة في الطلبات القديمة */
+function account_names(): array
+{
+    static $names = null;
+    if ($names !== null) return $names;
+    $names = [];
+    foreach (db()->query('SELECT id, display_name FROM users') as $row) $names[(string)$row['id']] = (string)$row['display_name'];
+    return $names;
+}
+
+/**
+ * اسم من طلب السيارة (مشرف المبنى أو مسؤولهم، أو مسؤول العيادة لسيارة الممرضة): يكتبه الخادم وحده عند إنشاء الطلب
+ * أو انتقاله إلى منفّذ الحفظ، ويبقى ما دام صاحب الطلب نفسه؛ وما يرسله المستخدم منه يُتجاهل.
+ */
+function stamp_requester(array $user, ?array $before, ?array $after): ?array
+{
+    if ($after === null) return null;
+    unset($after['requestedByName']);
+    $owner = $after['requestedBy'] ?? null;
+    if ($owner === null || $owner === '') return $after;
+    if ($before !== null && ($before['requestedBy'] ?? null) === $owner) $name = $before['requestedByName'] ?? null;
+    else $name = $owner === (string)$user['id'] ? $user['display_name'] : null;
+    if (is_string($name) && $name !== '') $after['requestedByName'] = $name;
+    return $after;
+}
+
 function private_car_units(bool $refresh = false): array
 {
     static $units = null;
@@ -264,6 +293,12 @@ function valid_vehicle_driver(array $vehicle, ?callable $docOf): bool
  */
 function public_doc(string $col, ?array $data, ?array $privateUnits = null): ?array
 {
+    // الطلب القديم (قبل حفظ اسم من طلبه): الاسم من حسابه الآن
+    if ($col === 'requests' && $data !== null && !empty($data['requestedBy']) && empty($data['requestedByName'])) {
+        $name = account_names()[(string)$data['requestedBy']] ?? null;
+        if ($name !== null) $data['requestedByName'] = $name;
+        return $data;
+    }
     if ($col !== 'guests' || $data === null) return $data;
     $minor = guest_is_minor($data);
     // قبل حذف الرقم الصحي: به يُعرف صاحب الاحتياجات الخاصة
@@ -428,6 +463,25 @@ function valid_full_capacity(array $vehicle): bool
         || (is_bool($vehicle['fullCapacity']) && ($vehicle['kind'] ?? null) === 'سيدان');
 }
 
+/** رقم السيارة: من 2 إلى 12 رقمًا أو حرفًا إنجليزيًا أو شرطة (validateVehicle في shared/transport.ts) */
+function valid_plate($plate): bool
+{
+    return is_string($plate) && preg_match('/^[0-9A-Za-z-]{2,12}$/', $plate) === 1;
+}
+
+/**
+ * رحلة غير طبية لم تُرسل سيارتها: قبل طلب سيارتها، أو طلبها (وكل طلباتها) بانتظار التوزيع. يعدّلها مشرف السيارات
+ * أو يحذفها؛ وبعد إرسال السيارة تبقى كما هي (سجل الرحلة والإحصائيات).
+ */
+function non_medical_open(?array $appointment, array $requests): bool
+{
+    if (($appointment['category'] ?? '') !== 'غير طبية' || !in_array($appointment['status'] ?? null, ['بانتظار طلب السيارة', 'تم طلب السيارة'], true)) return false;
+    foreach ($requests as $request) {
+        if (($request['status'] ?? null) !== 'بانتظار التوزيع') return false;
+    }
+    return true;
+}
+
 /** تخصيص السيارة صالح: غير موجود، أو تخصيص باص لسيارة من نوع باص، أو سيارة المدارس لسيارة احتياجات خاصة. */
 function valid_bus_role(array $vehicle): bool
 {
@@ -583,7 +637,10 @@ function valid_appointment_type(array $data): bool
  * $docOf (اختياري): يقرأ مستندًا محفوظًا ($docOf('appointments', $id))، للموعد المرتبط بطلب السيارة الجديد
  * وللضيف والمستشفى في موعد العيادة. $docOf($col, null): أي مستند من المجموعة أو null إن كانت فارغة.
  */
-function authorize_write(array $user, string $col, string $id, ?array $before, ?array $after, ?callable $docOf = null): ?string
+/**
+ * $docOf(col, id): المستند المحفوظ (بما حُفظ قبله في نفس الدفعة)، و$requestsOf(appointmentId): طلبات السيارة المحفوظة للموعد.
+ */
+function authorize_write(array $user, string $col, string $id, ?array $before, ?array $after, ?callable $docOf = null, ?callable $requestsOf = null): ?string
 {
     $denied = 'ليست لديك صلاحية لتنفيذ هذا الإجراء.';
     $role = $user['role'];
@@ -592,7 +649,15 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
 
     switch ($col) {
         case 'appointments':
-            if ($after === null) return has_role($user, ['admin', ...CLINIC_ROLES]) ? null : $denied;
+            if ($after === null) {
+                if (has_role($user, ['admin', ...CLINIC_ROLES])) return null;
+                // مشرف السيارات يحذف رحلة غير طبية لم تُرسل سيارتها (طلباتها تُحذف قبلها في نفس الدفعة)، أو ملغاة بلا طلبات
+                if ($role === 'fleetSupervisor' && $requestsOf && ($before['category'] ?? '') === 'غير طبية') {
+                    if ($requestsOf($id)) return 'احذف طلب سيارة الرحلة أولًا';
+                    return non_medical_open($before, []) || ($before['status'] ?? null) === 'ملغي' ? null : 'لا يمكن حذف رحلة أُرسلت لها سيارة';
+                }
+                return $denied;
+            }
             if ($before === null) {
                 if (!valid_appointment($after, $id)) return 'بيانات الموعد غير صالحة';
                 if ($role === 'admin') return null;
@@ -653,6 +718,12 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
             // مشرف السيارات: حالة الموعد فقط، تتقدم كما عند الاستلام (إنهاء رحلة عالقة، أو ضم ضيف استلمه السائق إلى رحلة)،
             // أو تعود إلى ما قبل الاستلام (إزالة ضيف سُجّل استلامه من الرحلة)
             if ($role === 'fleetSupervisor') {
+                // تعديل رحلة غير طبية قبل إرسال سيارتها: الضيف (من قائمة المجمع) والوجهة والتاريخ والوقت والاحتياجات والعودة التلقائية
+                if (($before['category'] ?? '') === 'غير طبية' && $changed && only($changed, NON_MEDICAL_EDIT_FIELDS)) {
+                    if (!$requestsOf || !non_medical_open($before, $requestsOf($id))) return 'لا يمكن تعديل رحلة أُرسلت لها سيارة';
+                    if (!valid_appointment($after, $id) || ($after['category'] ?? '') !== 'غير طبية') return 'بيانات الرحلة غير صالحة';
+                    return $docOf ? registry_error($after, $docOf, $changed, false) : null;
+                }
                 // إيقاف رحلة غير طبية متكررة قبل طلب سيارتها أو قبل إرسالها: ملغي بسبب باسمه (وطلبها يُحذف قبله)
                 if (($after['status'] ?? null) === 'ملغي') {
                     return ($before['category'] ?? '') === 'غير طبية' && !empty($before['seriesId'])
@@ -677,10 +748,10 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
                     if (nurse_lead($user, $linked)) return null;
                     return $linked !== null && ($linked['returnOnly'] ?? null) === true && ($before['status'] ?? null) === 'بانتظار التوزيع' ? null : $denied;
                 }
-                // مشرف السيارات يحذف طلب رحلة متكررة يوقفها، ما دامت سيارتها لم تُرسل
+                // مشرف السيارات يحذف طلب رحلة غير طبية ما دامت سيارتها لم تُرسل (يحذف الرحلة أو يوقف رحلات متكررة)
                 if ($role === 'fleetSupervisor') {
                     $linked = $docOf ? $docOf('appointments', (string)($before['appointmentId'] ?? '')) : null;
-                    return $linked !== null && ($linked['category'] ?? '') === 'غير طبية' && !empty($linked['seriesId'])
+                    return $linked !== null && ($linked['category'] ?? '') === 'غير طبية'
                         && ($before['status'] ?? null) === 'بانتظار التوزيع' ? null : $denied;
                 }
                 return has_role($user, BUILDING_ROLES) && follows_request($user, $before) ? null : $denied;
@@ -746,6 +817,12 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
             // مشرف السيارات: إرسال السيارة وجمع الرحلات، وتأكيد وصولها إلى الوجهة (يدويًا أو بانتهاء المدة التقديرية)،
             // وإنهاء رحلة عالقة قبل تسجيل الاستلام (يدويًا فقط) حتى تتفرغ السيارة
             if ($role === 'fleetSupervisor') {
+                // تعديل تاريخ رحلة غير طبية قبل إرسال سيارتها: يوم الحجز (حجز ليوم قادم)
+                if ($changed === ['requestedOn'] && ($before['status'] ?? null) === 'بانتظار التوزيع' && ($after['status'] ?? null) === 'بانتظار التوزيع') {
+                    $linked = $docOf ? $docOf('appointments', (string)($before['appointmentId'] ?? '')) : null;
+                    return $linked !== null && ($linked['category'] ?? '') === 'غير طبية'
+                        && is_string($after['requestedOn'] ?? null) && preg_match('/^\d{4}-\d{2}-\d{2}$/', $after['requestedOn']) ? null : $denied;
+                }
                 // إزالة ضيف من رحلة جارية: يعود طلبه إلى «بانتظار التوزيع» بلا سيارة ولا مراحل الرحلة، ومعه السيارة والسبب ووقته
                 if (($after['status'] ?? null) === 'بانتظار التوزيع' && !empty($before['vehiclePlate'])) {
                     $valid = in_array($before['status'] ?? null, ['تم إرسال السيارة', 'وصلت السيارة', 'تم استلام المريض'], true)
@@ -824,12 +901,18 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
             return $denied;
 
         case 'fleet':
-            // المدير يعدّل كل البيانات، ومشرف السيارات يغيّر حالة الإتاحة وتخصيص الباص فقط
+            // المدير يعدّل كل البيانات، ومشرف السيارات يضيف سيارة جديدة ويغيّر الإتاحة والتخصيص والسائق
             if ($after === null) return $role === 'admin' ? null : $denied;
             if ($role === 'admin') {
                 return only(array_keys($after), VEHICLE_FIELDS) && ($after['plate'] ?? null) === $id
                     && in_array($after['kind'] ?? null, VEHICLE_KINDS, true) && valid_bus_role($after) && valid_full_capacity($after)
                     && valid_vehicle_driver($after, $docOf) ? null : 'بيانات السيارة غير صالحة';
+            }
+            // مشرف السيارات يضيف سيارة جديدة برقم غير مسجل: رقمها ونوعها، متاحة أو موقوفة، وسائقها اختياري (لا يحذف السيارات)
+            if ($role === 'fleetSupervisor' && $before === null) {
+                return only(array_keys($after), VEHICLE_FIELDS) && ($after['plate'] ?? null) === $id && valid_plate($id)
+                    && in_array($after['kind'] ?? null, VEHICLE_KINDS, true) && is_bool($after['available'] ?? null)
+                    && valid_bus_role($after) && valid_full_capacity($after) && valid_vehicle_driver($after, $docOf) ? null : 'بيانات السيارة غير صالحة';
             }
             // مشرف السيارات يغيّر إتاحة السيارة، وتخصيصها (باص المجمع أو الجامعة أو العيادة، أو سيارة المدارس)،
             // وتشغيل السيدان بطاقتها الكاملة (4 أشخاص)، والسائق الذي يقودها (في بداية الشفت)

@@ -15,6 +15,7 @@ import {
   Layers,
   Minus,
   Pencil,
+  Trash2,
   History,
   Link2,
   MapPin,
@@ -68,6 +69,7 @@ import {
   hasDriver,
   isApproved,
   isNonMedical,
+  nonMedicalOpen,
   isPriority,
   isReturnOnly,
   regularForSpecialWarning,
@@ -100,7 +102,7 @@ import {
   type VehicleRules,
 } from "@shared/transport";
 import type { Hospital } from "@shared/hospitals";
-import { shortDriverName } from "@shared/drivers";
+import { assignDrivers, shortDriverName } from "@shared/drivers";
 import { LATE_MINUTES, arrivalsOn, incomingCars, minutesSince, neededAt, returningText, suggestReturnPickups, suggestReturnRedirects, tripEndpoints, tripPhase, vehicleAvailability, vehicleLocationState, type IncomingCar, type TripPhase, type VehicleLocationState } from "@shared/trips";
 import {
   Badge,
@@ -133,6 +135,7 @@ import { AppointmentsOverview } from "@/components/AppointmentsOverview";
 import { KindIcon, KindLabel, VehiclePicker } from "@/components/VehiclePicker";
 import DriverAssignment from "@/components/DriverAssignment";
 import RoleSchedulesDialog from "@/components/RoleSchedulesDialog";
+import AddVehicleDialog from "@/components/AddVehicleDialog";
 import { saveState } from "@/lib/appStore";
 import { reveal } from "@/lib/notify";
 import GuestContact from "@/components/GuestContact";
@@ -166,7 +169,13 @@ function riderDetails(trip: Trip) {
 const bookedAhead = (request: VehicleRequest) => Boolean(request.requestedOn && request.requestedOn < localDateString());
 
 /** وقت طلب السيارة من مشرف المبنى: للذهاب، وللعودة (ومعه وقت طلب الذهاب)، وللنقل بين موعدين. */
+/** أوقات الطلب ومن طلبه (اسم مشرف المبنى أو مسؤولهم، أو مسؤول العيادة للممرضة) */
 function requestTimes(trip: Trip) {
+  const times = requestTimeText(trip);
+  return times && trip.request.requestedByName ? `${times} · طلبه ${trip.request.requestedByName}` : times;
+}
+
+function requestTimeText(trip: Trip) {
   const at = trip.request.createdAt;
   if (!at) return "";
   // العودة التلقائية للرحلة غير الطبية: أنشأها الخادم، والضيف جاهز في وقتها
@@ -220,7 +229,7 @@ const roleOf = (vehicle: Vehicle) => (vehicleRoleOf(vehicle) ? BUS_ROLE_LABELS[v
  */
 type VehicleChoice = { vehicle: Vehicle; why: string | null; warning?: string | null; regular?: boolean; reserved?: boolean };
 
-export function FleetSupervisorPage({ vehicles, appointments, requests, date, onDateChange, onManager, onUpdate, onDispatch, onDispatchMany, onArrived, onEndTrip, onChangeVehicle, onRemoveFromTrip, onAddToTrip, onExport, onAddTrips, onStopSeries }: {
+export function FleetSupervisorPage({ vehicles, appointments, requests, date, onDateChange, onManager, onUpdate, onDispatch, onDispatchMany, onArrived, onEndTrip, onChangeVehicle, onRemoveFromTrip, onAddToTrip, onExport, onAddTrips, onStopSeries, onEditTrip, onDeleteTrip }: {
   vehicles: Vehicle[];
   appointments: ClinicAppointment[];
   requests: VehicleRequest[];
@@ -244,8 +253,13 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
   onAddTrips: (trips: { appointment: ClinicAppointment; request?: VehicleRequest }[]) => void;
   /** إيقاف رحلات متكررة قادمة لم تُرسل سيارتها: تُلغى بالسبب ويُحذف طلبها */
   onStopSeries: (appointmentIds: string[], reason: string) => void;
+  /** تعديل رحلة غير طبية لم تُرسل سيارتها، أو حذفها مع طلبها */
+  onEditTrip: (appointment: ClinicAppointment) => void;
+  onDeleteTrip: (appointment: ClinicAppointment) => void;
 }) {
   const [addingTrip, setAddingTrip] = useState(false);
+  /** رحلة غير طبية قيد التعديل (قبل إرسال سيارتها) */
+  const [editingTrip, setEditingTrip] = useState<ClinicAppointment | null>(null);
   const [selectedVehicles, setSelectedVehicles] = useState<Record<string, string>>({});
   const [vehicleFilter, setVehicleFilter] = useState<VehicleFilter>("all");
   const [plan, setPlan] = useState<DispatchPlan | null>(null);
@@ -267,6 +281,8 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
   const [assigning, setAssigning] = useState<string | null>(null);
   /** نافذة أوقات سيارات المدارس وباص الجامعة */
   const [editingSchedules, setEditingSchedules] = useState(false);
+  /** نافذة إضافة سيارة جديدة */
+  const [addingVehicle, setAddingVehicle] = useState(false);
   const drivers = useDrivers();
   const schedules = useSchedules();
   const hospitals = useHospitals();
@@ -537,6 +553,40 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
     });
   }
 
+  /** فتح نموذج تعديل رحلة غير طبية (أعلى الصفحة) */
+  function editTrip(appointment: ClinicAppointment) {
+    setAddingTrip(false);
+    setEditingTrip(appointment);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  /** حذف رحلة غير طبية لم تُرسل سيارتها، مع طلبها (رحلة متكررة: هذه الرحلة فقط) */
+  function deleteTrip(appointment: ClinicAppointment) {
+    if (!nonMedicalOpen(appointment, requests)) {
+      toast.error("أُرسلت سيارة لهذه الرحلة، فلا يمكن حذفها");
+      return;
+    }
+    if (!window.confirm(`حذف الرحلة غير الطبية لـ ${appointment.patientName} (${appointment.clinic}، ${appointment.appointmentDate} ${appointment.appointmentAt})${appointment.seriesId ? "\nهذه الرحلة فقط، وتبقى باقي الرحلات المتكررة" : ""}؟`)) return;
+    if (editingTrip?.id === appointment.id) setEditingTrip(null);
+    onDeleteTrip(appointment);
+  }
+
+  /** سيارة جديدة برقم غير مسجل: متاحة للخدمة، ومعها سائقها إن اختاره (ينتقل من سيارته السابقة) في حفظ واحد */
+  function addVehicle(vehicle: Pick<Vehicle, "plate" | "kind">, driverId: string | null) {
+    if (vehicles.some((item) => item.plate === vehicle.plate)) {
+      toast.error(`رقم السيارة ${vehicle.plate} مسجل مسبقًا`);
+      return;
+    }
+    const added: Vehicle = { ...vehicle, driver: "", phone: "", available: true };
+    const next = driverId ? assignDrivers([...vehicles, added], drivers, new Map([[added.plate, driverId]]), new Date()) : [...vehicles, added];
+    onUpdate(next);
+    setAddingVehicle(false);
+    const driver = drivers.find((item) => item.id === driverId);
+    toast.success(`تمت إضافة السيارة ${vehicle.plate} (${vehicle.kind})`, {
+      description: driver ? `يقودها ${driver.name}` : "بلا سائق: اختر سائقها من «السائقون» قبل إرسالها في الرحلات",
+    });
+  }
+
   /** حفظ أوقات سيارات المدارس وباص الجامعة للجميع */
   function saveSchedules(next: RoleSchedules) {
     saveState("fox_schedules", next, schedules);
@@ -686,8 +736,25 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
       </div>
 
       {addingTrip && <NonMedicalTripForm defaultDate={date} onCancel={() => setAddingTrip(false)} onSave={(trips) => { onAddTrips(trips); setAddingTrip(false); }} />}
+      {editingTrip && (
+        <NonMedicalTripForm
+          key={editingTrip.id}
+          defaultDate={date}
+          editing={editingTrip}
+          onCancel={() => setEditingTrip(null)}
+          onUpdate={(appointment) => {
+            // أُرسلت سيارتها من جهاز آخر منذ فتح النموذج
+            if (!nonMedicalOpen(appointments.find((item) => item.id === appointment.id) ?? appointment, requests)) {
+              toast.error("أُرسلت سيارة لهذه الرحلة، فلا يمكن تعديلها");
+              return;
+            }
+            onEditTrip(appointment);
+            setEditingTrip(null);
+          }}
+        />
+      )}
 
-      {view === "appointments" ? <AppointmentsOverview appointments={appointments} requests={requests} date={date} now={now} onStopSeries={setStopping} /> : (<>
+      {view === "appointments" ? <AppointmentsOverview appointments={appointments} requests={requests} date={date} now={now} onStopSeries={setStopping} onEditTrip={editTrip} onDeleteTrip={deleteTrip} /> : (<>
       {/* شريط الحالة: عدادات حية ملونة، والضغط ينقل إلى القسم */}
       <div className="mb-6">
         <StatusBar
@@ -791,10 +858,24 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
                               {!bookedAhead(trip.request) && waitedText(trip.request.createdAt, now) && <span className="font-normal text-amber-700">· {waitedText(trip.request.createdAt, now)}</span>}
                             </p>
                           )}
-                          {trip.appointment.seriesId && (
-                            <button type="button" onClick={() => setStopping(trip.appointment)} className="mt-1.5 inline-flex items-center gap-1 text-xs font-medium text-slate-500 underline-offset-2 hover:text-red-700 hover:underline">
-                              <Repeat className="h-3.5 w-3.5" /> إيقاف الرحلات المتكررة…
-                            </button>
+                          {isNonMedical(trip.appointment) && (
+                            <p className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1">
+                              {nonMedicalOpen(trip.appointment, requests) && (
+                                <>
+                                  <button type="button" onClick={() => editTrip(trip.appointment)} aria-label={`تعديل رحلة ${trip.appointment.patientName}`} className="inline-flex items-center gap-1 text-xs font-medium text-slate-500 underline-offset-2 hover:text-ink hover:underline">
+                                    <Pencil className="h-3.5 w-3.5" /> تعديل
+                                  </button>
+                                  <button type="button" onClick={() => deleteTrip(trip.appointment)} aria-label={`حذف رحلة ${trip.appointment.patientName}`} className="inline-flex items-center gap-1 text-xs font-medium text-slate-500 underline-offset-2 hover:text-red-700 hover:underline">
+                                    <Trash2 className="h-3.5 w-3.5" /> حذف
+                                  </button>
+                                </>
+                              )}
+                              {trip.appointment.seriesId && (
+                                <button type="button" onClick={() => setStopping(trip.appointment)} className="inline-flex items-center gap-1 text-xs font-medium text-slate-500 underline-offset-2 hover:text-red-700 hover:underline">
+                                  <Repeat className="h-3.5 w-3.5" /> إيقاف الرحلات المتكررة…
+                                </button>
+                              )}
+                            </p>
                           )}
                         </div>
                       </div>
@@ -972,6 +1053,7 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
                 {/* أوقات سيارات المدارس وباص الجامعة: يعدّلها المشرف متى تغيّرت */}
                 <button type="button" onClick={() => setEditingSchedules(true)} title="أوقات سيارات المدارس وباص الجامعة" className={btn("secondary", "sm")}><CalendarClock className="h-4 w-4" /> الأوقات</button>
                 <button type="button" onClick={() => setAssigning("")} className={btn(withoutDriver ? "primary" : "secondary", "sm")}><UserCog className="h-4 w-4" /> السائقون</button>
+                <button type="button" onClick={() => setAddingVehicle(true)} aria-label="إضافة سيارة" title="إضافة سيارة برقم غير مسجل" className={btn("secondary", "sm")}><Plus className="h-4 w-4" /> سيارة</button>
               </div>
             )}
           >
@@ -1197,6 +1279,7 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
           onClose={() => setAssigning(null)}
         />
       )}
+      {addingVehicle && <AddVehicleDialog vehicles={vehicles} drivers={drivers} onSave={addVehicle} onClose={() => setAddingVehicle(false)} />}
       {editingSchedules && <RoleSchedulesDialog schedules={schedules} counts={scheduledCounts} onSave={saveSchedules} onClose={() => setEditingSchedules(false)} />}
     </>
   );

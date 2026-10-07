@@ -204,6 +204,8 @@ export type VehicleRequest = {
   notificationSentAt?: string;
   /** رقم حساب مشرف المبنى الذي طلب السيارة: هو وحده يتابع الطلب (الطلبات القديمة بلا مالك يتابعها الجميع) */
   requestedBy?: string;
+  /** اسم من طلب السيارة (يكتبه الخادم من حسابه: stamp_requester)، لمشرف السيارات ومسؤول مشرفي المباني */
+  requestedByName?: string;
   /** وقت استلام المريض، أي بداية الطريق إلى الوجهة (ISO) */
   pickedUpAt?: string;
   /** الوقت التقديري للوصول إلى الوجهة (ISO) */
@@ -629,6 +631,7 @@ export function migrateRequest(value: unknown): VehicleRequest | null {
     groupId: toText(raw.groupId) || undefined,
     notificationSentAt: toText(raw.notificationSentAt) || undefined,
     requestedBy: toText(raw.requestedBy) || undefined,
+    requestedByName: toText(raw.requestedByName) || undefined,
     pickedUpAt: isoTime(raw.pickedUpAt),
     etaAt: isoTime(raw.etaAt),
     destLat: coordinate(raw.destLat),
@@ -694,6 +697,10 @@ export function removeRequestFromTrip(request: VehicleRequest, reason: string, n
     notificationMethod: request.notificationMethod,
     createdAt: request.createdAt,
     ...(request.requestedBy ? { requestedBy: request.requestedBy } : {}),
+    ...(request.requestedByName ? { requestedByName: request.requestedByName } : {}),
+    // الحجز المسبق والعودة التلقائية من بيانات الطلب نفسه (لا من الرحلة)
+    ...(request.requestedOn ? { requestedOn: request.requestedOn } : {}),
+    ...(request.autoReturn ? { autoReturn: true as const } : {}),
     ...(request.fromAppointmentId ? { fromAppointmentId: request.fromAppointmentId } : {}),
     ...(request.nurseOnly ? { nurseOnly: true } : {}),
     removedFrom: request.vehiclePlate,
@@ -1603,6 +1610,15 @@ export const NON_MEDICAL_DESTINATIONS: { ar: string; en: string; place?: Pick<Ho
 ];
 
 export const isNonMedical = (appointment: Pick<ClinicAppointment, "category">) => appointment.category === "غير طبية";
+
+/**
+ * رحلة غير طبية لم تُرسل سيارتها (قبل طلب سيارتها، أو كل طلباتها بانتظار التوزيع): يعدّلها مشرف السيارات أو يحذفها.
+ * بعد إرسال السيارة تبقى كما هي (non_medical_open في api/lib/rules.php).
+ */
+export function nonMedicalOpen(appointment: Pick<ClinicAppointment, "id" | "category" | "status">, requests: Pick<VehicleRequest, "appointmentId" | "status">[]) {
+  return isNonMedical(appointment) && (appointment.status === "بانتظار طلب السيارة" || appointment.status === "تم طلب السيارة")
+    && requests.every((request) => request.appointmentId !== appointment.id || request.status === "بانتظار التوزيع");
+}
 
 // ————— الرحلة غير الطبية المتكررة —————
 

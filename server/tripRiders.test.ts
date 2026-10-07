@@ -20,6 +20,11 @@ describe("removing a guest from a running trip", () => {
     });
   });
 
+  it("keeps who asked by name, an advance booking and an automatic return", () => {
+    const next = removeRequestFromTrip({ ...pickedUp, requestedByName: "مشرف المبنى 17", requestedOn: "2026-10-01", autoReturn: true }, "x", now);
+    expect(next).toMatchObject({ requestedBy: "4", requestedByName: "مشرف المبنى 17", requestedOn: "2026-10-01", autoReturn: true });
+  });
+
   it("keeps a transfer and a Nurse-only return as they are", () => {
     expect(removeRequestFromTrip({ ...pickedUp, fromAppointmentId: "A1" }, "x", now).fromAppointmentId).toBe("A1");
     expect(removeRequestFromTrip({ ...pickedUp, direction: "عودة", nurseOnly: true }, "x", now).nurseOnly).toBe(true);

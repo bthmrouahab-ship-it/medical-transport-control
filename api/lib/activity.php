@@ -183,7 +183,7 @@ function describe_write(PDO $pdo, string $col, string $id, ?array $before, ?arra
             $nonMedical = ($doc['category'] ?? '') === 'غير طبية';
             // طلب عودة فقط من المستشفى يُسجَّل باسمه لا «موعد»
             $returnOnly = ($doc['returnOnly'] ?? null) === true;
-            $noun = $returnOnly ? 'طلب عودة' : 'موعد';
+            $noun = $returnOnly ? 'طلب عودة' : ($nonMedical ? 'رحلة غير طبية' : 'موعد');
             if ($before === null) {
                 if ($returnOnly) return ['appointment', 'appointment.create', "إضافة طلب عودة من المستشفى لـ $who من {$details['destination']} إلى المجمع ($when)", $details];
                 return ['appointment', 'appointment.create', ($nonMedical ? 'إضافة رحلة غير طبية لـ ' : 'إضافة موعد ') . "$who إلى {$details['destination']} ($when)", $details];

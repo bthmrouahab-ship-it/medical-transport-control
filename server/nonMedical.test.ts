@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_HOSPITALS, ORIGIN, matchHospital } from "../shared/hospitals";
-import { NON_MEDICAL_DESTINATIONS, buildTripGroups, calculateTripGroupingScore, destinationLabels, nonMedicalPlace, type ClinicAppointment } from "../shared/transport";
+import { NON_MEDICAL_DESTINATIONS, buildTripGroups, calculateTripGroupingScore, destinationLabels, nonMedicalOpen, nonMedicalPlace, type ClinicAppointment, type VehicleRequest } from "../shared/transport";
 import { pickupDetails, tripEndpoints, UNKNOWN_TRAVEL_MINUTES } from "../shared/trips";
 
 const trip = (id: string, clinic: string, extra: Partial<ClinicAppointment> = {}) => ({
@@ -58,5 +58,22 @@ describe("non-medical destinations with a location", () => {
     expect(destinationLabels(trip("N1", "جامعة أوريكس"), DEFAULT_HOSPITALS).en).toBe("Oryx University (Liverpool John Moores University)");
     expect(destinationLabels(trip("N1", "معهد النور"), DEFAULT_HOSPITALS).en).toBe("Al Noor Center");
     expect(nonMedicalPlace(trip("N1", "معهد النور"))).toMatchObject({ lat: 25.340688, lng: 51.465203 });
+  });
+});
+
+describe("the fleet supervisor edits or deletes a non-medical trip until its car is sent", () => {
+  const request = (status: VehicleRequest["status"], appointmentId = "N1") => ({ appointmentId, status });
+  it("before the car is requested, or while its request waits for a car", () => {
+    expect(nonMedicalOpen(trip("N1", "الجامعة", { status: "بانتظار طلب السيارة" }), [])).toBe(true);
+    expect(nonMedicalOpen(trip("N1", "الجامعة"), [request("بانتظار التوزيع")])).toBe(true);
+    // طلب رحلة أخرى لا يمنعها
+    expect(nonMedicalOpen(trip("N1", "الجامعة"), [request("بانتظار التوزيع"), request("وصلت الوجهة", "N2")])).toBe(true);
+  });
+
+  it("not after the car is sent, nor a cancelled trip or a medical appointment", () => {
+    expect(nonMedicalOpen(trip("N1", "الجامعة"), [request("تم إرسال السيارة")])).toBe(false);
+    expect(nonMedicalOpen(trip("N1", "الجامعة", { status: "تم استلام المريض" }), [])).toBe(false);
+    expect(nonMedicalOpen(trip("N1", "الجامعة", { status: "ملغي" }), [])).toBe(false);
+    expect(nonMedicalOpen(trip("N1", "مستشفى حمد العام", { category: undefined }), [request("بانتظار التوزيع")])).toBe(false);
   });
 });

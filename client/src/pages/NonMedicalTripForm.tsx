@@ -35,31 +35,35 @@ const dayText = (date: string) => `${WEEKDAY_NAMES[new Date(`${date}T00:00:00Z`)
  * «رحلة متكررة»: نفس الرحلة في أيام محددة (الأحد إلى الخميس افتراضيًا) حتى تاريخ، بنفس رقم السلسلة (seriesId)،
  * بلا طلب سيارة: كل رحلة «بانتظار طلب السيارة» تظهر لمشرف المبنى في يومها، ولا تصل إلى مشرف السيارات حتى يطلبها.
  * الرحلة الواحدة مع طلب سيارتها مباشرة، وطلبها ليوم قادم فيه يوم الحجز (requestedOn).
+ * editing: تعديل رحلة لم تُرسل سيارتها (nonMedicalOpen): نفس النموذج بلا التكرار، ويُحفظ بنفس رقمها وحالتها (onUpdate).
  */
-export default function NonMedicalTripForm({ defaultDate, onSave, onCancel }: {
+export default function NonMedicalTripForm({ defaultDate, editing, onSave, onUpdate, onCancel }: {
   defaultDate: string;
-  onSave: (trips: { appointment: ClinicAppointment; request?: VehicleRequest }[]) => void;
+  editing?: ClinicAppointment;
+  onSave?: (trips: { appointment: ClinicAppointment; request?: VehicleRequest }[]) => void;
+  onUpdate?: (appointment: ClinicAppointment) => void;
   onCancel: () => void;
 }) {
   const guests = useGuests();
   const index = useMemo(() => guestIndex(guests), [guests]);
+  const known = editing && NON_MEDICAL_DESTINATIONS.some((item) => item.ar === editing.clinic);
   const [form, setForm] = useState({
-    guestId: "",
-    gender: undefined as Gender | undefined,
-    destination: NON_MEDICAL_DESTINATIONS[0].ar,
-    otherDestination: "",
-    mobile: "",
-    appointmentDate: defaultDate,
-    appointmentAt: timeLabel(new Date(Date.now() + 30 * 60000)),
-    kind: "عادي" as AppointmentKind,
-    assistance: [] as AssistanceNeed[],
+    guestId: editing?.guestId ?? "",
+    gender: editing?.gender as Gender | undefined,
+    destination: editing ? (known ? editing.clinic : OTHER) : NON_MEDICAL_DESTINATIONS[0].ar,
+    otherDestination: editing && !known ? editing.clinic : "",
+    mobile: editing?.mobile ?? "",
+    appointmentDate: editing?.appointmentDate ?? defaultDate,
+    appointmentAt: editing?.appointmentAt ?? timeLabel(new Date(Date.now() + 30 * 60000)),
+    kind: editing?.kind ?? "عادي" as AppointmentKind,
+    assistance: editing ? [...editing.assistance] : [] as AssistanceNeed[],
   });
 
   const guest = form.guestId ? index.byId.get(form.guestId) : undefined;
   // رحلة متكررة: الأيام وتاريخ النهاية (4 أسابيع افتراضيًا)
   const [repeat, setRepeat] = useState({ enabled: false, days: RECURRING_DEFAULT_DAYS, until: addDays(defaultDate, 27) });
   // العودة التلقائية بوقت ثابت (تُختار مع الرحلة المتكررة)، وإلا يطلبها مشرف المبنى
-  const [autoReturn, setAutoReturn] = useState({ enabled: false, at: "" });
+  const [autoReturn, setAutoReturn] = useState({ enabled: Boolean(editing?.returnAt), at: editing?.returnAt ?? "" });
   // أيام الرحلة المتكررة (بلا يوم اليوم إن مضى وقته)، أو null لمدة غير صالحة
   const seriesDates = useMemo(() => {
     if (!repeat.enabled) return null;
@@ -125,12 +129,34 @@ export default function NonMedicalTripForm({ defaultDate, onSave, onCancel }: {
         toast.error("لا توجد رحلات في هذه الأيام والمدة", { description: "اختر أيام التكرار أو مدّ تاريخ النهاية" });
         return;
       }
-    } else if (!requestWindow(form).open) {
+    } else if ((!editing || form.appointmentDate !== editing.appointmentDate || form.appointmentAt !== editing.appointmentAt) && !requestWindow(form).open) {
+      // التعديل يُفحص وقته فقط إن تغيّر التاريخ أو الوقت
       toast.error(`الوقت مضى عليه أكثر من ${REQUEST_GRACE_MINUTES} دقيقة`);
       return;
     }
     if (autoReturn.enabled && !(autoReturn.at > form.appointmentAt)) {
       toast.error("وقت العودة بعد وقت الذهاب في نفس اليوم");
+      return;
+    }
+    if (editing) {
+      // نفس الرحلة (رقمها وحالتها وسلسلتها) ببياناتها الجديدة
+      const { nurse: _nurse, returnAt: _returnAt, ...rest } = editing;
+      onUpdate?.({
+        ...rest,
+        guestId: guest.id,
+        patientName: guest.name,
+        clinic: destination,
+        buildingNumber: guest.buildingNumber,
+        apartmentNumber: guest.apartmentNumber,
+        mobile,
+        gender: form.gender,
+        ...(isNurse(guest) ? { nurse: true } : {}),
+        appointmentDate: form.appointmentDate,
+        appointmentAt: form.appointmentAt,
+        kind: form.kind,
+        assistance: form.assistance,
+        ...(autoReturn.enabled ? { returnAt: autoReturn.at } : {}),
+      });
       return;
     }
     const stamp = Date.now();
@@ -139,7 +165,7 @@ export default function NonMedicalTripForm({ defaultDate, onSave, onCancel }: {
     const createdAt = timeLabel(new Date());
     const dates = repeat.enabled && seriesDates ? seriesDates : [form.appointmentDate];
     const series = repeat.enabled ? { seriesId: `SER-${base}` } : {};
-    onSave(dates.map((appointmentDate, index) => {
+    onSave?.(dates.map((appointmentDate, index) => {
       const appointment: ClinicAppointment = {
         id: repeat.enabled ? `TRP-${base}-${index + 1}` : `TRP-${String(stamp).slice(-6)}`,
         guestId: guest.id,
@@ -179,8 +205,10 @@ export default function NonMedicalTripForm({ defaultDate, onSave, onCancel }: {
     <Panel
       tone="violet"
       icon={MapPin}
-      title="رحلة غير طبية"
-      description="تُضاف مباشرة إلى الطلبات بانتظار التوزيع"
+      title={editing ? "تعديل الرحلة غير الطبية" : "رحلة غير طبية"}
+      description={editing
+        ? `${editing.patientName} · ${editing.clinic} · ${editing.appointmentDate} ${editing.appointmentAt}${editing.seriesId ? " · هذه الرحلة فقط من الرحلات المتكررة" : ""}`
+        : "تُضاف مباشرة إلى الطلبات بانتظار التوزيع"}
       className="mb-6"
       actions={<button type="button" onClick={onCancel} aria-label="إغلاق" className={btn("ghost", "sm")}><X className="h-4 w-4" /></button>}
     >
@@ -214,7 +242,7 @@ export default function NonMedicalTripForm({ defaultDate, onSave, onCancel }: {
         <div className="sm:col-span-2"><DateChooser label={repeat.enabled ? "من تاريخ" : "التاريخ"} value={form.appointmentDate} onChange={(value) => setForm({ ...form, appointmentDate: value })} /></div>
         <Field label="الوقت" value={form.appointmentAt} onChange={(value) => setForm({ ...form, appointmentAt: value })} type="time" />
 
-        <label className={cx(choiceClass(repeat.enabled), "cursor-pointer sm:col-span-2")}>
+        {!editing && <label className={cx(choiceClass(repeat.enabled), "cursor-pointer sm:col-span-2")}>
           <input type="checkbox" checked={repeat.enabled} onChange={(event) => {
             const enabled = event.target.checked;
             setRepeat((current) => ({ ...current, enabled }));
@@ -223,7 +251,7 @@ export default function NonMedicalTripForm({ defaultDate, onSave, onCancel }: {
           }} className="h-4 w-4 accent-brand-600" />
           <Repeat className="h-4 w-4" /> رحلة متكررة
           <span className="text-xs font-normal text-slate-500">· نفس الرحلة في أيام محددة حتى تاريخ</span>
-        </label>
+        </label>}
         {repeat.enabled && (
           <div className="space-y-4 rounded-xl bg-slate-50 p-4 ring-1 ring-inset ring-slate-200 sm:col-span-2">
             <fieldset>
@@ -283,7 +311,7 @@ export default function NonMedicalTripForm({ defaultDate, onSave, onCancel }: {
         <NeedsField t={CLINIC_TEXT.ar} value={form.assistance} minor={false} onChange={(assistance) => setForm((current) => ({ ...current, assistance }))} />
 
         <div className="flex gap-3 border-t border-slate-100 pt-5 sm:col-span-2">
-          <button className={cx(btn("primary", "lg"), "flex-1")}><CheckCircle2 className="h-4 w-4" /> {repeat.enabled && seriesDates?.length ? `إضافة ${seriesDates.length.toLocaleString("en")} رحلة` : "إضافة الرحلة"}</button>
+          <button className={cx(btn("primary", "lg"), "flex-1")}><CheckCircle2 className="h-4 w-4" /> {editing ? "حفظ التعديل" : repeat.enabled && seriesDates?.length ? `إضافة ${seriesDates.length.toLocaleString("en")} رحلة` : "إضافة الرحلة"}</button>
           <button type="button" onClick={onCancel} className={btn("secondary", "lg")}>إلغاء</button>
         </div>
       </form>

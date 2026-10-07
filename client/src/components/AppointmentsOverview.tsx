@@ -1,11 +1,12 @@
 import { useMemo, useState } from "react";
-import { Accessibility, ArrowLeftRight, Ban, BriefcaseMedical, CalendarDays, Clock3, Eye, EyeOff, Filter, Footprints, House, Repeat, Ribbon, Stethoscope, Truck, UsersRound, X } from "lucide-react";
+import { Accessibility, ArrowLeftRight, Ban, BriefcaseMedical, CalendarDays, Clock3, Eye, EyeOff, Filter, Footprints, House, Pencil, Repeat, Ribbon, Stethoscope, Trash2, Truck, UsersRound, X } from "lucide-react";
 import {
   approvalOf,
   isApproved,
   isNonMedical,
   isPriority,
   isReturnOnly,
+  nonMedicalOpen,
   personsText,
   RETURN_ONLY_LABEL,
   requestPersons,
@@ -30,16 +31,20 @@ const EXCLUDED = "مستبعد من مسؤول العيادة";
 const requestKind = (request: VehicleRequest) => (request.nurseOnly ? "عودة الـ Nurse فقط" : request.fromAppointmentId ? "نقل بين موعدين" : request.direction);
 
 /**
- * كل المواعيد لمشرف السيارات للعرض فقط (الطبية وغير الطبية) في جدول بفلترة أعمدة مثل Excel:
- * حالة كل موعد وطلبات سيارته ومن أرسلت إليه. طلب السيارة للموعد الطبي من مشرف المبنى وحده، فلا أزرار هنا.
+ * كل المواعيد لمشرف السيارات (الطبية وغير الطبية) في جدول بفلترة أعمدة مثل Excel: حالة كل موعد وطلبات سيارته
+ * ومن أرسلت إليه. طلب السيارة للموعد الطبي من مشرف المبنى وحده؛ والرحلة غير الطبية التي لم تُرسل سيارتها
+ * يعدّلها مشرف السيارات أو يحذفها، والمتكررة يوقفها.
  */
-export function AppointmentsOverview({ appointments, requests, date, now, onStopSeries }: {
+export function AppointmentsOverview({ appointments, requests, date, now, onStopSeries, onEditTrip, onDeleteTrip }: {
   appointments: ClinicAppointment[];
   requests: VehicleRequest[];
   date: string;
   now: Date;
   /** إيقاف رحلة غير طبية متكررة (يفتح نافذة الإيقاف في صفحة مشرف السيارات) */
   onStopSeries?: (appointment: ClinicAppointment) => void;
+  /** تعديل رحلة غير طبية لم تُرسل سيارتها، أو حذفها */
+  onEditTrip?: (appointment: ClinicAppointment) => void;
+  onDeleteTrip?: (appointment: ClinicAppointment) => void;
 }) {
   const [scope, setScope] = useState<"day" | "all">("day");
   const dayAppointments = useMemo(() => appointments.filter((appointment) => appointment.appointmentDate === date), [appointments, date]);
@@ -85,6 +90,17 @@ export function AppointmentsOverview({ appointments, requests, date, now, onStop
             {a.nurse && <Badge tone="violet" icon={BriefcaseMedical}>ممرضة</Badge>}
             {a.seriesId && <Badge tone="blue" icon={Repeat}>متكررة</Badge>}
           </p>
+          {/* تعديل رحلة غير طبية لم تُرسل سيارتها، أو حذفها */}
+          {onEditTrip && onDeleteTrip && nonMedicalOpen(a, requests) && (
+            <span className="mt-1 flex flex-wrap gap-x-3">
+              <button type="button" onClick={() => onEditTrip(a)} aria-label={`تعديل رحلة ${a.patientName}`} className="inline-flex items-center gap-1 text-xs font-medium text-slate-500 underline-offset-2 hover:text-ink hover:underline">
+                <Pencil className="h-3.5 w-3.5" /> تعديل
+              </button>
+              <button type="button" onClick={() => onDeleteTrip(a)} aria-label={`حذف رحلة ${a.patientName}`} className="inline-flex items-center gap-1 text-xs font-medium text-slate-500 underline-offset-2 hover:text-red-700 hover:underline">
+                <Trash2 className="h-3.5 w-3.5" /> حذف
+              </button>
+            </span>
+          )}
           {/* إيقاف رحلة متكررة لم تُرسل سيارتها (هي وما بعدها، أو وحدها) */}
           {a.seriesId && onStopSeries && (a.status === "بانتظار طلب السيارة" || a.status === "تم طلب السيارة") && (
             <button type="button" onClick={() => onStopSeries(a)} className="mt-1 inline-flex items-center gap-1 text-xs font-medium text-slate-500 underline-offset-2 hover:text-red-700 hover:underline">
@@ -148,6 +164,7 @@ export function AppointmentsOverview({ appointments, requests, date, now, onStop
                 {request.createdAt && (
                   <span className="text-slate-400">
                     {request.autoReturn ? `عودة تلقائية ${request.createdAt}` : request.requestedOn ? `حُجزت مسبقًا ${request.requestedOn.slice(8, 10)}-${request.requestedOn.slice(5, 7)} ${request.createdAt}` : `طُلبت ${request.createdAt}`}
+                    {request.requestedByName ? ` · طلبه ${request.requestedByName}` : ""}
                   </span>
                 )}
                 {request.arrivedAt && !Number.isNaN(Date.parse(request.arrivedAt)) && <span>وصلت <span dir="ltr" className="tabular">{timeLabel(new Date(request.arrivedAt))}</span></span>}
@@ -157,6 +174,8 @@ export function AppointmentsOverview({ appointments, requests, date, now, onStop
         );
       },
     },
+    // من طلب السيارة: مشرف المبنى أو مسؤولهم (أو مسؤول العيادة للممرضة)
+    { key: "requestedBy", label: "طلبه", value: (a) => Array.from(new Set(requestsOf(a).flatMap((request) => (request.requestedByName ? [request.requestedByName] : [])))).join("، ") },
     {
       key: "vehicle",
       label: "السيارة",
@@ -196,7 +215,7 @@ export function AppointmentsOverview({ appointments, requests, date, now, onStop
         count={table.shown.length}
         description={(
           <span className="inline-flex flex-wrap items-center gap-1">
-            <Eye className="h-3.5 w-3.5" /> للعرض فقط · {scope === "all" ? "كل الأيام" : longDate(date)} · {filtering ? `${table.shown.length} نتيجة · ${table.active} ${table.active === 1 ? "فلتر" : "فلاتر"}` : "اضغط ▾ في عنوان أي عمود للفرز والفلترة كما في Excel"}
+            <Eye className="h-3.5 w-3.5" /> {scope === "all" ? "كل الأيام" : longDate(date)} · {filtering ? `${table.shown.length} نتيجة · ${table.active} ${table.active === 1 ? "فلتر" : "فلاتر"}` : "اضغط ▾ في عنوان أي عمود للفرز والفلترة كما في Excel"}
           </span>
         )}
         actions={(
