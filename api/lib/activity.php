@@ -13,6 +13,7 @@ const ACTIVITY_ROLE_LABELS = [
     'buildingSupervisor' => 'مشرف المبنى',
     'buildingLead' => 'مسؤول مشرفي المباني',
     'fleetSupervisor' => 'مشرف السيارات',
+    'nightFleet' => 'مشرف السيارات بالنيابة',
     'driver' => 'سائق',
 ];
 
@@ -183,7 +184,21 @@ function describe_write(PDO $pdo, string $col, string $id, ?array $before, ?arra
             $nonMedical = ($doc['category'] ?? '') === 'غير طبية';
             // طلب عودة فقط من المستشفى يُسجَّل باسمه لا «موعد»
             $returnOnly = ($doc['returnOnly'] ?? null) === true;
-            $noun = $returnOnly ? 'طلب عودة' : ($nonMedical ? 'رحلة غير طبية' : 'موعد');
+            // الحالة المستعجلة في شفت الليل (إلى عيادة المجمع، أو منها إلى المستشفى)
+            $urgent = ($doc['urgent'] ?? null) === true;
+            $noun = $urgent ? 'حالة مستعجلة' : ($returnOnly ? 'طلب عودة' : ($nonMedical ? 'رحلة غير طبية' : 'موعد'));
+            if ($before === null && $urgent) {
+                if (!empty($doc['urgentFrom'])) {
+                    return ['appointment', 'appointment.create', "حالة مستعجلة: ذهاب $who من عيادة المجمع إلى {$details['destination']} بسيارة المجمع ($when)", $details];
+                }
+                return ['appointment', 'appointment.create', "حالة مستعجلة (شفت الليل): $who من مبنى {$details['building']} شقة {$details['apartment']} إلى عيادة المجمع ($when)", $details];
+            }
+            // نتيجة الحالة المستعجلة في العيادة
+            if ($before !== null && $after !== null && $urgent && in_array('urgentOutcome', $changed, true)) {
+                $outcomes = ['returned' => 'عولج في عيادة المجمع وعاد إلى المبنى', 'ambulance' => 'نُقل بسيارة الإسعاف', 'hospital' => 'يحتاج الذهاب إلى المستشفى بسيارة المجمع'];
+                $details['outcome'] = $outcomes[$after['urgentOutcome'] ?? ''] ?? '';
+                return ['appointment', 'appointment.urgent_outcome', "نتيجة الحالة المستعجلة لـ $who ($when): {$details['outcome']}", $details];
+            }
             if ($before === null) {
                 if ($returnOnly) return ['appointment', 'appointment.create', "إضافة طلب عودة من المستشفى لـ $who من {$details['destination']} إلى المجمع ($when)", $details];
                 return ['appointment', 'appointment.create', ($nonMedical ? 'إضافة رحلة غير طبية لـ ' : 'إضافة موعد ') . "$who إلى {$details['destination']} ($when)", $details];
@@ -238,6 +253,9 @@ function describe_write(PDO $pdo, string $col, string $id, ?array $before, ?arra
                 if (!empty($request['fromAppointmentId'])) {
                     $first = appointment_doc($pdo, (string)$request['fromAppointmentId']);
                     $details['from'] = $first['clinic'] ?? '';
+                    if ((appointment_doc($pdo, (string)($request['appointmentId'] ?? ''))['urgent'] ?? null) === true) {
+                        return ['request', 'request.create', "طلب سيارة لنقل $who من {$details['from']} إلى {$details['destination']} · حالة مستعجلة", $details];
+                    }
                     return ['request', 'request.create', "طلب نقل $who من {$details['from']} إلى {$details['destination']} (موعد " . ($details['time'] ?? '') . ') بدل العودة إلى المجمع', $details];
                 }
                 if (!empty($request['nurseOnly'])) {
@@ -251,7 +269,8 @@ function describe_write(PDO $pdo, string $col, string $id, ?array $before, ?arra
                 if ((appointment_doc($pdo, (string)($request['appointmentId'] ?? ''))['returnOnly'] ?? null) === true) {
                     return ['request', 'request.create', "طلب سيارة عودة لـ $who من {$details['destination']} إلى المجمع (وقت العودة " . ($details['time'] ?? '') . ") · عودة فقط من المستشفى", $details];
                 }
-                return ['request', 'request.create', "طلب سيارة $direction لـ $who (مبنى {$details['building']} ← {$details['destination']}، " . ($details['time'] ?? '') . ')', $details];
+                $urgent = (appointment_doc($pdo, (string)($request['appointmentId'] ?? ''))['urgent'] ?? null) === true ? ' · حالة مستعجلة' : '';
+                return ['request', 'request.create', "طلب سيارة $direction لـ $who (مبنى {$details['building']} ← {$details['destination']}، " . ($details['time'] ?? '') . ")$urgent", $details];
             }
             // الضيف يعود مع الـ Nurse في طلب عودتها
             if ($before !== null && $after !== null && $changed === ['nurseOnly']) {

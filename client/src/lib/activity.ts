@@ -36,6 +36,7 @@ export const ACTIVITY_ROLES: Record<string, string> = {
   buildingSupervisor: "مشرف المبنى",
   buildingLead: "مسؤول مشرفي المباني",
   fleetSupervisor: "مشرف السيارات",
+  nightFleet: "مشرف السيارات بالنيابة",
   driver: "سائق",
 };
 
@@ -56,6 +57,7 @@ export const DETAIL_LABELS: [string, string][] = [
   ["source", "مصدر الوصول"],
   ["from", "النقل من"],
   ["reason", "سبب الإلغاء"],
+  ["outcome", "نتيجة الحالة المستعجلة"],
   ["changes", "التغييرات"],
   ["number", "رقم الشكوى"],
   ["resolution", "المعالجة"],

@@ -1,4 +1,4 @@
-import { DEFAULT_HOSPITALS, distanceKm, matchHospital, type Hospital } from "./hospitals";
+import { COMPLEX_CLINIC, DEFAULT_HOSPITALS, distanceKm, matchHospital, type Hospital } from "./hospitals";
 import { FLEET_SEED } from "./seedData";
 import { normalizeGender, normalizeMobile, readAliased, toText, toWesternDigits } from "./text";
 import { PRIVATE_CAR_MESSAGE, findGuestByName, guestIndex, guestOfAppointment, hasPrivateCar, isMinor, type Guest } from "./guests";
@@ -88,7 +88,20 @@ export type ClinicAppointment = {
   returnAt?: string;
   /** وقت تسجيل الموعد (ISO)؛ يكتبه الخادم وحده عند الإضافة، للإحصائيات (مجدول قبل يومه أو غير مجدول في يومه) */
   addedAt?: string;
+  /**
+   * حالة مستعجلة في شفت الليل (shared/urgent.ts): يطلبها مشرف المبنى من المبنى إلى عيادة المجمع (hospitalId
+   * «complex-clinic»)، أو رحلة المستشفى بعدها (urgentFrom: الحالة في العيادة). أولوية في إرسال السيارة.
+   */
+  urgent?: true;
+  /** نتيجة الحالة في العيادة: عاد إلى المبنى، أو ذهب بسيارة الإسعاف، أو إلى المستشفى بسيارة المجمع؛ ومن سجّلها ومتى (ISO) */
+  urgentOutcome?: UrgentOutcome;
+  urgentOutcomeBy?: string;
+  urgentOutcomeAt?: string;
+  urgentFrom?: string;
 };
+
+export type UrgentOutcome = "returned" | "ambulance" | "hospital";
+export const URGENT_OUTCOME_VALUES: UrgentOutcome[] = ["returned", "ambulance", "hospital"];
 
 /** أنواع المواعيد الجاهزة في نموذج العيادة (خانة اختيارية، ومعها «أخرى» تُكتب). تُحفظ بالعربية. */
 export const APPOINTMENT_TYPES: { ar: string; en: string }[] = [
@@ -132,8 +145,11 @@ export const isApproved = (appointment: Pick<ClinicAppointment, "approval">) => 
 export type Gender = "ذكر" | "أنثى";
 export const GENDERS: Gender[] = ["ذكر", "أنثى"];
 
-/** أولوية في إرسال السيارة (حالات السرطان): تظهر أولًا لمشرف السيارات وتأخذ السيارة قبل غيرها في التوزيع. */
-export const isPriority = (appointment: Pick<ClinicAppointment, "cancer">) => Boolean(appointment.cancer);
+/**
+ * أولوية في إرسال السيارة (حالات السرطان، والحالة المستعجلة في شفت الليل): تظهر أولًا لمشرف السيارات وتأخذ السيارة
+ * قبل غيرها في التوزيع.
+ */
+export const isPriority = (appointment: Pick<ClinicAppointment, "cancer" | "urgent">) => Boolean(appointment.cancer || appointment.urgent);
 
 export type Vehicle = {
   plate: string;
@@ -421,6 +437,11 @@ export function migrateAppointment(value: unknown, index = 0): ClinicAppointment
     ...(toText(raw.seriesId) ? { seriesId: toText(raw.seriesId) } : {}),
     ...(/^\d{2}:\d{2}$/.test(toText(raw.returnAt)) ? { returnAt: toText(raw.returnAt) } : {}),
     ...(toText(raw.addedAt) && !Number.isNaN(Date.parse(toText(raw.addedAt))) ? { addedAt: toText(raw.addedAt) } : {}),
+    ...(raw.urgent === true ? { urgent: true as const } : {}),
+    ...(raw.urgent === true && URGENT_OUTCOME_VALUES.includes(raw.urgentOutcome as UrgentOutcome)
+      ? { urgentOutcome: raw.urgentOutcome as UrgentOutcome, urgentOutcomeBy: toText(raw.urgentOutcomeBy) || undefined, urgentOutcomeAt: toText(raw.urgentOutcomeAt) || undefined }
+      : {}),
+    ...(raw.urgent === true && toText(raw.urgentFrom) ? { urgentFrom: toText(raw.urgentFrom) } : {}),
   };
 }
 
@@ -1210,6 +1231,8 @@ export const SAME_DIRECTION_KM = 8;
 
 function hospitalFor(appointment: ClinicAppointment, hospitals: Hospital[]) {
   if (isNonMedical(appointment)) return nonMedicalPlace(appointment);
+  // الحالة المستعجلة إلى عيادة المجمع (ليست في الدليل)
+  if (appointment.hospitalId === COMPLEX_CLINIC.id) return COMPLEX_CLINIC;
   return (appointment.hospitalId && hospitals.find((hospital) => hospital.id === appointment.hospitalId))
     || matchHospital(appointment.clinic, hospitals);
 }
@@ -1676,7 +1699,8 @@ export function destinationLabels(appointment: ClinicAppointment, hospitals: Hos
     const known = NON_MEDICAL_DESTINATIONS.find((item) => item.ar === appointment.clinic);
     return { ar: appointment.clinic, en: known?.en ?? appointment.clinic };
   }
-  const hospital = (appointment.hospitalId && hospitals.find((item) => item.id === appointment.hospitalId)) || matchHospital(appointment.clinic, hospitals);
+  const hospital = appointment.hospitalId === COMPLEX_CLINIC.id ? COMPLEX_CLINIC
+    : (appointment.hospitalId && hospitals.find((item) => item.id === appointment.hospitalId)) || matchHospital(appointment.clinic, hospitals);
   return { ar: hospital?.name ?? appointment.clinic, en: hospital?.nameEn || appointment.clinic };
 }
 
@@ -1705,12 +1729,16 @@ export function buildDriverMessage(
   const grouped = sorted.length > 1;
   const peopleOf = (trip: (typeof sorted)[number]) => trip.persons ?? tripPersons(trip.appointment, trip.request);
   const totalPeople = sorted.reduce((sum, trip) => sum + peopleOf(trip), 0);
+  // الحالة المستعجلة في شفت الليل (إلى عيادة المجمع أو منها إلى المستشفى)
+  const urgent = sorted.some((trip) => trip.appointment.urgent);
   const ar: string[] = [
+    ...(urgent ? ["🚨 حالة مستعجلة"] : []),
     grouped ? `رحلة مجمّعة (${sorted.length} ضيوف) — ${leg.ar}` : `رحلة جديدة — ${leg.ar}`,
     `السيارة: ${vehicle.plate}`,
     grouped ? `مجموع الأشخاص في السيارة: ${totalPeople}` : `عدد الأشخاص: ${totalPeople}`,
   ];
   const en: string[] = [
+    ...(urgent ? ["🚨 URGENT case"] : []),
     grouped ? `Grouped trip (${sorted.length} guests) — ${leg.en}` : `New trip — ${leg.en}`,
     `Vehicle: ${vehicle.plate}`,
     grouped ? `Total persons in the car: ${totalPeople}` : `Persons: ${totalPeople}`,

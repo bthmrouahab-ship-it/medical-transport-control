@@ -1057,7 +1057,7 @@ export function GuestPicker({ t, guests, guest, onSelect, notListed }: {
  * المستشفى من دليل المستشفيات فقط: الكتابة تفلتر القائمة (بالاسم العربي أو الإنجليزي أو الأسماء البديلة)،
  * والأسهم وEnter للاختيار. بالإنجليزية في الواجهة الإنجليزية.
  */
-function HospitalSelect({ id, label, value, onChange, hospitals, lang, placeholder, noMatch, wide }: {
+export function HospitalSelect({ id, label, value, onChange, hospitals, lang, placeholder, noMatch, wide }: {
   id: string;
   label: string;
   value: string;

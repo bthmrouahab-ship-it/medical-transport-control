@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import { goTo, reveal } from "@/lib/notify";
-import { Accessibility, AlertTriangle, ArrowLeftRight, Ban, BellRing, BriefcaseMedical, Building2, Check, CheckCircle2, ChevronDown, Clock3, Footprints, Hospital, House, Link2, MapPin, MessageSquareWarning, Pencil, Ribbon, RotateCcw, ShieldCheck, Smartphone, Stethoscope, Timer, Truck, UserMinus, Users, XCircle } from "lucide-react";
+import { Accessibility, AlertTriangle, ArrowLeftRight, Ban, BellRing, BriefcaseMedical, Building2, Check, CheckCircle2, ChevronDown, Clock3, Footprints, Hospital, House, Link2, MapPin, MessageSquareWarning, Pencil, Ribbon, RotateCcw, ShieldCheck, Siren, Smartphone, Stethoscope, Timer, Truck, UserMinus, Users, XCircle } from "lucide-react";
 import { NURSE_BUILDING } from "@shared/guests";
 import { toWesternDigits } from "@shared/text";
 import {
@@ -45,6 +45,7 @@ import {
   StatusBar,
   Steps,
   TimeBlock,
+  addDays,
   btn,
   byAppointmentTime,
   choiceClass,
@@ -59,6 +60,10 @@ import { useComplaints, useHospitals, useLiveVehicles, useNow } from "@/lib/useS
 import { ComplaintForm, ComplaintList, ComplaintView, type ComplaintGuest } from "@/components/Complaints";
 import { addComplaint } from "@/lib/complaints";
 import type { Complaint, ComplaintDraft } from "@shared/complaints";
+import { UrgentBadge, UrgentButton, UrgentCaseForm, UrgentOutcomeActions } from "@/components/Urgent";
+import { COMPLEX_CLINIC, type Hospital as HospitalPlace } from "@shared/hospitals";
+import { isOpenCase, isUrgent, isUrgentClinicCase, urgentOutcomeText, type UrgentDraft } from "@shared/urgent";
+import type { UrgentOutcome } from "@shared/transport";
 
 /** فتح استمارة الشكوى من بطاقة الموعد (الضيف ورحلته معبأة) */
 const ComplaintContext = createContext<((appointment: ClinicAppointment, request?: VehicleRequest, driver?: string) => void) | null>(null);
@@ -73,7 +78,8 @@ export const UNRETURNED_DAYS = 7;
 
 
 type Row = { appointment: ClinicAppointment; request?: VehicleRequest };
-type Stage = "request" | "expired" | "progress" | "atAppointment";
+/** atClinic: حالة مستعجلة وصلت إلى عيادة المجمع وتنتظر نتيجتها */
+type Stage = "request" | "expired" | "progress" | "atAppointment" | "atClinic";
 export type RequestHandlers = {
   onRequest: (request: VehicleRequest, appointmentId: string) => void;
   onUpdateRequest: (requestId: string, status: VehicleRequest["status"]) => void;
@@ -117,7 +123,7 @@ function newRequest(appointment: ClinicAppointment): VehicleRequest {
   };
 }
 
-export function SupervisorHome({ uid, userName = "", lead = false, nurses = false, appointments, requests, vehicles, onRequest, onUpdateRequest, onCancel, onReturn, onTransfer, onCancelAppointment, onCheckReply, onNurseReturn, onSelfReturn, onEditMobile }: {
+export function SupervisorHome({ uid, userName = "", lead = false, nurses = false, appointments, requests, vehicles, onRequest, onUpdateRequest, onCancel, onReturn, onTransfer, onCancelAppointment, onCheckReply, onNurseReturn, onSelfReturn, onEditMobile, onUrgent, onUrgentOutcome }: {
   /** رقم حساب المشرف: يرى متابعة طلباته هو فقط */
   uid: string;
   /** اسم المشرف: في استمارة الشكوى */
@@ -130,8 +136,13 @@ export function SupervisorHome({ uid, userName = "", lead = false, nurses = fals
   requests: VehicleRequest[];
   /** السيارات: رقم هاتف سائق السيارة المرسلة للاتصال به */
   vehicles: Vehicle[];
+  /** شفت الليل: طلب سيارة لحالة مستعجلة من المبنى إلى عيادة المجمع (shared/urgent.ts) */
+  onUrgent?: (draft: UrgentDraft) => void;
+  /** نتيجة الحالة المستعجلة في العيادة (والمستشفى المختار للذهاب إليه بسيارة المجمع) */
+  onUrgentOutcome?: (appointment: ClinicAppointment, outcome: UrgentOutcome, hospital?: HospitalPlace) => void;
 } & RequestHandlers) {
   const [buildings, setBuildings] = useState<string[]>(loadBuildings);
+  const [urgentOpen, setUrgentOpen] = useState(false);
   const [cancelling, setCancelling] = useState<Row | null>(null);
   // الشكاوى: الاستمارة المفتوحة (معبأة من بطاقة الموعد أو فارغة)، والشكوى المعروضة
   const [complaintDraft, setComplaintDraft] = useState<Partial<ComplaintDraft> | null>(null);
@@ -148,10 +159,13 @@ export function SupervisorHome({ uid, userName = "", lead = false, nurses = fals
   for (const request of requests) (request.nurseOnly ? nurseTrip : latest).set(request.appointmentId, request);
   const phaseOf = (request: VehicleRequest) => tripPhase(request, now, Boolean(request.vehiclePlate && liveGps.has(request.vehiclePlate)));
 
-  // مواعيد اليوم فقط، مع أي رحلة من يوم سابق لم يُستلم مريضها بعد (مثل عودة بعد منتصف الليل)
+  // مواعيد اليوم فقط، مع أي رحلة من يوم سابق لم يُستلم مريضها بعد (مثل عودة بعد منتصف الليل)، والحالات المستعجلة
+  // المفتوحة من شفت الليل الذي بدأ أمس
   const activeIds = new Set(requests.filter((request) => !request.nurseOnly && BEFORE_PICKUP.includes(request.status)).map((request) => request.appointmentId));
+  const yesterday = addDays(today, -1);
+  const openUrgent = (appointment: ClinicAppointment) => isUrgent(appointment) && isOpenCase(appointment) && appointment.appointmentDate >= yesterday;
   const todays = appointments.filter((appointment) => appointment.appointmentDate === today
-    || (appointment.appointmentDate < today && activeIds.has(appointment.id)));
+    || (appointment.appointmentDate < today && (activeIds.has(appointment.id) || openUrgent(appointment))));
 
   /**
    * أين يظهر الموعد الآن، أو null إن لم يكن لهذا المشرف:
@@ -170,6 +184,8 @@ export function SupervisorHome({ uid, userName = "", lead = false, nurses = fals
     if (!request) return requestWindow(appointment, now).open ? "request" : "expired";
     if (request.direction === "عودة") return follows(request) ? "progress" : null;
     if (BEFORE_PICKUP.includes(request.status)) return follows(request) ? "progress" : null;
+    // الحالة المستعجلة بعد استلامها (العيادة داخل المجمع): تنتظر نتيجتها من أي مشرف، بعد الرد على ما سجّله السائق
+    if (isUrgentClinicCase(appointment)) return pendingCheck(request, now) ? (follows(request) ? "progress" : null) : "atClinic";
     if (phaseOf(request).kind === "arrived") return "atAppointment";
     return follows(request) ? "progress" : null;
   };
@@ -190,7 +206,7 @@ export function SupervisorHome({ uid, userName = "", lead = false, nurses = fals
   since.setDate(since.getDate() - UNRETURNED_DAYS);
   const sinceDate = localDateString(since);
   const pastAtAppointment = appointments
-    .filter((appointment) => appointment.appointmentDate < today && appointment.appointmentDate >= sinceDate
+    .filter((appointment) => appointment.appointmentDate < today && appointment.appointmentDate >= sinceDate && !openUrgent(appointment)
       && appointment.status !== "مكتملة" && appointment.status !== "ملغي" && stageOf(appointment) === "atAppointment")
     .sort(byAppointmentTime);
 
@@ -250,6 +266,7 @@ export function SupervisorHome({ uid, userName = "", lead = false, nurses = fals
   const expired = inStage("expired");
   const inProgress = inStage("progress") as Required<Row>[];
   const atAppointment = inStage("atAppointment") as Required<Row>[];
+  const atClinic = inStage("atClinic") as Required<Row>[];
   const completed = todays.filter((appointment) => appointment.status === "مكتملة" && inFilter(appointment)).length;
   const cancelled = todays.filter((appointment) => appointment.status === "ملغي" && inFilter(appointment)).sort(byAppointmentTime);
 
@@ -284,6 +301,10 @@ export function SupervisorHome({ uid, userName = "", lead = false, nurses = fals
   const unreturned = pastAtAppointment.filter(inFilter).map((appointment) => ({ appointment, request: latest.get(appointment.id)! }));
   // تحتاج انتباه المشرف: ما سجّله السائق ينتظر رده، أو تأخرت السيارة عن الوصول إلى الاستلام
   const attentionRows = progressRows.filter(({ request }) => Boolean(pendingCheck(request, now)) || lateMinutes(request, now) !== null);
+  function saveUrgent(draft: UrgentDraft) {
+    onUrgent?.(draft);
+    setUrgentOpen(false);
+  }
   const jump = (id: string) => document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
   useCheckAlerts(progressRows);
   useUnreturnedAlert(unreturned.length);
@@ -295,6 +316,7 @@ export function SupervisorHome({ uid, userName = "", lead = false, nurses = fals
         subtitle={`${longDate(today)} · ${nurses ? `مواعيد الممرضات اليوم (مبنى ${NURSE_BUILDING}) · طلب السيارة ومتابعتها كما في صفحة مشرف المبنى` : `مواعيد اليوم${lead ? " · طلبات كل مشرفي المباني" : ""}`}`}
         actions={!nurses && (
           <>
+            {onUrgent && <UrgentButton now={now} onClick={() => setUrgentOpen(true)} />}
             <button type="button" onClick={() => setComplaintDraft({})} className={btn("secondary")}><MessageSquareWarning className="h-4 w-4" /> تسجيل شكوى</button>
             <BuildingFilter all={visible.length + pastAtAppointment.length} counts={buildingCounts} buildings={buildingNumbers} selected={buildings} onChange={chooseBuildings} />
           </>
@@ -309,13 +331,48 @@ export function SupervisorHome({ uid, userName = "", lead = false, nurses = fals
             { key: "request", label: "تحتاج طلب سيارة", value: toRequest.length, tone: "amber", hint: matchCount ? `${matchCount} لنفس وجهة رحلة قائمة` : `حتى ${REQUEST_GRACE_MINUTES} د بعد الموعد`, onClick: () => jump("sup-request") },
             { key: "progress", label: "طلبات جارية", value: progressRows.length, tone: "blue", hint: "حتى وصول السيارة إلى الوجهة", onClick: () => jump("sup-progress") },
             { key: "at", label: "ضيوف في الموعد", value: atAppointment.length, tone: "cyan", hint: `${completed} مكتملة اليوم`, onClick: () => jump("sup-at") },
-            { key: "attention", label: "تحتاج انتباهك", value: attentionRows.length + unreturned.length, tone: "red", hint: `${attentionRows.length} تأخر أو تأكيد · ${unreturned.length} لم تُسجَّل عودتهم`, onClick: () => jump(unreturned.length ? "sup-unreturned" : "sup-progress") },
+            {
+              key: "attention",
+              label: "تحتاج انتباهك",
+              value: attentionRows.length + unreturned.length + atClinic.length,
+              tone: "red",
+              hint: `${atClinic.length ? `${atClinic.length} حالة مستعجلة في العيادة · ` : ""}${attentionRows.length} تأخر أو تأكيد · ${unreturned.length} لم تُسجَّل عودتهم`,
+              onClick: () => jump(atClinic.length ? "sup-urgent" : unreturned.length ? "sup-unreturned" : "sup-progress"),
+            },
           ]}
         />
       </div>
 
       <ComplaintContext.Provider value={nurses ? null : complaintFrom}>
       <div className="space-y-6">
+        {atClinic.length > 0 && (
+          <Panel id="sup-urgent" tone="red" icon={Siren} title={`حالات مستعجلة في ${COMPLEX_CLINIC.name}`} count={atClinic.length} description="وصل الضيف إلى العيادة · سجّل النتيجة: عاد إلى المبنى، أو ذهب بسيارة الإسعاف، أو إلى المستشفى بسيارة المجمع (يُرسل السائق بنفس نظام النهار)">
+            <div className="divide-y divide-slate-100">
+              {atClinic.map(({ appointment, request }) => (
+                <Expandable
+                  key={appointment.id}
+                  attention
+                  label={`تفاصيل الحالة المستعجلة ${appointment.patientName}`}
+                  summary={(
+                    <GuestSummary
+                      appointment={appointment}
+                      request={request}
+                      day={dayOf(appointment)}
+                      status={<Badge tone="cyan" icon={Stethoscope}>في العيادة{request.pickedUpAt ? <> منذ <span dir="ltr" className="tabular">{timeLabel(new Date(request.pickedUpAt))}</span></> : ""}</Badge>}
+                    />
+                  )}
+                >
+                  <GuestDetails appointment={appointment} request={request} driver={driverOf(request)} persons={requestPersons(request, appointment, requests)} />
+                  {appointment.urgentOutcome === "hospital" && (
+                    <Note tone="amber" icon={AlertTriangle}>سُجّل «{urgentOutcomeText("hospital")}» ثم أُلغيت رحلة المستشفى. سجّل النتيجة من جديد.</Note>
+                  )}
+                  {onUrgentOutcome && <div className="mt-3"><UrgentOutcomeActions appointment={appointment} hospitals={hospitals} onOutcome={onUrgentOutcome} /></div>}
+                </Expandable>
+              ))}
+            </div>
+          </Panel>
+        )}
+
         {unreturned.length > 0 && (
           <Panel id="sup-unreturned" tone="red" icon={AlertTriangle} title="لم تُسجَّل عودتهم" count={unreturned.length} description="ذهبوا إلى مواعيد في أيام سابقة ولم تُطلب لهم سيارة عودة ولم يُسجَّل أنهم عادوا بأنفسهم. تأكد من حالة كل ضيف: هل عاد بنفسه؟">
             <div className="divide-y divide-slate-100">
@@ -471,6 +528,7 @@ export function SupervisorHome({ uid, userName = "", lead = false, nurses = fals
       </div>
       </ComplaintContext.Provider>
 
+      {urgentOpen && <UrgentCaseForm guests={complaintGuests} onSave={saveUrgent} onClose={() => setUrgentOpen(false)} />}
       {complaintDraft && (
         <ComplaintForm initial={complaintDraft} guests={complaintGuests} supervisorName={userName} onSave={saveComplaint} onClose={() => setComplaintDraft(null)} />
       )}
@@ -781,7 +839,8 @@ function GuestSummary({ appointment, request, from, day, timeTone, status }: {
   /** شارات الحالة تحت الوجهة */
   status?: ReactNode;
 }) {
-  const pickup = from ? from.clinic : appointmentPickupLabel(appointment);
+  // رحلة المستشفى بعد الحالة المستعجلة تبدأ من عيادة المجمع
+  const pickup = from ? from.clinic : appointment.urgentFrom ? COMPLEX_CLINIC.name : appointmentPickupLabel(appointment);
   // طلب العودة فقط: من المستشفى إلى المجمع، قبل طلب سيارته وبعده
   const returnOnly = isReturnOnly(appointment);
   const returning = request ? request.direction === "عودة" : returnOnly;
@@ -798,6 +857,7 @@ function GuestSummary({ appointment, request, from, day, timeTone, status }: {
             : request && (from
               ? <Badge tone="cyan" icon={ArrowLeftRight}>نقل بين موعدين</Badge>
               : request.nurseOnly ? <Badge tone="amber" icon={Stethoscope}>عودة الـ Nurse فقط</Badge> : <Badge tone={returning ? "amber" : "neutral"}>{request.direction}</Badge>)}
+          {appointment.urgent && <UrgentBadge />}
           {isNonMedical(appointment) && <Badge tone="violet">غير طبية</Badge>}
           {appointment.nurse && <Badge tone="violet" icon={BriefcaseMedical}>ممرضة</Badge>}
           {appointment.kind === "احتياجات خاصة" && <Badge icon={Accessibility}>احتياجات خاصة</Badge>}

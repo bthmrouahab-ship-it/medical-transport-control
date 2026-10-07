@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Accessibility, ArrowLeftRight, ArrowUp, Bell, BellOff, CarFront, CheckCircle2, Flag, History, LocateFixed, Lock, MapPin, Moon, Navigation, RefreshCw, ShieldCheck, Sun, SunMedium, SunMoon, Timer, XCircle } from "lucide-react";
+import { Accessibility, ArrowLeftRight, ArrowUp, Bell, BellOff, CarFront, CheckCircle2, Flag, History, LocateFixed, Lock, MapPin, Moon, Navigation, RefreshCw, ShieldCheck, Siren, Sun, SunMedium, SunMoon, Timer, XCircle } from "lucide-react";
 import AppHeader from "@/components/AppHeader";
 import GuestContact from "@/components/GuestContact";
 import { Badge, EmptyState, Segmented, Steps, Switch, TimeBlock, btn, cx, timeLabel } from "@/components/ui-kit";
@@ -601,6 +601,7 @@ function TripCard({ t, lang, request, appointment, name, from, hospitals, group,
             </div>
             <div className="mt-1 flex flex-wrap gap-1.5">
               {from ? <Badge tone="cyan" icon={ArrowLeftRight}>{t.transfer}</Badge> : request.nurseOnly ? <Badge tone="amber">{t.nurseOnly}</Badge> : <Badge tone={returning ? "amber" : "neutral"}>{t.direction[request.direction]}</Badge>}
+              {appointment.urgent && <Badge tone="red" icon={Siren}>{t.urgent}</Badge>}
               {isNonMedical(appointment) && <Badge tone="violet">{t.nonMedical}</Badge>}
               {appointment.kind === "احتياجات خاصة" && <Badge icon={Accessibility}>{t.special}</Badge>}
               {group > 1 && <Badge tone="violet">{t.group(group)}</Badge>}

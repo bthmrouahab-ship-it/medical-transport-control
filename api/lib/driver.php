@@ -8,7 +8,7 @@ declare(strict_types=1);
 
 /** خانات الموعد التي يحتاجها السائق (بلا حالة السرطان ولا بيانات الإلغاء) */
 const DRIVER_APPOINTMENT_FIELDS = ['id', 'patientName', 'clinic', 'buildingNumber', 'apartmentNumber', 'mobile', 'appointmentDate',
-    'appointmentAt', 'hospitalId', 'category', 'kind', 'assistance', 'status', 'gender'];
+    'appointmentAt', 'hospitalId', 'category', 'kind', 'assistance', 'status', 'gender', 'urgent'];
 /** رحلات لم تنتهِ بعد: تظهر للسائق ولو كان موعدها أمس (مثل عودة بعد منتصف الليل) */
 const DRIVER_ACTIVE_STATUSES = ['تم إرسال السيارة', 'وصلت السيارة', 'تم استلام المريض'];
 
