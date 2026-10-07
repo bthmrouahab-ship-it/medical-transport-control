@@ -249,6 +249,11 @@ export function serviceHours(events: ServiceEvent[], from: string, to: string, n
     .map((day) => ({ ...day, minutes: Math.round(day.minutes) }))
     .filter((day) => day.minutes > 0)
     .sort((a, b) => a.date.localeCompare(b.date) || b.minutes - a.minutes);
+  return serviceSummaryOf(days);
+}
+
+/** ملخص التوفر في الخدمة من أيامه: لكل سيارة أيامها ودقائقها (وأول تشغيل وآخر إيقاف ليوم واحد) */
+export function serviceSummaryOf(days: ServiceDay[]): ServiceSummary {
   const vehicles = new Map<string, ServiceVehicle>();
   for (const day of days) {
     const vehicle = vehicles.get(day.plate) ?? { plate: day.plate, kind: day.kind, busRoles: [], driver: day.driver, days: 0, minutes: 0, first: day.first, last: day.last };

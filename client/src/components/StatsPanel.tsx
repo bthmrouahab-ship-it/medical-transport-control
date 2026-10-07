@@ -31,6 +31,8 @@ import { authErrorMessage } from "@/lib/auth";
 import { dayRange, fetchAllActivity } from "@/lib/activity";
 import { activitySection, downloadExcel, downloadHtml, guestSections, statsReport, tripsSection } from "@/lib/report";
 import { saveStatsDays, watchStatsDays } from "@/lib/statsStore";
+import { canExportStatsPage, downloadStatsPage } from "@/lib/reportExport";
+import type { ReportViewerData } from "@/report/types";
 import { EmptyState, Panel, Segmented, addDays, btn, cx, inputClass, stamp } from "./ui-kit";
 import HistoryCharts from "./HistoryCharts";
 import ActivityLog from "./ActivityLog";
@@ -209,23 +211,46 @@ export default function StatsPanel({ canEdit, actor, hospitals, fleet, appointme
     [appointments, requests, guestRecords, filter.from, filter.to, filter.building],
   );
 
-  /** تصدير كل الإحصائيات: الملخص والجداول، والرحلات بتفاصيلها (من طلب ومن أرسل ومتى)، وسجل العمليات. */
+  /**
+   * تصدير الإحصائيات. Excel: الملخص والجداول والأيام، والرحلات بتفاصيلها (من طلب ومن أرسل ومتى)، وسجل العمليات.
+   * HTML: صفحة بنفس عرض الإحصائيات هنا (البطاقات والرسوم البيانية)، وتقويم الأيام: الضغط على يوم يفتح صفحته.
+   */
   async function exportReport(format: "excel" | "html") {
     setExporting(format);
     try {
       const { items, truncated } = await fetchAllActivity(range);
+      const title = "إحصائيات سيارات مجمع الثمامة";
+      const subtitle = `${periodLabel} · أنشأه ${actor} في ${stamp()}`;
       // تقويم الأيام في التصدير لأكثر من يوم (من بداية الفلتر ونهايته، وإلا أول يوم وآخر يوم فيهما مواعيد)
-      const report = statsReport(summary, "إحصائيات سيارات مجمع الثمامة", `${periodLabel} · أنشأه ${actor} في ${stamp()}`, service, operations,
-        { from: filter.from || undefined, to: filter.to || undefined });
+      const report = statsReport(summary, title, subtitle, service, operations, { from: filter.from || undefined, to: filter.to || undefined });
       const index = guestIndex(guestRecords ?? []);
-      report.sections.push(
-        ...guestSections(guestSummary),
-        tripsSection(appointments, requests, items, filter.from || undefined, filter.to || undefined, (appointment) => guestOfAppointment(index, appointment), hospitals),
-        activitySection(items, truncated),
-      );
+      const trips = tripsSection(appointments, requests, items, filter.from || undefined, filter.to || undefined, (appointment) => guestOfAppointment(index, appointment), hospitals);
+      const activity = activitySection(items, truncated);
       const name = `althumama-stats-${localDateString()}`;
-      if (format === "excel") await downloadExcel(report, `${name}.xlsx`);
-      else downloadHtml(report, `${name}.html`);
+      if (format === "html" && canExportStatsPage()) {
+        // من المواعيد ما يحتاجه جدول «المواعيد بالتفصيل» فقط (بلا الهواتف)
+        const ids = new Set(filteredTrips.flatMap((trip) => (trip.appointmentId ? [trip.appointmentId] : [])));
+        const data: ReportViewerData = {
+          title, subtitle, periodLabel, filter, summary, operations, service,
+          trackedSince: serviceLog?.trackedSince ?? null,
+          opsLog,
+          trips: filteredTrips,
+          appointments: appointments.filter((item) => ids.has(item.id)).map(({ id, appointmentDate, appointmentAt, patientName, buildingNumber, clinic, category, returnOnly, status }) => (
+            { id, appointmentDate, appointmentAt, patientName, buildingNumber, clinic, category, returnOnly, status })),
+          requests: requests.filter((item) => ids.has(item.appointmentId)).map(({ appointmentId, vehiclePlate }) => ({ appointmentId, vehiclePlate })),
+          hospitals,
+          schedules,
+          fleetKinds: Array.from(fleetKinds),
+          guests: guestRecords?.length ? guestSummary : null,
+          calendar: report.calendar ?? null,
+          sections: [trips, activity],
+        };
+        await downloadStatsPage(data, `${name}.html`);
+      } else {
+        report.sections.push(...guestSections(guestSummary), trips, activity);
+        if (format === "excel") await downloadExcel(report, `${name}.xlsx`);
+        else downloadHtml(report, `${name}.html`);
+      }
       toast.success(format === "excel" ? "تم تصدير الإحصائيات إلى Excel" : "تم تصدير الإحصائيات إلى صفحة HTML");
     } catch (error) {
       console.error("[stats] export", error);
@@ -254,7 +279,7 @@ export default function StatsPanel({ canEdit, actor, hospitals, fleet, appointme
             <button type="button" disabled={Boolean(exporting)} onClick={() => exportReport("excel")} title="الملخص والرحلات بتفاصيلها وسجل العمليات" className={btn("primary", "sm")}>
               {exporting === "excel" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />} تصدير Excel
             </button>
-            <button type="button" disabled={Boolean(exporting)} onClick={() => exportReport("html")} title="صفحة تقرير مستقلة تُفتح في المتصفح وتُطبع" className={btn("secondary", "sm")}>
+            <button type="button" disabled={Boolean(exporting)} onClick={() => exportReport("html")} title="صفحة مستقلة بنفس عرض الإحصائيات والرسوم البيانية، وصفحة لكل يوم، تُفتح في المتصفح وتُطبع" className={btn("secondary", "sm")}>
               {exporting === "html" ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileCode2 className="h-4 w-4" />} صفحة HTML
             </button>
           </>

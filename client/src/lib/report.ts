@@ -503,7 +503,7 @@ export function activitySection(items: ActivityItem[], truncated = false): Repor
   };
 }
 
-function download(blob: Blob, fileName: string) {
+export function download(blob: Blob, fileName: string) {
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
