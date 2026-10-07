@@ -447,6 +447,17 @@ function route_write(PDO $pdo, array $body): array
         }
         return decode_doc($stmt->fetchColumn() ?: null);
     };
+    // طلبات السيارة المحفوظة لموعد (بما حُذف أو حُفظ قبله في نفس الدفعة)
+    $requestsOf = function (string $appointmentId) use ($pdo): array {
+        $stmt = $pdo->prepare("SELECT data FROM docs WHERE col = 'requests' AND data IS NOT NULL AND data LIKE ?");
+        $stmt->execute(['%' . addcslashes('"appointmentId":' . json_encode($appointmentId, JSON_UNESCAPED_UNICODE), '%_\\') . '%']);
+        $list = [];
+        foreach ($stmt->fetchAll(PDO::FETCH_COLUMN) as $data) {
+            $request = decode_doc($data);
+            if ($request && ($request['appointmentId'] ?? null) === $appointmentId) $list[] = $request;
+        }
+        return $list;
+    };
     $pdo->beginTransaction();
     try {
         $rev = next_revision($pdo);
@@ -476,11 +487,12 @@ function route_write(PDO $pdo, array $body): array
             } else {
                 throw new ApiException(400, 'بيانات غير صالحة', 'bad_request');
             }
-            if ($error = authorize_write($user, $col, $id, $before, $after, $docOf)) throw new ApiException(403, $error, 'permission_denied');
+            if ($error = authorize_write($user, $col, $id, $before, $after, $docOf, $requestsOf)) throw new ApiException(403, $error, 'permission_denied');
             // الوصف قبل الحفظ (يقرأ الموعد المرتبط بالطلب كما كان)، والتسجيل بعده في نفس المعاملة
             $entry = describe_write($pdo, $col, $id, $before, $after);
             // وقت تسجيل الموعد ووصول السيارة إلى نقطة الاستلام: يكتبها الخادم وحده (للإحصائيات)
             $after = stamp_tracking($col, $before, $after);
+            if ($col === 'requests') $after = stamp_requester($user, $before, $after);
             save_doc($pdo, $col, $id, $after, $rev);
             if ($entry) log_activity($pdo, empty($entry[4]) ? $user : null, $entry[0], $entry[1], $entry[2], $id, $entry[3]);
             if ($col === 'requests') queue_request_pushes($pdo, $before, $after);

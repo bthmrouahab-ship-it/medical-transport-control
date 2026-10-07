@@ -1008,14 +1008,14 @@ function ProgressRow({ appointment, request, byOther = false, day, driver, phase
             {request.previousPlate && request.vehiclePlate && <Badge tone="amber" icon={ArrowLeftRight}>تغيّرت السيارة</Badge>}
             {/* أزاله مشرف السيارات من رحلة (لم يركب): ينتظر سيارة أخرى */}
             {request.removedFrom && request.status === "بانتظار التوزيع" && <Badge tone="red" icon={UserMinus}>أُزيل من رحلة السيارة <span dir="ltr">{request.removedFrom}</span></Badge>}
-            {byOther && <Badge tone="violet" icon={Building2}>طلب مشرف مبنى آخر</Badge>}
+            {byOther && <Badge tone="violet" icon={Building2}>{request.requestedByName ? `طلب ${request.requestedByName}` : "طلب مشرف مبنى آخر"}</Badge>}
           </>}
         />
       )}
       action={next && <button onClick={() => onUpdateRequest(request.id, next.status)} className={btn("dark")}><CheckCircle2 className="h-4 w-4" /> {next.label}</button>}
     >
       <GuestDetails appointment={appointment} request={request} driver={driver} persons={persons} />
-      {byOther && request.createdAt && <p className="mt-2 flex items-center gap-1 text-xs text-violet-700"><Building2 className="h-3.5 w-3.5" /> طلبه مشرف مبنى آخر الساعة {request.createdAt}</p>}
+      {byOther && request.createdAt && <p className="mt-2 flex items-center gap-1 text-xs text-violet-700"><Building2 className="h-3.5 w-3.5" /> طلبه {request.requestedByName || "مشرف مبنى آخر"} الساعة {request.createdAt}</p>}
       <div className="mt-3"><Steps steps={request.nurseOnly ? NURSE_STEPS : returning ? RETURN_STEPS : OUTBOUND_STEPS} current={step} /></div>
       {(request.arrivalCheck || request.pickupCheck) && (
         <DriverCheckBox request={request} appointment={appointment} from={from} onReply={(kind, reply) => onCheckReply(request, kind, reply)} />
