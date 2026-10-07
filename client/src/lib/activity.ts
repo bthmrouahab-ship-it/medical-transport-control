@@ -26,6 +26,7 @@ export const ACTIVITY_TYPES: Record<string, string> = {
   session: "الدخول والخروج",
   location: "مشاركة الموقع",
   stats: "الإحصائيات",
+  complaint: "الشكاوى",
 };
 
 export const ACTIVITY_ROLES: Record<string, string> = {
@@ -56,6 +57,9 @@ export const DETAIL_LABELS: [string, string][] = [
   ["from", "النقل من"],
   ["reason", "سبب الإلغاء"],
   ["changes", "التغييرات"],
+  ["number", "رقم الشكوى"],
+  ["category", "موضوع الشكوى"],
+  ["resolution", "المعالجة"],
   ["ip", "عنوان الشبكة"],
 ];
 

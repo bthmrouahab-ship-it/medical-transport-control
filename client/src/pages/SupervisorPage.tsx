@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import { goTo, reveal } from "@/lib/notify";
-import { Accessibility, AlertTriangle, ArrowLeftRight, Ban, BellRing, BriefcaseMedical, Building2, Check, CheckCircle2, ChevronDown, Clock3, Footprints, Hospital, House, Link2, MapPin, Pencil, Ribbon, RotateCcw, ShieldCheck, Smartphone, Stethoscope, Timer, Truck, UserMinus, Users, XCircle } from "lucide-react";
+import { Accessibility, AlertTriangle, ArrowLeftRight, Ban, BellRing, BriefcaseMedical, Building2, Check, CheckCircle2, ChevronDown, Clock3, Footprints, Hospital, House, Link2, MapPin, MessageSquareWarning, Pencil, Ribbon, RotateCcw, ShieldCheck, Smartphone, Stethoscope, Timer, Truck, UserMinus, Users, XCircle } from "lucide-react";
 import { NURSE_BUILDING } from "@shared/guests";
 import { toWesternDigits } from "@shared/text";
 import {
@@ -55,7 +55,13 @@ import {
   longDate,
   timeLabel,
 } from "@/components/ui-kit";
-import { useHospitals, useLiveVehicles, useNow } from "@/lib/useShared";
+import { useComplaints, useHospitals, useLiveVehicles, useNow } from "@/lib/useShared";
+import { ComplaintForm, ComplaintList, ComplaintView, type ComplaintGuest } from "@/components/Complaints";
+import { addComplaint } from "@/lib/complaints";
+import type { Complaint, ComplaintDraft } from "@shared/complaints";
+
+/** فتح استمارة الشكوى من بطاقة الموعد (الضيف ورحلته معبأة) */
+const ComplaintContext = createContext<((appointment: ClinicAppointment, request?: VehicleRequest, driver?: string) => void) | null>(null);
 
 /** حالات الطلب قبل استلام المريض (السيارة لم تصل أو لم تُرسل بعد). */
 const BEFORE_PICKUP: VehicleRequest["status"][] = ["بانتظار التوزيع", "تم إرسال السيارة", "وصلت السيارة"];
@@ -111,9 +117,11 @@ function newRequest(appointment: ClinicAppointment): VehicleRequest {
   };
 }
 
-export function SupervisorHome({ uid, lead = false, nurses = false, appointments, requests, vehicles, onRequest, onUpdateRequest, onCancel, onReturn, onTransfer, onCancelAppointment, onCheckReply, onNurseReturn, onSelfReturn, onEditMobile }: {
+export function SupervisorHome({ uid, userName = "", lead = false, nurses = false, appointments, requests, vehicles, onRequest, onUpdateRequest, onCancel, onReturn, onTransfer, onCancelAppointment, onCheckReply, onNurseReturn, onSelfReturn, onEditMobile }: {
   /** رقم حساب المشرف: يرى متابعة طلباته هو فقط */
   uid: string;
+  /** اسم المشرف: في استمارة الشكوى */
+  userName?: string;
   /** مسؤول مشرفي المباني: يتابع كل الطلبات (يؤكد وصول السيارة واستلام الضيف ويرد على السائق في أي طلب) */
   lead?: boolean;
   /** مسؤول العيادة: سيارات الممرضات (مبنى 03) فقط، ويتابع كل طلباتها */
@@ -125,6 +133,10 @@ export function SupervisorHome({ uid, lead = false, nurses = false, appointments
 } & RequestHandlers) {
   const [buildings, setBuildings] = useState<string[]>(loadBuildings);
   const [cancelling, setCancelling] = useState<Row | null>(null);
+  // الشكاوى: الاستمارة المفتوحة (معبأة من بطاقة الموعد أو فارغة)، والشكوى المعروضة
+  const [complaintDraft, setComplaintDraft] = useState<Partial<ComplaintDraft> | null>(null);
+  const [complaintId, setComplaintId] = useState<string | null>(null);
+  const complaints = useComplaints();
   const now = useNow();
   const hospitals = useHospitals();
   const liveGps = useLiveVehicles(now);
@@ -181,6 +193,37 @@ export function SupervisorHome({ uid, lead = false, nurses = false, appointments
     .filter((appointment) => appointment.appointmentDate < today && appointment.appointmentDate >= sinceDate
       && appointment.status !== "مكتملة" && appointment.status !== "ملغي" && stageOf(appointment) === "atAppointment")
     .sort(byAppointmentTime);
+
+  // ضيوف مواعيد اليوم (ثم الأيام السابقة) للاختيار في استمارة الشكوى
+  const complaintGuests: ComplaintGuest[] = [];
+  const seenGuests = new Set<string>();
+  for (const appointment of [...todays, ...appointments.filter((item) => item.appointmentDate < today && item.appointmentDate >= sinceDate).reverse()]) {
+    const key = `${appointment.patientName}|${appointment.buildingNumber}|${appointment.apartmentNumber}`;
+    if (seenGuests.has(key) || !appointment.patientName) continue;
+    seenGuests.add(key);
+    const mobile = appointment.mobile && appointment.mobile !== "-" ? appointment.mobile : undefined;
+    complaintGuests.push({ name: appointment.patientName, buildingNumber: appointment.buildingNumber, apartmentNumber: appointment.apartmentNumber, ...(mobile ? { mobile } : {}) });
+  }
+  const complaintFrom = (appointment: ClinicAppointment, request?: VehicleRequest, driver?: string) => {
+    const mobile = appointment.mobile && appointment.mobile !== "-" ? appointment.mobile : undefined;
+    setComplaintDraft({
+      guestName: appointment.patientName,
+      buildingNumber: appointment.buildingNumber,
+      apartmentNumber: appointment.apartmentNumber,
+      ...(mobile ? { mobile } : {}),
+      appointmentId: appointment.id,
+      category: "النقل والسيارات",
+      ...(request?.vehiclePlate ? { vehiclePlate: request.vehiclePlate } : {}),
+      ...(request?.vehiclePlate && (driver || request.driver) ? { driver: driver || request.driver } : {}),
+    });
+  };
+  const shownComplaint = complaintId ? complaints.find((complaint) => complaint.id === complaintId) : undefined;
+  function saveComplaint(complaint: Complaint) {
+    addComplaint(complaint);
+    setComplaintDraft(null);
+    setComplaintId(complaint.id);
+    toast.success(`سُجّلت شكوى ${complaint.guestName}`, { description: "يمكنك طباعة الاستمارة الآن أو لاحقًا من قسم «الشكاوى»" });
+  }
 
   // فلتر المباني: اختيار مبنى أو أكثر، ويُحفظ على هذا الجهاز
   const buildingCounts = new Map<string, number>();
@@ -246,7 +289,12 @@ export function SupervisorHome({ uid, lead = false, nurses = false, appointments
       <PageHeader
         title={nurses ? "سيارات الممرضات" : lead ? "كل طلبات السيارات" : "طلبات السيارات"}
         subtitle={`${longDate(today)} · ${nurses ? `مواعيد الممرضات اليوم (مبنى ${NURSE_BUILDING}) · طلب السيارة ومتابعتها كما في صفحة مشرف المبنى` : `مواعيد اليوم${lead ? " · طلبات كل مشرفي المباني" : ""}`}`}
-        actions={!nurses && <BuildingFilter all={visible.length + pastAtAppointment.length} counts={buildingCounts} buildings={buildingNumbers} selected={buildings} onChange={chooseBuildings} />}
+        actions={!nurses && (
+          <>
+            <button type="button" onClick={() => setComplaintDraft({})} className={btn("secondary")}><MessageSquareWarning className="h-4 w-4" /> تسجيل شكوى</button>
+            <BuildingFilter all={visible.length + pastAtAppointment.length} counts={buildingCounts} buildings={buildingNumbers} selected={buildings} onChange={chooseBuildings} />
+          </>
+        )}
       />
 
       {/* شريط الحالة: عدادات حية ملونة، والضغط ينقل إلى القسم */}
@@ -262,6 +310,7 @@ export function SupervisorHome({ uid, lead = false, nurses = false, appointments
         />
       </div>
 
+      <ComplaintContext.Provider value={nurses ? null : complaintFrom}>
       <div className="space-y-6">
         {unreturned.length > 0 && (
           <Panel id="sup-unreturned" tone="red" icon={AlertTriangle} title="لم تُسجَّل عودتهم" count={unreturned.length} description="ذهبوا إلى مواعيد في أيام سابقة ولم تُطلب لهم سيارة عودة ولم يُسجَّل أنهم عادوا بأنفسهم. تأكد من حالة كل ضيف: هل عاد بنفسه؟">
@@ -401,7 +450,27 @@ export function SupervisorHome({ uid, lead = false, nurses = false, appointments
             </div>
           </Panel>
         )}
+
+        {/* الشكاوى: يسجّلها المشرف ولا تُعدّل ولا تُحذف بعد تسجيلها (الحذف لمدير النظام فقط) */}
+        {!nurses && (
+          <Panel
+            id="sup-complaints"
+            icon={MessageSquareWarning}
+            title="الشكاوى"
+            count={complaints.length}
+            description={lead ? "شكاوى كل مشرفي المباني · لا تُعدّل ولا تُحذف بعد تسجيلها (الحذف لمدير النظام فقط)" : "الشكاوى التي سجّلتها · لا تُعدّل ولا تُحذف بعد تسجيلها (الحذف لمدير النظام فقط)"}
+            actions={<button type="button" onClick={() => setComplaintDraft({})} className={btn("secondary", "sm")}><MessageSquareWarning className="h-3.5 w-3.5" /> تسجيل شكوى</button>}
+          >
+            <ComplaintList complaints={complaints} showAuthor={lead} onOpen={(complaint) => setComplaintId(complaint.id)} empty="لم تُسجَّل شكاوى بعد" />
+          </Panel>
+        )}
       </div>
+      </ComplaintContext.Provider>
+
+      {complaintDraft && (
+        <ComplaintForm initial={complaintDraft} guests={complaintGuests} supervisorName={userName} onSave={saveComplaint} onClose={() => setComplaintDraft(null)} />
+      )}
+      {shownComplaint && <ComplaintView complaint={shownComplaint} onClose={() => setComplaintId(null)} />}
 
       {cancelling && (
         <CancelDialog
@@ -753,6 +822,7 @@ function GuestDetails({ appointment, request, driver, persons, onEditMobile }: {
   const assistance = appointment.assistance.join("، ");
   const count = persons ?? tripPersons(appointment, request);
   const hasMobile = Boolean(appointment.mobile && appointment.mobile !== "-");
+  const complain = useContext(ComplaintContext);
   return (
     <div className="space-y-2.5">
       {onEditMobile
@@ -782,6 +852,11 @@ function GuestDetails({ appointment, request, driver, persons, onEditMobile }: {
           <span className="w-full font-medium text-amber-800">تغيّرت السيارة: بدل <span dir="ltr">{request.previousPlate}</span>{request.changeReason ? ` · ${request.changeReason}` : ""}</span>
         )}
       </p>
+      {complain && (
+        <button type="button" onClick={() => complain(appointment, request, driver)} className={cx(btn("ghost", "sm"), "-ms-2 text-slate-500")}>
+          <MessageSquareWarning className="h-3.5 w-3.5" /> تسجيل شكوى للضيف
+        </button>
+      )}
     </div>
   );
 }

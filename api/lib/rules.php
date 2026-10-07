@@ -102,8 +102,27 @@ const PRIVATE_CAR_MESSAGE = 'هذا الشخص يمتلك سيارة خاصة و
  * وتظهر ملاحظة «احتياجات خاصة» عند تسجيل موعده. الضيف برقم guestId المطابق، أو برقمه الصحي. القائمة للمدير فقط.
  */
 const SPECIAL_NEED_FIELDS = ['id', 'name', 'gender', 'healthNumber', 'buildingNumber', 'apartmentNumber', 'mobile', 'guestId', '_o'];
+/**
+ * الشكاوى (استمارة الشكاوى المعتمدة في المجمع): يسجّلها مشرف المبنى ومسؤولهم، ولا يعدّلها أحد بعد تسجيلها، ولا يحذفها إلا
+ * المدير. المدير يتابعها (status: open أو resolved مع resolution). رقم الشكوى والمسجّل ووقت التسجيل ومن عالجها يكتبها
+ * الخادم وحده (stamp_complaint). التوقيعات خطوط SVG (M وL وأرقام فقط). نفس القيم في shared/complaints.ts.
+ */
+const COMPLAINT_FIELDS = ['id', 'number', 'date', 'time', 'guestName', 'buildingNumber', 'apartmentNumber', 'mobile', 'category', 'text',
+    'appointmentId', 'vehiclePlate', 'driver', 'guestSignature', 'supervisorSignature', 'witnesses',
+    'createdAt', 'createdBy', 'createdByName', 'status', 'resolution', 'resolvedBy', 'resolvedAt', '_o'];
+/** يكتبها الخادم وحده: ما يرسله المستخدم منها عند التسجيل يُتجاهل */
+const COMPLAINT_SERVER_FIELDS = ['number', 'createdAt', 'createdBy', 'createdByName', 'status', 'resolution', 'resolvedBy', 'resolvedAt'];
+/** متابعة المدير للشكوى */
+const COMPLAINT_FOLLOW_FIELDS = ['status', 'resolution', 'resolvedBy', 'resolvedAt'];
+const COMPLAINT_CATEGORIES = ['النقل والسيارات', 'السكن والصيانة', 'النظافة', 'الطعام', 'الخدمات الطبية', 'التعامل والسلوك', 'أخرى'];
+const COMPLAINT_TEXT_MAX = 3000;
+const COMPLAINT_SIGNATURE_MAX = 12000;
+const COMPLAINT_MAX_WITNESSES = 2;
+/** من يسجّل الشكاوى، ومن تصله: المسجّل يرى ما سجّله، ومسؤول مشرفي المباني والمدير يرون كل الشكاوى (can_see_complaint) */
+const COMPLAINT_WRITE_ROLES = ['buildingSupervisor', 'buildingLead'];
+const COMPLAINT_ROLES = ['admin', 'buildingSupervisor', 'buildingLead'];
 /** المجموعات التي تُزامن مع موظفي المكتب */
-const SYNC_COLLECTIONS = ['appointments', 'requests', 'fleet', 'hospitals', 'vehicleLocations', 'meta', 'guests', 'drivers', 'privateCars', 'specialNeeds'];
+const SYNC_COLLECTIONS = ['appointments', 'requests', 'fleet', 'hospitals', 'vehicleLocations', 'meta', 'guests', 'drivers', 'privateCars', 'specialNeeds', 'complaints'];
 
 /**
  * مجموعات المزامنة لهذا المستخدم: قائمة الضيوف للمدير والعيادة ومشرف السيارات، وقائمة السائقين للمدير ومشرف السيارات،
@@ -113,7 +132,82 @@ function sync_collections(array $user): array
 {
     return array_values(array_filter(SYNC_COLLECTIONS, fn(string $col) => ($col !== 'guests' || in_array($user['role'], GUEST_LIST_ROLES, true))
         && ($col !== 'drivers' || in_array($user['role'], DRIVER_LIST_ROLES, true))
-        && (!in_array($col, ['privateCars', 'specialNeeds'], true) || $user['role'] === 'admin')));
+        && (!in_array($col, ['privateCars', 'specialNeeds'], true) || $user['role'] === 'admin')
+        && ($col !== 'complaints' || in_array($user['role'], COMPLAINT_ROLES, true))));
+}
+
+/** الشكوى تصل لمن سجّلها، ولمسؤول مشرفي المباني والمدير */
+function can_see_complaint(array $user, array $complaint): bool
+{
+    return in_array($user['role'], ['admin', 'buildingLead'], true)
+        || ($user['role'] === 'buildingSupervisor' && ($complaint['createdBy'] ?? null) === (string)$user['id']);
+}
+
+/** توقيع على الشاشة: خطوط SVG بأوامر M وL وأرقام فقط (لا نص ولا وسوم) */
+function valid_signature($value): bool
+{
+    return is_string($value) && strlen($value) <= COMPLAINT_SIGNATURE_MAX && preg_match('/^M[\d .\-ML]*$/', $value) === 1;
+}
+
+function valid_complaint(array $data, string $id): bool
+{
+    $text = fn($value, int $max) => is_text($value, $max) && trim($value) !== '';
+    $witnesses = $data['witnesses'] ?? [];
+    if (!is_array($witnesses) || !array_is_list($witnesses) || count($witnesses) > COMPLAINT_MAX_WITNESSES) return false;
+    foreach ($witnesses as $witness) {
+        if (!is_array($witness) || !only(array_keys($witness), ['name', 'signature']) || !$text($witness['name'] ?? null, 80)
+            || (array_key_exists('signature', $witness) && !valid_signature($witness['signature']))) return false;
+    }
+    foreach (['guestSignature', 'supervisorSignature'] as $field) {
+        if (array_key_exists($field, $data) && !valid_signature($data[$field])) return false;
+    }
+    $date = $data['date'] ?? null;
+    return only(array_keys($data), COMPLAINT_FIELDS)
+        && ($data['id'] ?? null) === $id
+        && is_string($date) && preg_match('/^(\d{4})-(\d{2})-(\d{2})$/', $date, $parts) && checkdate((int)$parts[2], (int)$parts[3], (int)$parts[1])
+        && is_string($data['time'] ?? null) && preg_match('/^([01]\d|2[0-3]):[0-5]\d$/', $data['time'])
+        && $text($data['guestName'] ?? null, 120)
+        && $text($data['buildingNumber'] ?? null, 20) && $text($data['apartmentNumber'] ?? null, 20)
+        && (!array_key_exists('mobile', $data) || (is_string($data['mobile']) && preg_match('/^\+?\d{7,15}$/', $data['mobile'])))
+        && (!array_key_exists('category', $data) || in_array($data['category'], COMPLAINT_CATEGORIES, true))
+        && $text($data['text'] ?? null, COMPLAINT_TEXT_MAX) && mb_strlen(trim($data['text'])) >= 3
+        && (!array_key_exists('appointmentId', $data) || $text($data['appointmentId'], 160))
+        && (!array_key_exists('vehiclePlate', $data) || $text($data['vehiclePlate'], 20))
+        && (!array_key_exists('driver', $data) || is_text($data['driver'], 120))
+        && in_array($data['status'] ?? 'open', ['open', 'resolved'], true)
+        && (!array_key_exists('resolution', $data) || is_text($data['resolution'], 1000));
+}
+
+/**
+ * ما يكتبه الخادم وحده في الشكوى: عند التسجيل رقمها التسلسلي (لا يُعاد استخدامه بعد الحذف) ومن سجّلها ومتى وحالتها «open»،
+ * وعند معالجة المدير لها اسمه ووقتها (وإعادة فتحها تمحوهما مع ملاحظة المعالجة).
+ */
+function stamp_complaint(PDO $pdo, array $user, ?array $before, ?array $after): ?array
+{
+    if ($after === null) return null;
+    if ($before === null) {
+        foreach (COMPLAINT_SERVER_FIELDS as $field) unset($after[$field]);
+        $stmt = $pdo->prepare("SELECT v FROM settings WHERE k = 'complaint_number' FOR UPDATE");
+        $stmt->execute();
+        $number = (int)$stmt->fetchColumn() + 1;
+        $pdo->prepare("INSERT INTO settings (k, v) VALUES ('complaint_number', ?) ON DUPLICATE KEY UPDATE v = VALUES(v)")->execute([(string)$number]);
+        return [...$after, 'number' => $number, 'createdAt' => now_iso(), 'createdBy' => (string)$user['id'],
+            'createdByName' => (string)$user['display_name'], 'status' => 'open'];
+    }
+    if (($after['status'] ?? 'open') !== 'resolved') {
+        unset($after['resolution'], $after['resolvedBy'], $after['resolvedAt']);
+        $after['status'] = 'open';
+        return $after;
+    }
+    if (($before['status'] ?? 'open') !== 'resolved' || ($before['resolution'] ?? null) !== ($after['resolution'] ?? null)) {
+        $after['resolvedBy'] = (string)$user['display_name'];
+        $after['resolvedAt'] = now_iso();
+    } else {
+        foreach (['resolvedBy', 'resolvedAt'] as $field) {
+            if (array_key_exists($field, $before)) $after[$field] = $before[$field];
+        }
+    }
+    return $after;
 }
 
 /** المبنى والشقة للمطابقة: بأحرف كبيرة وبلا أصفار في البداية (03 = 3، و001 = 1) — نفس unitKey في shared/guests.ts */
@@ -953,6 +1047,21 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
             // ذوو الاحتياجات الخاصة: المدير يربط الشخص بضيف ويحذفه (أو يرفع القائمة كاملة: special-needs.import)
             if ($role !== 'admin') return $denied;
             return $after === null || valid_special_need($after, $id) ? null : 'بيانات صاحب الاحتياجات الخاصة غير صالحة';
+
+        case 'complaints':
+            // الشكوى: يسجّلها مشرف المبنى ومسؤولهم (والمدير)، ولا يعدّلها أحد بعد تسجيلها ولا يحذفها إلا المدير،
+            // والمدير يتابعها (تمت المعالجة مع ملاحظة، أو إعادة فتحها)
+            if ($after === null) return $role === 'admin' ? null : 'لا يحذف الشكوى إلا مدير النظام';
+            if ($before === null) {
+                if (!has_role($user, [...COMPLAINT_WRITE_ROLES, 'admin'])) return $denied;
+                $fresh = $after;
+                foreach (COMPLAINT_SERVER_FIELDS as $field) unset($fresh[$field]);
+                return valid_complaint($fresh, $id) ? null : 'بيانات الشكوى غير صالحة';
+            }
+            if ($role !== 'admin') return 'لا يمكن تعديل شكوى بعد تسجيلها';
+            return only($changed, COMPLAINT_FOLLOW_FIELDS) && valid_complaint($after, $id)
+                && (($after['status'] ?? 'open') !== 'resolved' || (is_string($after['resolution'] ?? null) && trim($after['resolution']) !== ''))
+                ? null : 'بيانات متابعة الشكوى غير صالحة';
 
         case 'vehicleLocations':
             // السائق يرسل موقعه من صفحة السائق فقط؛ هنا الحذف للمدير

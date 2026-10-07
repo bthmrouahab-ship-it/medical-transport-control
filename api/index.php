@@ -421,7 +421,12 @@ function route_sync(PDO $pdo): array
     $docs = [];
     // شقق السيارات الخاصة: علامة privateCar مع ضيوفها
     $privateUnits = private_car_units();
-    foreach ($stmt as $row) $docs[] = ['col' => $row['col'], 'id' => $row['id'], 'data' => public_doc($row['col'], decode_doc($row['data']), $privateUnits)];
+    foreach ($stmt as $row) {
+        $data = public_doc($row['col'], decode_doc($row['data']), $privateUnits);
+        // الشكوى لمن سجّلها ولمسؤول مشرفي المباني والمدير فقط
+        if ($row['col'] === 'complaints' && $data !== null && !can_see_complaint($user, $data)) continue;
+        $docs[] = ['col' => $row['col'], 'id' => $row['id'], 'data' => $data];
+    }
     return ['rev' => $rev, 'full' => $since === 0, 'docs' => $docs];
 }
 
@@ -488,6 +493,8 @@ function route_write(PDO $pdo, array $body): array
                 throw new ApiException(400, 'بيانات غير صالحة', 'bad_request');
             }
             if ($error = authorize_write($user, $col, $id, $before, $after, $docOf, $requestsOf)) throw new ApiException(403, $error, 'permission_denied');
+            // رقم الشكوى ومن سجّلها أو عالجها: يكتبها الخادم وحده، قبل الوصف حتى يظهر الرقم في السجل
+            if ($col === 'complaints') $after = stamp_complaint($pdo, $user, $before, $after);
             // الوصف قبل الحفظ (يقرأ الموعد المرتبط بالطلب كما كان)، والتسجيل بعده في نفس المعاملة
             $entry = describe_write($pdo, $col, $id, $before, $after);
             // وقت تسجيل الموعد ووصول السيارة إلى نقطة الاستلام: يكتبها الخادم وحده (للإحصائيات)
@@ -894,11 +901,14 @@ function route_stats_days_save(PDO $pdo, array $body): array
 /** العمليات في فترة (وقت ISO) من الأحدث، للمدير ومشرف السيارات. before: لتحميل الصفحة التالية. */
 function route_activity(PDO $pdo): array
 {
-    require_role(current_user($pdo), ['admin', 'fleetSupervisor']);
+    $user = current_user($pdo);
+    require_role($user, ['admin', 'fleetSupervisor']);
     $iso = fn(string $key) => is_string($_GET[$key] ?? null) && strlen($_GET[$key]) <= 40 && strtotime($_GET[$key]) !== false ? $_GET[$key] : null;
     $limit = max(1, min(5000, (int)($_GET['limit'] ?? 500)));
     $where = [];
     $params = [];
+    // عمليات الشكاوى للمدير فقط
+    if ($user['role'] !== 'admin') $where[] = "type <> 'complaint'";
     if ($since = $iso('since')) { $where[] = 'at >= ?'; $params[] = gmdate('Y-m-d\\TH:i:s.v\\Z', strtotime($since)); }
     if ($until = $iso('until')) { $where[] = 'at < ?'; $params[] = gmdate('Y-m-d\\TH:i:s.v\\Z', strtotime($until)); }
     if (is_numeric($_GET['before'] ?? null)) { $where[] = 'id < ?'; $params[] = (int)$_GET['before']; }

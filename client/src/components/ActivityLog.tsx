@@ -16,6 +16,7 @@ const TYPE_TONE: Record<string, Tone> = {
   session: "neutral",
   location: "amber",
   stats: "violet",
+  complaint: "amber",
 };
 
 const PAGE = 1000;

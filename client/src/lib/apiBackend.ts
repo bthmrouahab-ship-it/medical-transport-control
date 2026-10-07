@@ -28,6 +28,8 @@ const COLLECTIONS: Partial<Record<SharedKey, { col: string; idField: string; sor
   fox_private_cars: { col: "privateCars", idField: "id" },
   // ذوو الاحتياجات الخاصة (للمدير فقط): مستثنون من منع السيارات الخاصة
   fox_special_needs: { col: "specialNeeds", idField: "id" },
+  // الشكاوى (لمن سجّلها ولمسؤول مشرفي المباني والمدير)، الأحدث أولًا
+  fox_complaints: { col: "complaints", idField: "id", sort: (a, b) => String(b.createdAt ?? "").localeCompare(String(a.createdAt ?? "")) },
 };
 /**
  * قيم تُحفظ كمستند واحد: ملخص الإحصائيات القديم، وأوقات سيارات المدارس وباص الجامعة (RoleSchedules).

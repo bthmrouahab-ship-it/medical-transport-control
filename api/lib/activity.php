@@ -424,6 +424,28 @@ function describe_write(PDO $pdo, string $col, string $id, ?array $before, ?arra
             if ($after === null) return ['guest', 'guest.private_car', "حذف السيارة الخاصة لـ$place" . ($owner ? " ($owner)" : '') . ' · يُسمح لضيوفها بسيارات المجمع', $details];
             return ['guest', 'guest.private_car', "تعديل السيارة الخاصة لـ$place", $details];
 
+        case 'complaints':
+            // الشكاوى: التسجيل، ومتابعة المدير (المعالجة أو إعادة الفتح)، وحذفه لها — بلا نص الشكوى
+            $complaint = $after ?? $before;
+            $number = isset($complaint['number']) ? "رقم {$complaint['number']} " : '';
+            $place = 'مبنى ' . ($complaint['buildingNumber'] ?? '') . ' شقة ' . ($complaint['apartmentNumber'] ?? '');
+            $who = $complaint['guestName'] ?? '';
+            $details = array_filter([
+                'patient' => $who, 'building' => $complaint['buildingNumber'] ?? '', 'apartment' => $complaint['apartmentNumber'] ?? '',
+                'number' => isset($complaint['number']) ? (string)$complaint['number'] : '', 'category' => $complaint['category'] ?? '',
+            ], fn($value) => $value !== '');
+            $topic = empty($complaint['category']) ? '' : " · {$complaint['category']}";
+            if ($before === null) return ['complaint', 'complaint.create', "تسجيل الشكوى {$number}من الضيف $who ($place)$topic", $details];
+            if ($after === null) {
+                $by = empty($before['createdByName']) ? '' : " · سجّلها {$before['createdByName']}";
+                return ['complaint', 'complaint.delete', "حذف الشكوى {$number}من الضيف $who ($place)$by", $details];
+            }
+            if (($after['status'] ?? 'open') === 'resolved') {
+                $details['resolution'] = $after['resolution'] ?? '';
+                return ['complaint', 'complaint.resolve', "معالجة الشكوى {$number}من الضيف $who: " . ($after['resolution'] ?? ''), $details];
+            }
+            return ['complaint', 'complaint.reopen', "إعادة فتح الشكوى {$number}من الضيف $who ($place)", $details];
+
         case 'specialNeeds':
             // ذوو الاحتياجات الخاصة: مستثنون من منع السيارات الخاصة
             $entry = $after ?? $before;

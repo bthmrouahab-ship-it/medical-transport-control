@@ -9,6 +9,7 @@ import {
   KeyRound,
   Loader2,
   Map as MapIcon,
+  MessageSquareWarning,
   Pencil,
   Plus,
   Power,
@@ -43,7 +44,8 @@ import {
   type UserRole,
 } from "@shared/users";
 import { hasSharedState, loadState, saveState, saveStates, subscribeState } from "@/lib/appStore";
-import { useDrivers } from "@/lib/useShared";
+import { useComplaints, useDrivers } from "@/lib/useShared";
+import { isResolved } from "@shared/complaints";
 import { driverOfAccount, type Driver } from "@shared/drivers";
 import { DRIVERS_SEED } from "@shared/seedData";
 import AppHeader from "@/components/AppHeader";
@@ -58,8 +60,9 @@ import { authErrorMessage, createUser, resetUserPassword, updateUser, watchUsers
 const FleetDashboard = lazy(() => import("@/components/FleetDashboard"));
 const GuestManager = lazy(() => import("@/components/GuestManager"));
 const DriverManager = lazy(() => import("@/components/DriverManager"));
+const ComplaintsManager = lazy(() => import("@/components/ComplaintsManager"));
 
-type Tab = "dashboard" | "users" | "guests" | "vehicles" | "drivers" | "audit";
+type Tab = "dashboard" | "users" | "guests" | "vehicles" | "drivers" | "complaints" | "audit";
 
 function loadRequests() {
   return loadState<unknown[]>("fox_requests", [])
@@ -108,12 +111,19 @@ export default function AdminPanel({ profile, onLogout, onChangePassword }: {
     saveState("fox_fleet", next);
   }
 
-  const tabs: { value: Tab; label: string; icon: typeof UsersRound }[] = [
+  // الشكاوى الجديدة (لم يعالجها المدير بعد): عددها بجانب التبويب
+  const openComplaints = useComplaints().filter((complaint) => !isResolved(complaint)).length;
+  const tabs: { value: Tab; label: React.ReactNode; icon: typeof UsersRound }[] = [
     { value: "dashboard", label: "الخريطة والإحصائيات", icon: MapIcon },
     { value: "users", label: "المستخدمون", icon: UsersRound },
     { value: "guests", label: "الضيوف", icon: Contact },
     { value: "vehicles", label: "السيارات", icon: Truck },
     { value: "drivers", label: "السائقون", icon: IdCard },
+    {
+      value: "complaints",
+      icon: MessageSquareWarning,
+      label: <>الشكاوى{openComplaints > 0 && <span className="ms-1 rounded-full bg-amber-500 px-1.5 text-[11px] leading-5 text-white tabular">{openComplaints}</span>}</>,
+    },
     { value: "audit", label: "سجل العمليات", icon: ClipboardList },
   ];
 
@@ -130,6 +140,7 @@ export default function AdminPanel({ profile, onLogout, onChangePassword }: {
         {tab === "guests" && <Suspense fallback={<div className="flex min-h-64 items-center justify-center text-slate-400"><Loader2 className="h-6 w-6 animate-spin" /><span className="sr-only">جارٍ التحميل</span></div>}><GuestManager /></Suspense>}
         {tab === "vehicles" && <VehiclesTab vehicles={vehicles} requests={requests} onChange={updateVehicles} />}
         {tab === "drivers" && <Suspense fallback={<div className="flex min-h-64 items-center justify-center text-slate-400"><Loader2 className="h-6 w-6 animate-spin" /><span className="sr-only">جارٍ التحميل</span></div>}><DriverManager vehicles={vehicles} /></Suspense>}
+        {tab === "complaints" && <Suspense fallback={<div className="flex min-h-64 items-center justify-center text-slate-400"><Loader2 className="h-6 w-6 animate-spin" /><span className="sr-only">جارٍ التحميل</span></div>}><ComplaintsManager /></Suspense>}
         {tab === "audit" && <AuditTab />}
       </main>
     </div>
