@@ -147,7 +147,7 @@ export type Vehicle = {
   driverSince?: string;
   /**
    * تخصيص السيارة من مشرف السيارات: للباص BusRole، ولسيارة الاحتياجات الخاصة «school» سيارة المدارس
-   * (SCHOOL_RUNS)؛ وبلا تخصيص سيارة عادية
+   * (في أوقات المدارس: RoleSchedules)؛ وبلا تخصيص سيارة عادية
    */
   busRole?: VehicleRole;
   /** للسيدان فقط: يشغّلها مشرف السيارات بطاقتها الكاملة (4 أشخاص بدل 3) */
@@ -156,14 +156,14 @@ export type Vehicle = {
 
 /**
  * تخصيص الباص يختاره مشرف السيارات: shuttle «باص المجمع» يلف داخل المجمع (ويمكن إرساله إلى مستشفى الثمامة
- * وقت الذروة)، وnonMedical «باص الجامعة» للرحلات غير الطبية (أكثر من باص)، وclinic «باص العيادة» في خدمة
- * العيادة فلا يُرسل في رحلات التوزيع.
+ * وقت الذروة)، وnonMedical «باص الجامعة» (أكثر من باص) لا يُرسل في أي رحلة في أوقاته (طوال اليوم ما لم يغيّرها
+ * مشرف السيارات: RoleSchedules)، وclinic «باص العيادة» في خدمة العيادة فلا يُرسل في رحلات التوزيع.
  */
 export type BusRole = "shuttle" | "nonMedical" | "clinic";
 export const BUS_ROLES: BusRole[] = ["shuttle", "nonMedical", "clinic"];
 /** تخصيص يأخذه أكثر من باص (وغيره باص واحد لكل تخصيص) */
 export const SHARED_BUS_ROLES: BusRole[] = ["nonMedical"];
-/** سيارة احتياجات خاصة محجوزة لإيصال الأولاد إلى المدارس وإرجاعهم في أوقاتها (SCHOOL_RUNS)، وتبقى في الخدمة */
+/** سيارة احتياجات خاصة محجوزة لإيصال الأولاد إلى المدارس وإرجاعهم في أوقاتها (RoleSchedules)، وتبقى في الخدمة */
 export const SCHOOL_ROLE = "school" as const;
 export type VehicleRole = BusRole | typeof SCHOOL_ROLE;
 export const VEHICLE_ROLES: VehicleRole[] = [...BUS_ROLES, SCHOOL_ROLE];
@@ -841,17 +841,50 @@ export const SHUTTLE_HOSPITAL_ID = "thumama-hc";
 export const busRoleOf = (vehicle: Pick<Vehicle, "kind" | "busRole">): BusRole | null =>
   (vehicle.kind === "باص" && vehicle.busRole && (BUS_ROLES as VehicleRole[]).includes(vehicle.busRole) ? vehicle.busRole as BusRole : null);
 
-// ————— سيارات المدارس —————
+// ————— سيارات المدارس وباص الجامعة: أوقات محجوزة يعدّلها مشرف السيارات —————
 
-/** أيام رحلات المدارس: الأحد إلى الخميس */
-export const SCHOOL_DAYS = [0, 1, 2, 3, 4];
-/** أوقات رحلات المدارس بالدقائق منذ منتصف الليل: الذهاب 11:00–14:00، والعودة 17:30–19:00 */
-export const SCHOOL_RUNS = [
-  { label: "ذهاب المدارس", from: 11 * 60, to: 14 * 60 },
-  { label: "عودة المدارس", from: 17 * 60 + 30, to: 19 * 60 },
-];
-/** قبل رحلة المدارس بهذه الدقائق لا تُقترح سيارتها لرحلة أخرى (ويمكن لمشرف السيارات اختيارها بتنبيه) */
-export const SCHOOL_SOON_MINUTES = 60;
+/** وقت محجوز بالدقائق منذ منتصف الليل (to حتى 1440 = نهاية اليوم) */
+export type ReservedRun = { from: number; to: number };
+/** أوقات تخصيص: أيام الأسبوع (0 الأحد … 6 السبت) والأوقات في كل يوم منها */
+export type RoleSchedule = { days: number[]; runs: ReservedRun[] };
+/** التخصيصات التي لها أوقات محجوزة: سيارة المدارس وباص الجامعة */
+export type ScheduledRole = typeof SCHOOL_ROLE | "nonMedical";
+export const SCHEDULED_ROLES: ScheduledRole[] = [SCHOOL_ROLE, "nonMedical"];
+/** الأوقات المحفوظة (meta/schedules)، وما لم يُحفظ يأخذ DEFAULT_SCHEDULES */
+export type RoleSchedules = Partial<Record<ScheduledRole, RoleSchedule>>;
+export const DAY_MINUTES = 24 * 60;
+/** أكثر عدد من الأوقات في اليوم */
+export const MAX_RESERVED_RUNS = 6;
+export const WEEK_DAYS = [0, 1, 2, 3, 4, 5, 6];
+/**
+ * الأوقات الافتراضية: سيارة المدارس من الأحد إلى الخميس، الذهاب 11:00–14:00 والعودة 17:30–19:00؛ وباص الجامعة
+ * محجوز طوال اليوم كل الأيام (لا يُرسل في أي رحلة حتى يحدد مشرف السيارات أوقاته).
+ */
+export const DEFAULT_SCHEDULES: Record<ScheduledRole, RoleSchedule> = {
+  school: { days: [0, 1, 2, 3, 4], runs: [{ from: 11 * 60, to: 14 * 60 }, { from: 17 * 60 + 30, to: 19 * 60 }] },
+  nonMedical: { days: [...WEEK_DAYS], runs: [{ from: 0, to: DAY_MINUTES }] },
+};
+/** قبل الوقت المحجوز بهذه الدقائق لا تُقترح السيارة لرحلة أخرى (ويمكن لمشرف السيارات اختيارها بتنبيه) */
+export const RESERVED_SOON_MINUTES = 60;
+
+/** أوقات صالحة: أيام مختلفة 0–6، وأوقات مرتبة لا تتداخل داخل اليوم */
+export function validSchedule(schedule: unknown): schedule is RoleSchedule {
+  if (!schedule || typeof schedule !== "object") return false;
+  const { days, runs } = schedule as RoleSchedule;
+  if (!Array.isArray(days) || !Array.isArray(runs) || runs.length > MAX_RESERVED_RUNS) return false;
+  if (days.some((day) => !Number.isInteger(day) || day < 0 || day > 6) || new Set(days).size !== days.length) return false;
+  return runs.every((run, index) => run && Number.isInteger(run.from) && Number.isInteger(run.to) && run.from >= 0 && run.to <= DAY_MINUTES
+    && run.from < run.to && (index === 0 || run.from >= runs[index - 1].to));
+}
+
+/** أوقات التخصيص: المحفوظة إن كانت صالحة، وإلا الافتراضية. */
+export const scheduleOf = (schedules: RoleSchedules | null | undefined, role: ScheduledRole): RoleSchedule => {
+  const saved = schedules?.[role];
+  return validSchedule(saved) ? saved : DEFAULT_SCHEDULES[role];
+};
+
+/** وقت طوال اليوم */
+export const isAllDay = (run: ReservedRun) => run.from === 0 && run.to >= DAY_MINUTES;
 
 /** سيارة احتياجات خاصة مخصصة للمدارس */
 export const isSchoolCar = (vehicle: Pick<Vehicle, "kind" | "busRole">) => vehicle.kind === "احتياجات خاصة" && vehicle.busRole === SCHOOL_ROLE;
@@ -859,32 +892,63 @@ export const isSchoolCar = (vehicle: Pick<Vehicle, "kind" | "busRole">) => vehic
 /** تخصيص السيارة (الباص أو سيارة المدارس)، أو null للسيارة العادية. */
 export const vehicleRoleOf = (vehicle: Pick<Vehicle, "kind" | "busRole">): VehicleRole | null => busRoleOf(vehicle) ?? (isSchoolCar(vehicle) ? SCHOOL_ROLE : null);
 
-const clockOf = (minutes: number) => `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
-export const schoolRunText = SCHOOL_RUNS.map((run) => `${clockOf(run.from)}–${clockOf(run.to)}`).join(" و");
+/** تخصيص له أوقات محجوزة (سيارة المدارس أو باص الجامعة)، أو null. */
+export const scheduledRoleOf = (vehicle: Pick<Vehicle, "kind" | "busRole">): ScheduledRole | null => {
+  const role = vehicleRoleOf(vehicle);
+  return role && (SCHEDULED_ROLES as VehicleRole[]).includes(role) ? role as ScheduledRole : null;
+};
 
-/** رحلة المدارس الجارية الآن (في أيامها وأوقاتها)، أو null. */
-export function schoolRun(at: Date) {
-  if (!SCHOOL_DAYS.includes(at.getDay())) return null;
-  const minutes = at.getHours() * 60 + at.getMinutes();
-  const run = SCHOOL_RUNS.find((item) => minutes >= item.from && minutes < item.to);
-  return run ? { ...run, until: clockOf(run.to) } : null;
+export const clockOf = (minutes: number) => `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
+/** الأيام نصًّا: «من الأحد إلى الخميس» للأيام المتتالية، أو «كل الأيام»، أو أسماؤها. */
+export function scheduleDaysText(days: number[]) {
+  const sorted = [...days].sort((a, b) => a - b);
+  if (!sorted.length) return "لا يوجد يوم";
+  if (sorted.length === 7) return "كل الأيام";
+  const consecutive = sorted.length > 2 && sorted.every((day, index) => index === 0 || day === sorted[index - 1] + 1);
+  return consecutive ? `من ${WEEKDAY_NAMES[sorted[0]]} إلى ${WEEKDAY_NAMES[sorted.at(-1)!]}` : sorted.map((day) => WEEKDAY_NAMES[day]).join(" و");
 }
 
-/** رحلة المدارس التالية اليوم إن بدأت خلال `within` دقيقة، أو null. */
-export function schoolRunSoon(at: Date, within = SCHOOL_SOON_MINUTES) {
-  if (!SCHOOL_DAYS.includes(at.getDay())) return null;
+/** الأوقات نصًّا: «11:00–14:00 و17:30–19:00»، أو «طوال اليوم». */
+export const scheduleRunsText = (runs: ReservedRun[]) => (runs.length === 1 && isAllDay(runs[0]) ? "طوال اليوم"
+  : runs.map((run) => `${clockOf(run.from)}–${run.to >= DAY_MINUTES ? "24:00" : clockOf(run.to)}`).join(" و"));
+
+/** «من الأحد إلى الخميس 11:00–14:00 و17:30–19:00»، أو «بلا أوقات محجوزة» (نفس schedule_text في api/lib/activity.php). */
+export const scheduleText = (schedule: RoleSchedule) => (!schedule.days.length || !schedule.runs.length ? "بلا أوقات محجوزة"
+  : `${scheduleDaysText(schedule.days)} ${scheduleRunsText(schedule.runs)}`);
+
+/** الوقت المحجوز الجاري الآن للسيارة (سيارة المدارس أو باص الجامعة في أوقاته)، أو null. */
+export function reservedRun(vehicle: Pick<Vehicle, "kind" | "busRole">, at: Date, schedules?: RoleSchedules | null) {
+  const role = scheduledRoleOf(vehicle);
+  if (!role) return null;
+  const schedule = scheduleOf(schedules, role);
+  if (!schedule.days.includes(at.getDay())) return null;
   const minutes = at.getHours() * 60 + at.getMinutes();
-  const run = SCHOOL_RUNS.find((item) => item.from > minutes && item.from - minutes <= within);
-  return run ? { ...run, starts: clockOf(run.from) } : null;
+  const run = schedule.runs.find((item) => minutes >= item.from && minutes < item.to);
+  return run ? { role, ...run, allDay: isAllDay(run), until: run.to >= DAY_MINUTES ? "نهاية اليوم" : clockOf(run.to) } : null;
 }
 
-/** سيارة المدارس في رحلتها الآن: لا تُرسل ولا تُحسب بين المتاحة، وتبقى في الخدمة. */
-export const onSchoolRun = (vehicle: Pick<Vehicle, "kind" | "busRole">, at: Date) => isSchoolCar(vehicle) && Boolean(schoolRun(at));
+/** الوقت المحجوز التالي اليوم إن بدأ خلال `within` دقيقة، أو null. */
+export function reservedSoon(vehicle: Pick<Vehicle, "kind" | "busRole">, at: Date, schedules?: RoleSchedules | null, within = RESERVED_SOON_MINUTES) {
+  const role = scheduledRoleOf(vehicle);
+  if (!role) return null;
+  const schedule = scheduleOf(schedules, role);
+  if (!schedule.days.includes(at.getDay())) return null;
+  const minutes = at.getHours() * 60 + at.getMinutes();
+  const run = schedule.runs.find((item) => item.from > minutes && item.from - minutes <= within);
+  return run ? { role, ...run, starts: clockOf(run.from) } : null;
+}
 
-/** تنبيه لمشرف السيارات: سيارة المدارس تخرج قريبًا لرحلتها، أو null. */
-export function schoolSoonWarning(vehicle: Pick<Vehicle, "kind" | "busRole">, at: Date) {
-  const soon = isSchoolCar(vehicle) ? schoolRunSoon(at) : null;
-  return soon ? `سيارة المدارس · تخرج ${soon.starts}` : null;
+/** سبب عدم إرسال السيارة في وقتها المحجوز: «في رحلة المدارس حتى 14:00» أو «في خدمة الجامعة». */
+export function reservedText(reserved: NonNullable<ReturnType<typeof reservedRun>>) {
+  if (reserved.role === SCHOOL_ROLE) return reserved.allDay ? "في خدمة المدارس" : `في رحلة المدارس حتى ${reserved.until}`;
+  return reserved.allDay ? "في خدمة الجامعة" : `في رحلة الجامعة حتى ${reserved.until}`;
+}
+
+/** تنبيه لمشرف السيارات: السيارة تخرج قريبًا لوقتها المحجوز («سيارة المدارس · تخرج 11:00»)، أو null. */
+export function reservedSoonWarning(vehicle: Pick<Vehicle, "kind" | "busRole">, at: Date, schedules?: RoleSchedules | null) {
+  const soon = reservedSoon(vehicle, at, schedules);
+  if (!soon) return null;
+  return soon.role === SCHOOL_ROLE ? `سيارة المدارس · تخرج ${soon.starts}` : `باص الجامعة · يخرج ${soon.starts}`;
 }
 
 /** الباصات غير متاحة في هذا الوقت (6–9 صباحًا). */
@@ -919,12 +983,12 @@ export type TripLoad = { appointments: ClinicAppointment[]; transfer?: boolean; 
 
 /** عدد الأشخاص في الرحلة. */
 export const loadPersons = (trip: TripLoad) => trip.persons ?? trip.appointments.reduce((sum, appointment) => sum + tripPersons(appointment), 0);
-/** وقت اختيار السيارة (لساعات الباصات ووقت الذروة) ودليل المستشفيات */
+/** وقت اختيار السيارة (لساعات الباصات ووقت الذروة) ودليل المستشفيات، وأوقات سيارات المدارس وباص الجامعة (schedules) */
 /**
  * regularForSpecial: مشرف السيارات يختار السيارة بنفسه، فتُقبل سيارة عادية لضيف احتياجات خاصة بعد موافقته على
  * التنبيه (`regularForSpecialWarning`). الاقتراح والتوزيع التلقائي والضم والتوجيه بلا هذا الخيار.
  */
-export type VehicleRules = { now?: Date; hospitals?: Hospital[]; regularForSpecial?: boolean };
+export type VehicleRules = { now?: Date; hospitals?: Hospital[]; regularForSpecial?: boolean; schedules?: RoleSchedules | null };
 
 /** تنبيه سيارة عادية لرحلة فيها ضيف احتياجات خاصة (يُرسلها مشرف السيارات بعد الموافقة عليه)، أو null */
 export function regularForSpecialWarning(vehicle: Pick<Vehicle, "kind">, appointments: Pick<ClinicAppointment, "kind">[]) {
@@ -938,8 +1002,8 @@ export function regularForSpecialWarning(vehicle: Pick<Vehicle, "kind">, appoint
  *   والضيف الواحد مع مرافقيه يُقبل دائمًا في السيارة المناسبة له.
  * - الباصات غير متاحة من 6 إلى 9 صباحًا.
  * - باص المجمع يلف داخل المجمع، ويُرسل فقط إلى مستشفى الثمامة (ذهابًا أو عودة) وقت الذروة.
- * - باص الجامعة للرحلات غير الطبية فقط.
- * - سيارة المدارس لا تُرسل في رحلة المدارس (الأحد إلى الخميس 11:00–14:00 و17:30–19:00).
+ * - سيارة المدارس وباص الجامعة لا يُرسلان في أي رحلة (طبية أو غير طبية) في أوقاتهما المحجوزة (reservedRun:
+ *   أوقات المدارس الأحد إلى الخميس 11:00–14:00 و17:30–19:00، وباص الجامعة طوال اليوم، ما لم يغيّرها مشرف السيارات).
  */
 export function vehicleRestriction(vehicle: Vehicle, trip: TripLoad, rules: VehicleRules = {}): string | null {
   const now = rules.now ?? new Date();
@@ -947,8 +1011,8 @@ export function vehicleRestriction(vehicle: Vehicle, trip: TripLoad, rules: Vehi
   if (!hasDriver(vehicle)) return "بلا سائق";
   const role = busRoleOf(vehicle);
   if (role === "clinic") return "في خدمة العيادة";
-  const school = isSchoolCar(vehicle) ? schoolRun(now) : null;
-  if (school) return `في رحلة المدارس حتى ${school.until}`;
+  const reserved = reservedRun(vehicle, now, rules.schedules);
+  if (reserved) return reservedText(reserved);
   if (!rules.regularForSpecial && needsAccessibleVehicle(trip.appointments) && vehicle.kind !== "احتياجات خاصة") return "تحتاج سيارة احتياجات خاصة";
   if (specialCount(trip.appointments) > MAX_SPECIAL_PER_VEHICLE) return "ضيف احتياجات خاصة واحد فقط في السيارة";
   const seats = vehicleSeats(vehicle);
@@ -962,7 +1026,6 @@ export function vehicleRestriction(vehicle: Vehicle, trip: TripLoad, rules: Vehi
   if (role === "shuttle" && !(isRushHour(now) && !trip.transfer && trip.appointments.every((appointment) => isShuttleTrip(appointment, rules.hospitals)))) {
     return "باص المجمع: مستشفى الثمامة وقت الذروة فقط";
   }
-  if (role === "nonMedical" && !trip.appointments.every(isNonMedical)) return "للرحلات غير الطبية فقط";
   return null;
 }
 
@@ -995,7 +1058,8 @@ export const needsAccessibleVehicle = (appointments: Pick<ClinicAppointment, "ki
 
 /**
  * السيارة المقترحة لرحلة (ضيف أو أكثر): من السيارات التي تناسبها الآن (vehicleRestriction: المقاعد والباصات)،
- * ثم كما في assignVehicle. الرحلات غير الطبية تأخذ باصها أولًا، وباص المجمع آخر خيار حتى يبقى في المجمع.
+ * ثم كما في assignVehicle. باص المجمع آخر خيار حتى يبقى في المجمع، وبعده سيارة المدارس أو باص الجامعة الذي
+ * يخرج لوقته المحجوز خلال ساعة (reservedSoon) حتى لا يتأخر عنه.
  */
 export function assignVehicleForTrips(
   vehicles: Vehicle[],
@@ -1005,17 +1069,11 @@ export function assignVehicleForTrips(
   rules: VehicleRules & { transfer?: boolean; persons?: number } = {},
 ) {
   const trip = { appointments, transfer: rules.transfer, persons: rules.persons };
-  const nonMedical = appointments.length > 0 && appointments.every(isNonMedical);
   const candidates = vehicles
     .map((vehicle, index) => ({ vehicle, index }))
     .filter(({ vehicle }) => !vehicleRestriction(vehicle, trip, rules));
-  // سيارة المدارس التي تخرج لرحلتها قريبًا آخر خيار حتى لا تتأخر عنها
-  const schoolSoon = Boolean(schoolRunSoon(rules.now ?? new Date()));
-  return pickVehicle(candidates, load, rank, (vehicle) => {
-    const role = busRoleOf(vehicle);
-    if (schoolSoon && isSchoolCar(vehicle)) return 3;
-    return role === "nonMedical" && nonMedical ? 0 : role === "shuttle" ? 2 : 1;
-  });
+  const now = rules.now ?? new Date();
+  return pickVehicle(candidates, load, rank, (vehicle) => (reservedSoon(vehicle, now, rules.schedules) ? 3 : busRoleOf(vehicle) === "shuttle" ? 2 : 1));
 }
 
 /**

@@ -196,17 +196,21 @@ export function EmptyState({ icon: IconComponent, title, hint }: { icon: Icon; t
 }
 
 /** مجموعة أزرار يُختار منها واحد (تبويبات أو خيارات قليلة). */
-export function Segmented<T extends string>({ options, value, onChange, label, size = "md", full = false }: {
-  options: { value: T; label: ReactNode; icon?: Icon }[];
+export function Segmented<T extends string>({ options, value, onChange, label, size = "md", full = false, columns }: {
+  /** span: عدد الأعمدة التي يأخذها الخيار مع columns (لعنوان أطول) */
+  options: { value: T; label: ReactNode; icon?: Icon; span?: 2 | 3 }[];
   value: T;
   onChange: (value: T) => void;
   label: string;
   size?: "sm" | "md";
   /** يملأ العرض المتاح بأزرار متساوية (داخل الأقسام الضيقة) */
   full?: boolean;
+  /** أزرار متساوية في صفوف من هذا العدد (للخيارات الكثيرة في الأقسام الضيقة) */
+  columns?: 2 | 3 | 4;
 }) {
   return (
-    <div role="group" aria-label={label} className={cx("max-w-full gap-1 overflow-x-auto rounded-xl bg-slate-200/60 p-1 dark:bg-slate-800", full ? "flex w-full" : "inline-flex")}>
+    <div role="group" aria-label={label} className={cx("max-w-full gap-1 overflow-x-auto rounded-xl bg-slate-200/60 p-1 dark:bg-slate-800",
+      columns ? cx("grid w-full", columns === 2 ? "grid-cols-2" : columns === 3 ? "grid-cols-3" : "grid-cols-4") : full ? "flex w-full" : "inline-flex")}>
       {options.map((option) => {
         const active = option.value === value;
         const IconComponent = option.icon;
@@ -218,8 +222,8 @@ export function Segmented<T extends string>({ options, value, onChange, label, s
             onClick={() => onChange(option.value)}
             className={cx(
               "inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg font-semibold transition",
-              full ? "min-w-0 flex-1 justify-center" : "shrink-0",
-              size === "sm" ? cx("h-8 text-xs", full ? "px-1.5" : "px-3") : "h-9 px-3.5 text-sm",
+              columns ? cx("min-w-0 justify-center", option.span === 2 && "col-span-2", option.span === 3 && "col-span-3") : full ? "min-w-0 flex-1 justify-center" : "shrink-0",
+              size === "sm" ? cx("h-8 text-xs", full || columns ? "px-1.5" : "px-3") : "h-9 px-3.5 text-sm",
               active ? "bg-white text-ink shadow-[0_1px_3px_rgba(11,37,69,.12)] dark:bg-slate-700 dark:text-white" : "text-slate-600 hover:text-ink dark:text-slate-300 dark:hover:text-white",
             )}
           >

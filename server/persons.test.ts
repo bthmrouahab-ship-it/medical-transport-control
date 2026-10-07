@@ -67,14 +67,15 @@ describe("persons in the car", () => {
   });
 
   it("splits a bus group across cars by persons when the bus is taken", () => {
-    const school = ["S1", "S2", "S3"].map((id) => guest(id, "09:50", [], { clinic: "المدرسة", hospitalId: undefined, category: "غير طبية" }));
+    // 4 ضيوف إلى المدرسة أولًا (أكثر من السيدان): يأخذون الباص
+    const school = ["S1", "S2", "S3", "S4"].map((id) => guest(id, "09:50", [], { clinic: "المدرسة", hospitalId: undefined, category: "غير طبية" }));
     const university = ["U1", "U2", "U3"].map((id) => guest(id, "10:00", [ESCORT], { clinic: "الجامعة", hospitalId: undefined, category: "غير طبية" }));
     const trips = [...school, ...university].map((appointment) => ({ appointment, request: ask(appointment) }));
-    const plan = planDispatch(trips, [car("NM", "باص", { busRole: "nonMedical" }), car("A"), car("B"), car("C")], new Map(), undefined, undefined, { now: at(9, 30) });
-    const bus = plan.assignments.find((item) => item.vehicle.plate === "NM");
-    expect(bus?.requestIds).toEqual(["R-S1", "R-S2", "R-S3"]);
+    const plan = planDispatch(trips, [car("BUS", "باص"), car("A"), car("B"), car("C")], new Map(), undefined, undefined, { now: at(9, 30) });
+    const bus = plan.assignments.find((item) => item.vehicle.plate === "BUS");
+    expect(bus?.requestIds).toEqual(["R-S1", "R-S2", "R-S3", "R-S4"]);
     // ضيوف الجامعة مع مرافقيهم (6 أشخاص): سيارة لكل ضيف ومرافقه
-    const cars = plan.assignments.filter((item) => item.vehicle.plate !== "NM");
+    const cars = plan.assignments.filter((item) => item.vehicle.plate !== "BUS");
     expect(cars.map((item) => item.persons)).toEqual([2, 2, 2]);
     expect(plan.waiting).toEqual([]);
   });

@@ -58,6 +58,18 @@ const VEHICLE_KINDS = ['سيدان', 'احتياجات خاصة', 'باص'];
 const BUS_ROLE_VALUES = ['shuttle', 'nonMedical', 'clinic'];
 const SCHOOL_ROLE = 'school';
 const BUS_ROLE_LABELS = ['shuttle' => 'باص المجمع', 'nonMedical' => 'باص الجامعة', 'clinic' => 'باص العيادة', 'school' => 'سيارة المدارس'];
+/**
+ * أوقات سيارات المدارس وباص الجامعة المحجوزة (meta/schedules: { data: { school, nonMedical } }، يعدّلها مشرف السيارات
+ * والمدير): أيام الأسبوع (0 الأحد) وأوقات كل يوم بالدقائق. ما لم يُحفظ يأخذ الافتراضي — نفس DEFAULT_SCHEDULES في
+ * shared/transport.ts: المدارس الأحد إلى الخميس 11:00–14:00 و17:30–19:00، وباص الجامعة طوال اليوم كل الأيام.
+ */
+const SCHEDULED_ROLES = ['school', 'nonMedical'];
+const SCHEDULE_LABELS = ['school' => 'سيارات المدارس', 'nonMedical' => 'باص الجامعة'];
+const DEFAULT_SCHEDULES = [
+    'school' => ['days' => [0, 1, 2, 3, 4], 'runs' => [['from' => 660, 'to' => 840], ['from' => 1050, 'to' => 1140]]],
+    'nonMedical' => ['days' => [0, 1, 2, 3, 4, 5, 6], 'runs' => [['from' => 0, 'to' => 1440]]],
+];
+const MAX_RESERVED_RUNS = 6;
 /** إنهاء مشرف السيارات لرحلة عالقة يقدّم حالة الموعد كما عند استلام الضيف: [قبل => بعد] */
 const TRIP_END_APPOINTMENT_STATUS = ['تم طلب السيارة' => 'تم استلام المريض', 'طلب عودة' => 'مكتملة', 'تم استلام المريض' => 'مكتملة'];
 const HOSPITAL_FIELDS = ['id', 'name', 'nameEn', 'zone', 'lat', 'lng', 'aliases', 'verified', '_o'];
@@ -423,6 +435,38 @@ function valid_bus_role(array $vehicle): bool
     $kind = $vehicle['kind'] ?? null;
     return (in_array($vehicle['busRole'], BUS_ROLE_VALUES, true) && $kind === 'باص')
         || ($vehicle['busRole'] === SCHOOL_ROLE && $kind === 'احتياجات خاصة');
+}
+
+/** أوقات تخصيص صالحة: أيام مختلفة 0–6، وحتى 6 أوقات مرتبة لا تتداخل داخل اليوم (validSchedule في shared/transport.ts). */
+function valid_schedule($schedule): bool
+{
+    if (!is_array($schedule) || !only(array_keys($schedule), ['days', 'runs'])) return false;
+    $days = $schedule['days'] ?? null;
+    $runs = $schedule['runs'] ?? null;
+    if (!is_array($days) || !array_is_list($days) || !is_array($runs) || !array_is_list($runs) || count($runs) > MAX_RESERVED_RUNS) return false;
+    foreach ($days as $day) {
+        if (!is_int($day) || $day < 0 || $day > 6) return false;
+    }
+    if (count(array_unique($days)) !== count($days)) return false;
+    $end = 0;
+    foreach ($runs as $run) {
+        if (!is_array($run) || !only(array_keys($run), ['from', 'to'])) return false;
+        $from = $run['from'] ?? null;
+        $to = $run['to'] ?? null;
+        if (!is_int($from) || !is_int($to) || $from < $end || $from >= $to || $to > 1440) return false;
+        $end = $to;
+    }
+    return true;
+}
+
+/** مستند الأوقات: لكل تخصيص (school وnonMedical) أوقات صالحة. */
+function valid_schedules($schedules): bool
+{
+    if (!is_array($schedules) || !only(array_keys($schedules), SCHEDULED_ROLES)) return false;
+    foreach ($schedules as $schedule) {
+        if (!valid_schedule($schedule)) return false;
+    }
+    return true;
 }
 
 function is_iso($value): bool
@@ -835,6 +879,11 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
             if ($id === 'audit') {
                 return has_role($user, OFFICE_ROLES) && $after !== null && only(array_keys($after), ['items'])
                     && is_array($after['items'] ?? null) && count($after['items']) <= 50 ? null : $denied;
+            }
+            // أوقات سيارات المدارس وباص الجامعة: مشرف السيارات والمدير
+            if ($id === 'schedules') {
+                if (!has_role($user, ['admin', 'fleetSupervisor']) || $after === null) return $denied;
+                return only(array_keys($after), ['data']) && valid_schedules($after['data'] ?? null) ? null : 'الأوقات غير صالحة';
             }
             // ملخص الإحصائيات القديم (إجماليات فقط، بلا بيانات مرضى)
             if ($id === 'history') {

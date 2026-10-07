@@ -3,12 +3,16 @@ import {
   assignVehicleForTrips,
   isSchoolCar,
   mergeVehicle,
-  schoolRun,
-  schoolRunSoon,
-  schoolSoonWarning,
+  reservedRun,
+  reservedSoon,
+  reservedSoonWarning,
+  scheduleOf,
+  scheduleText,
+  validSchedule,
   vehicleRestriction,
   vehicleRoleOf,
   type ClinicAppointment,
+  type RoleSchedules,
   type Vehicle,
 } from "../shared/transport";
 import { serviceHours, summarizeTrips, tripsFromSystem, type ServiceEvent } from "../shared/stats";
@@ -35,7 +39,8 @@ describe("school cars (special needs vehicles reserved for the school runs)", ()
   });
 
   it("is not sent during the school runs, Sunday to Thursday 11:00–14:00 and 17:30–19:00", () => {
-    expect(schoolRun(at(11))?.until).toBe("14:00");
+    expect(reservedRun(school, at(11))?.until).toBe("14:00");
+    expect(reservedRun(accessible, at(11))).toBeNull();
     expect(vehicleRestriction(school, trip, { now: at(12, 30) })).toBe("في رحلة المدارس حتى 14:00");
     expect(vehicleRestriction(school, trip, { now: at(18) })).toBe("في رحلة المدارس حتى 19:00");
     // بين الرحلتين وبعدهما وفي العطلة: متاحة
@@ -47,10 +52,10 @@ describe("school cars (special needs vehicles reserved for the school runs)", ()
   });
 
   it("is the last choice shortly before its run, with a warning for the fleet supervisor", () => {
-    expect(schoolRunSoon(at(10, 15))?.starts).toBe("11:00");
-    expect(schoolRunSoon(at(9))).toBeNull();
-    expect(schoolSoonWarning(school, at(17))).toBe("سيارة المدارس · تخرج 17:30");
-    expect(schoolSoonWarning(accessible, at(17))).toBeNull();
+    expect(reservedSoon(school, at(10, 15))?.starts).toBe("11:00");
+    expect(reservedSoon(school, at(9))).toBeNull();
+    expect(reservedSoonWarning(school, at(17))).toBe("سيارة المدارس · تخرج 17:30");
+    expect(reservedSoonWarning(accessible, at(17))).toBeNull();
     // قبل رحلة المدارس بساعة: السيارة المجهزة الأخرى أولًا ولو كانت أكثر رحلات
     const load = new Map([["AC", 3], ["SC", 0]]);
     expect(assignVehicleForTrips([school, accessible], trip.appointments, load, undefined, { now: at(10, 30) })?.plate).toBe("AC");
@@ -82,5 +87,59 @@ describe("school cars (special needs vehicles reserved for the school runs)", ()
     }], [accessible, school], DEFAULT_HOSPITALS, at(23, 0, 9));
     const fridaySummary = summarizeTrips(fridayTrips, DEFAULT_HOSPITALS, null, fridayService.days);
     expect(fridaySummary.workingVehicles).toMatchObject({ total: 1, roleBuses: [] });
+  });
+
+  it("uses the times saved by the fleet supervisor (days, runs, or all day)", () => {
+    // الأحد والثلاثاء فقط 12:00–13:30
+    const schedules: RoleSchedules = { school: { days: [0, 2], runs: [{ from: 12 * 60, to: 13 * 60 + 30 }] } };
+    expect(scheduleText(scheduleOf(schedules, "school"))).toBe("الأحد والثلاثاء 12:00–13:30");
+    expect(vehicleRestriction(school, trip, { now: at(12, 30), schedules })).toBe("في رحلة المدارس حتى 13:30");
+    expect(vehicleRestriction(school, trip, { now: at(11), schedules })).toBeNull();
+    expect(vehicleRestriction(school, trip, { now: at(18), schedules })).toBeNull();
+    expect(vehicleRestriction(school, trip, { now: at(12, 30, 5), schedules })).toBeNull(); // الإثنين
+    expect(reservedSoonWarning(school, at(11, 30), schedules)).toBe("سيارة المدارس · تخرج 12:00");
+    // طوال اليوم، أو بلا أوقات
+    expect(vehicleRestriction(school, trip, { now: at(8), schedules: { school: { days: [0], runs: [{ from: 0, to: 1440 }] } } })).toBe("في خدمة المدارس");
+    expect(vehicleRestriction(school, trip, { now: at(12), schedules: { school: { days: [], runs: [] } } })).toBeNull();
+    // أوقات غير صالحة (متداخلة أو مقلوبة): الافتراضية
+    const overlapping = { days: [0], runs: [{ from: 600, to: 700 }, { from: 650, to: 800 }] };
+    expect(validSchedule(overlapping)).toBe(false);
+    expect(validSchedule({ days: [0, 0], runs: [] })).toBe(false);
+    expect(validSchedule({ days: [1], runs: [{ from: 700, to: 600 }] })).toBe(false);
+    expect(scheduleOf({ school: overlapping }, "school")).toEqual(scheduleOf(null, "school"));
+    expect(scheduleText(scheduleOf(null, "school"))).toBe("من الأحد إلى الخميس 11:00–14:00 و17:30–19:00");
+    expect(scheduleText(scheduleOf(null, "nonMedical"))).toBe("كل الأيام طوال اليوم");
+  });
+
+  it("counts the saved times in the work hours, and an all-day university bus as working without hours", () => {
+    const day = "2026-10-04";
+    const events: ServiceEvent[] = [
+      { at: new Date(2026, 9, 3, 20).toISOString(), plate: "SC", kind: "احتياجات خاصة", available: true, hasDriver: true, busRole: "school", driver: "سائق SC" },
+      { at: new Date(2026, 9, 3, 20).toISOString(), plate: "UB", kind: "باص", available: true, hasDriver: true, busRole: "nonMedical", driver: "سائق UB" },
+    ];
+    const service = serviceHours(events, day, day, at(23));
+    const trips = tripsFromSystem([special("A")], [{
+      id: "R1", appointmentId: "A", direction: "ذهاب", status: "وصلت الوجهة", notificationMethod: "whatsapp", createdAt: "09:00",
+      vehiclePlate: "AC", driver: "سائق AC", notificationSentAt: "09:00", pickedUpAt: at(9, 15).toISOString(), arrivedAt: at(9, 45).toISOString(), arrivalSource: "gps",
+    }], [accessible, school], DEFAULT_HOSPITALS, at(23));
+    // الأوقات الافتراضية: باص الجامعة طوال اليوم سيارة عاملة بلا ساعات عمل
+    const summary = summarizeTrips(trips, DEFAULT_HOSPITALS, null, service.days);
+    expect(summary.workingVehicles?.total).toBe(3);
+    expect(summary.workHours?.vehicles.find((item) => item.plate === "UB")).toBeUndefined();
+    // أوقات محفوظة: المدارس 12:00–13:00، وباص الجامعة 7:00–8:30 الأحد فقط
+    const schedules: RoleSchedules = {
+      school: { days: [0], runs: [{ from: 12 * 60, to: 13 * 60 }] },
+      nonMedical: { days: [0], runs: [{ from: 7 * 60, to: 8 * 60 + 30 }] },
+    };
+    const saved = summarizeTrips(trips, DEFAULT_HOSPITALS, null, service.days, schedules);
+    expect(saved.workHours?.vehicles.find((item) => item.plate === "SC")).toMatchObject({ minutes: 60, first: 720, last: 780 });
+    expect(saved.workHours?.vehicles.find((item) => item.plate === "UB")).toMatchObject({ minutes: 90, first: 420, last: 510 });
+    // يوم ليس من أيامهما: ليستا سيارتين عاملتين
+    const monday = "2026-10-05";
+    const mondayTrips = tripsFromSystem([{ ...special("B"), appointmentDate: monday }], [{
+      id: "R2", appointmentId: "B", direction: "ذهاب", status: "تم إرسال السيارة", notificationMethod: "whatsapp", createdAt: "09:00", vehiclePlate: "AC", driver: "سائق AC", notificationSentAt: "09:00",
+    }], [accessible, school], DEFAULT_HOSPITALS, at(23, 0, 5));
+    const mondaySummary = summarizeTrips(mondayTrips, DEFAULT_HOSPITALS, null, serviceHours(events, monday, monday, at(23, 0, 5)).days, schedules);
+    expect(mondaySummary.workingVehicles).toMatchObject({ total: 1, roleBuses: [] });
   });
 });
