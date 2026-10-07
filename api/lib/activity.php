@@ -31,7 +31,7 @@ const APPOINTMENT_FIELD_LABELS = [
     'appointmentType' => 'نوع الموعد',
 ];
 
-const VEHICLE_FIELD_LABELS = ['plate' => 'رقم السيارة', 'driver' => 'السائق', 'phone' => 'الهاتف', 'kind' => 'النوع', 'busRole' => 'تخصيص الباص'];
+const VEHICLE_FIELD_LABELS = ['plate' => 'رقم السيارة', 'driver' => 'السائق', 'phone' => 'الهاتف', 'kind' => 'النوع', 'busRole' => 'التخصيص'];
 
 const DRIVER_FIELD_LABELS = ['name' => 'الاسم', 'phone' => 'رقم الموبايل'];
 
@@ -137,6 +137,38 @@ function changes_text(array $changes): string
  * وصف عملية كتابة واحدة على البيانات المشتركة: [النوع، العملية، الملخص، البيانات، تلقائية؟]،
  * أو null إن لم تكن تستحق التسجيل. العملية التلقائية تُسجَّل باسم «النظام».
  */
+/** أوقات التخصيص، أو الافتراضية إن لم تُحفظ أو لم تكن صالحة (scheduleOf في shared/transport.ts). */
+function schedule_or_default($schedule, string $role): array
+{
+    return valid_schedule($schedule) ? $schedule : DEFAULT_SCHEDULES[$role];
+}
+
+/** أوقات التخصيص المحفوظة الآن (meta/schedules). */
+function saved_schedule(PDO $pdo, string $role): array
+{
+    $stmt = $pdo->prepare("SELECT data FROM docs WHERE col = 'meta' AND id = 'schedules'");
+    $stmt->execute();
+    $data = decode_doc($stmt->fetchColumn() ?: null);
+    return schedule_or_default($data['data'][$role] ?? null, $role);
+}
+
+/** «من الأحد إلى الخميس 11:00–14:00 و17:30–19:00»، أو «كل الأيام طوال اليوم» (scheduleText في shared/transport.ts). */
+function schedule_text(array $schedule): string
+{
+    $names = ['الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
+    $days = $schedule['days'];
+    sort($days);
+    if (!$days || !$schedule['runs']) return 'بلا أوقات محجوزة';
+    $consecutive = count($days) > 2 && $days[count($days) - 1] - $days[0] === count($days) - 1;
+    $daysText = count($days) === 7 ? 'كل الأيام'
+        : ($consecutive ? "من {$names[$days[0]]} إلى {$names[$days[count($days) - 1]]}" : implode(' و', array_map(fn($day) => $names[$day], $days)));
+    $clock = fn(int $minutes) => sprintf('%02d:%02d', intdiv($minutes, 60), $minutes % 60);
+    $runs = $schedule['runs'];
+    $runsText = count($runs) === 1 && $runs[0]['from'] === 0 && $runs[0]['to'] >= 1440 ? 'طوال اليوم'
+        : implode(' و', array_map(fn($run) => $clock($run['from']) . '–' . $clock($run['to']), $runs));
+    return "$daysText $runsText";
+}
+
 function describe_write(PDO $pdo, string $col, string $id, ?array $before, ?array $after): ?array
 {
     $changed = ($before !== null && $after !== null) ? array_values(array_diff(changed_keys($before, $after), ['_o'])) : [];
@@ -339,6 +371,12 @@ function describe_write(PDO $pdo, string $col, string $id, ?array $before, ?arra
                     : "إعادة السيارة $plate إلى 3 أشخاص", $details];
             }
             if ($changed === ['busRole']) {
+                // سيارة المدارس: سيارة احتياجات خاصة محجوزة في أوقات المدارس
+                if (($after['kind'] ?? '') !== 'باص') {
+                    return ['vehicle', 'vehicle.bus_role', ($after['busRole'] ?? '') === SCHOOL_ROLE
+                        ? "تخصيص السيارة $plate للمدارس (" . schedule_text(saved_schedule($pdo, SCHOOL_ROLE)) . ')'
+                        : "إلغاء تخصيص السيارة $plate للمدارس", $details];
+                }
                 $label = BUS_ROLE_LABELS[$after['busRole'] ?? ''] ?? '';
                 return ['vehicle', 'vehicle.bus_role', $label ? "تخصيص الباص $plate: $label" : "إلغاء تخصيص الباص $plate (باص عادي)", $details];
             }
@@ -401,6 +439,16 @@ function describe_write(PDO $pdo, string $col, string $id, ?array $before, ?arra
         case 'meta':
             // سجل العمليات القديم (قبل هذا السجل) لا يُسجَّل
             if ($id === 'history') return ['stats', 'stats.history', 'حفظ ملخص الإحصائيات السابقة', []];
+            // أوقات سيارات المدارس وباص الجامعة: الجديدة وما كانت عليه
+            if ($id === 'schedules') {
+                $parts = [];
+                foreach (SCHEDULED_ROLES as $role) {
+                    $old = schedule_text(schedule_or_default($before['data'][$role] ?? null, $role));
+                    $new = schedule_text(schedule_or_default($after['data'][$role] ?? null, $role));
+                    if ($old !== $new) $parts[] = SCHEDULE_LABELS[$role] . ": $new (كانت $old)";
+                }
+                return $parts ? ['vehicle', 'vehicle.schedule', 'تعديل أوقات ' . implode('، وأوقات ', $parts), []] : null;
+            }
             return null;
     }
     return null;

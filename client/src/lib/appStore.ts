@@ -18,6 +18,7 @@ export const SHARED_KEYS = [
   "fox_drivers",
   "fox_private_cars",
   "fox_special_needs",
+  "fox_schedules",
 ] as const;
 export type SharedKey = (typeof SHARED_KEYS)[number];
 

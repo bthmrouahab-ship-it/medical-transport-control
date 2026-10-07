@@ -29,9 +29,13 @@ const COLLECTIONS: Partial<Record<SharedKey, { col: string; idField: string; sor
   // ذوو الاحتياجات الخاصة (للمدير فقط): مستثنون من منع السيارات الخاصة
   fox_special_needs: { col: "specialNeeds", idField: "id" },
 };
-/** قيم تُحفظ كمستند واحد: ملخص الإحصائيات القديم. (سجل العمليات يكتبه الخادم في جدول مستقل.) */
+/**
+ * قيم تُحفظ كمستند واحد: ملخص الإحصائيات القديم، وأوقات سيارات المدارس وباص الجامعة (RoleSchedules).
+ * (سجل العمليات يكتبه الخادم في جدول مستقل.)
+ */
 const SINGLE_DOCS: Partial<Record<SharedKey, { col: string; id: string; field: string }>> = {
   fox_history: { col: "meta", id: "history", field: "data" },
+  fox_schedules: { col: "meta", id: "schedules", field: "data" },
 };
 
 /** كل كم ثانية يسأل الموقع عن تغييرات المستخدمين الآخرين (أبطأ عندما تكون الصفحة في الخلفية). */

@@ -3,6 +3,7 @@ import {
   assignVehicleForTrips,
   buildTripGroups,
   planDispatch,
+  reservedSoonWarning,
   seatsFor,
   suggestJoinDispatched,
   vehicleRestriction,
@@ -58,11 +59,25 @@ describe("buses", () => {
     expect(assignVehicleForTrips([shuttle], thumama.appointments, new Map(), undefined, { now: at(14) })?.plate).toBe("SH");
   });
 
-  it("give non-medical trips to their bus first, and keep it for them", () => {
-    const trip = [outing("U", "10:00")];
-    expect(assignVehicleForTrips([car("A"), outings], trip, new Map([["NM", 4]]), undefined, { now: at(10) })?.plate).toBe("NM");
-    expect(vehicleRestriction(outings, { appointments: [guest("A", "10:00")] }, { now: at(10) })).toBe("للرحلات غير الطبية فقط");
-    expect(assignVehicleForTrips([outings], [guest("A", "10:00")], new Map(), undefined, { now: at(10) })).toBeNull();
+  it("never send the university bus in its reserved times: all day unless the fleet supervisor sets them", () => {
+    const medical = { appointments: [guest("A", "10:00", { clinic: "مستشفى الوكرة", hospitalId: "wakra" })] };
+    const trip = { appointments: [outing("U", "10:00")] };
+    // افتراضيًا: لا رحلات طبية ولا غير طبية
+    expect(vehicleRestriction(outings, medical, { now: at(10) })).toBe("في خدمة الجامعة");
+    expect(vehicleRestriction(outings, trip, { now: at(10) })).toBe("في خدمة الجامعة");
+    expect(assignVehicleForTrips([outings], trip.appointments, new Map(), undefined, { now: at(10) })).toBeNull();
+    // أوقات يحددها مشرف السيارات: الأحد إلى الخميس 7:00–9:30 و13:00–15:00
+    const schedules = { nonMedical: { days: [0, 1, 2, 3, 4], runs: [{ from: 7 * 60, to: 9 * 60 + 30 }, { from: 13 * 60, to: 15 * 60 }] } };
+    expect(vehicleRestriction(outings, trip, { now: at(13, 30), schedules })).toBe("في رحلة الجامعة حتى 15:00");
+    expect(vehicleRestriction(outings, medical, { now: at(13, 30), schedules })).toBe("في رحلة الجامعة حتى 15:00");
+    // خارج أوقاته باص عادي: للرحلات الطبية وغير الطبية
+    expect(vehicleRestriction(outings, medical, { now: at(10), schedules })).toBeNull();
+    expect(vehicleRestriction(outings, trip, { now: at(10), schedules })).toBeNull();
+    expect(vehicleRestriction(outings, trip, { now: new Date(2026, 9, 2, 13, 30), schedules })).toBeNull(); // الجمعة
+    // قبل وقته بساعة: آخر خيار ولو كان أقل رحلات، مع تنبيه لمشرف السيارات
+    expect(assignVehicleForTrips([outings, car("A")], medical.appointments, new Map([["A", 5]]), undefined, { now: at(12, 15), schedules })?.plate).toBe("A");
+    expect(reservedSoonWarning(outings, at(12, 15), schedules)).toBe("باص الجامعة · يخرج 13:00");
+    expect(assignVehicleForTrips([outings, car("A")], medical.appointments, new Map([["A", 5]]), undefined, { now: at(10), schedules })?.plate).toBe("NM");
   });
 
   it("never dispatch the clinic bus", () => {
@@ -78,11 +93,12 @@ describe("buses", () => {
   it("group up to 14 passengers when a suitable bus is free", () => {
     const five = ["U1", "U2", "U3", "U4", "U5"].map((id, index) => outing(id, `10:${String(index * 5).padStart(2, "0")}`));
     const items = five.map((appointment) => ({ appointment, direction: "ذهاب" as const }));
-    // باص الرحلات غير الطبية متاح: رحلة واحدة لخمسة
-    expect(buildTripGroups(items, undefined, seatsFor([outings, car("A")], { now: at(10) })).map((group) => group.appointmentIds.length)).toEqual([5]);
-    // بلا باص (أو قبل 9 صباحًا): 3 ثم 2
+    // باص متاح: رحلة واحدة لخمسة
+    expect(buildTripGroups(items, undefined, seatsFor([bus, car("A")], { now: at(10) })).map((group) => group.appointmentIds.length)).toEqual([5]);
+    // بلا باص (أو قبل 9 صباحًا، أو باص الجامعة في وقته): 3 ثم 2
     expect(buildTripGroups(items, undefined, seatsFor([car("A")], { now: at(10) })).map((group) => group.appointmentIds.length)).toEqual([3, 2]);
-    expect(buildTripGroups(items, undefined, seatsFor([outings], { now: at(8) })).map((group) => group.appointmentIds.length)).toEqual([3, 2]);
+    expect(buildTripGroups(items, undefined, seatsFor([bus], { now: at(8) })).map((group) => group.appointmentIds.length)).toEqual([3, 2]);
+    expect(buildTripGroups(items, undefined, seatsFor([outings, car("A")], { now: at(10) })).map((group) => group.appointmentIds.length)).toEqual([3, 2]);
   });
 
   it("sends the shuttle with Al Thumama guests at rush hour, and cars otherwise", () => {
@@ -98,10 +114,10 @@ describe("buses", () => {
     const university = ["U1", "U2", "U3", "U4", "U5"].map((id) => outing(id, "10:00"));
     const school = ["S1", "S2", "S3", "S4", "S5"].map((id) => outing(id, "10:00", "المدرسة"));
     const trips = [...university, ...school].map((appointment) => ({ appointment, request: ask(appointment) }));
-    const plan = planDispatch(trips, [outings, car("A"), car("B")], new Map(), undefined, undefined, { now: at(9, 30) });
+    const plan = planDispatch(trips, [bus, car("A"), car("B")], new Map(), undefined, undefined, { now: at(9, 30) });
     const sizes = plan.assignments.map((item) => [item.vehicle.plate, item.requestIds.length]);
-    expect(sizes).toContainEqual(["NM", 5]);
-    expect(sizes.filter(([plate]) => plate !== "NM").map(([, size]) => size).sort()).toEqual([2, 3]);
+    expect(sizes).toContainEqual(["BUS", 5]);
+    expect(sizes.filter(([plate]) => plate !== "BUS").map(([, size]) => size).sort()).toEqual([2, 3]);
     expect(plan.assignments.flatMap((item) => item.requestIds)).toHaveLength(10);
     expect(plan.waiting).toEqual([]);
   });
@@ -111,7 +127,7 @@ describe("buses", () => {
     const newcomer = outing("U4", "10:05");
     const sent = (plate: string) => riders.map((appointment) => ({ appointment, request: ask(appointment, { status: "تم إرسال السيارة", vehiclePlate: plate, groupId: `G-${plate}` }) }));
     const join = (plate: string, vehicles: Vehicle[]) => suggestJoinDispatched([{ appointment: newcomer, request: ask(newcomer) }], sent(plate), undefined, vehicles, { now: at(10) });
-    expect(join("NM", [outings])).toEqual([expect.objectContaining({ plate: "NM" })]);
+    expect(join("BUS", [bus])).toEqual([expect.objectContaining({ plate: "BUS" })]);
     expect(join("A", [car("A")])).toEqual([]);
   });
 });

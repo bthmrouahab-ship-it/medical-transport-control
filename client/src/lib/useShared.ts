@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { DEFAULT_HOSPITALS, type Hospital } from "@shared/hospitals";
 import type { Guest, PrivateCar, SpecialNeed } from "@shared/guests";
 import type { Driver } from "@shared/drivers";
+import type { RoleSchedules } from "@shared/transport";
 import { loadState, subscribeState, type SharedKey } from "./appStore";
 import { locationFreshness, type VehicleLocation } from "./vehicleLocation";
 
@@ -44,6 +45,11 @@ export function useSpecialNeeds(): SpecialNeed[] {
 /** قائمة السائقين (تصل للمدير ومشرف السيارات): مستقلة عن السيارات. */
 export function useDrivers(): Driver[] {
   return useSharedState<Driver[]>("fox_drivers", []);
+}
+
+/** أوقات سيارات المدارس وباص الجامعة المحفوظة (يعدّلها مشرف السيارات)، وما لم يُحفظ يأخذ الافتراضي (scheduleOf). */
+export function useSchedules(): RoleSchedules | null {
+  return useSharedState<RoleSchedules | null>("fox_schedules", null);
 }
 
 /** الوقت الحالي، يتحدث كل فترة حتى تُغلق مهلة الطلب تلقائيًا على الشاشة. */

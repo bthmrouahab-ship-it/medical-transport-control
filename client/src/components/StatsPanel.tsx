@@ -24,7 +24,7 @@ import {
 import { localDateString, mergeVehicle, type ClinicAppointment, type Vehicle, type VehicleRequest } from "@shared/transport";
 import { summarizeOperations, type OpsEvent } from "@shared/operations";
 import { saveStates } from "@/lib/appStore";
-import { useDrivers } from "@/lib/useShared";
+import { useDrivers, useSchedules } from "@/lib/useShared";
 import { assignDrivers, newDriverId, type Driver } from "@shared/drivers";
 import { api } from "@/lib/api";
 import { authErrorMessage } from "@/lib/auth";
@@ -93,6 +93,8 @@ export default function StatsPanel({ canEdit, actor, hospitals, fleet, appointme
   const [loadError, setLoadError] = useState(false);
   const [preset, setPreset] = useState<Preset>("all");
   const [filter, setFilter] = useState<StatsFilter>(EMPTY_FILTER);
+  // أوقات سيارات المدارس وباص الجامعة: ساعات عملهما وأيامهما سيارات عاملة
+  const schedules = useSchedules();
 
   useEffect(() => watchStatsDays((days) => { setImported(days); setLoadError(false); }, (error) => {
     console.error("[stats]", error);
@@ -180,8 +182,8 @@ export default function StatsPanel({ canEdit, actor, hospitals, fleet, appointme
       ? selected.legacy : null;
     // الباصات المخصصة في الخدمة سيارات عاملة، ما لم تُختر وجهة أو منطقة أو مبنى أو نوع رحلة
     const roleDays = filter.zone === "all" && filter.destination === "all" && filter.building === "all" && filter.category === "all" ? service?.days ?? [] : [];
-    return summarizeTrips(filteredTrips, hospitals, legacy, roleDays);
-  }, [filteredTrips, filter, hospitals, selected.legacy, service]);
+    return summarizeTrips(filteredTrips, hospitals, legacy, roleDays, schedules);
+  }, [filteredTrips, filter, hospitals, selected.legacy, service, schedules]);
 
   const update = (patch: Partial<StatsFilter>) => setFilter((current) => ({ ...current, ...patch }));
   function choosePreset(next: Preset) {

@@ -25,7 +25,7 @@ import {
   BUS_ROLE_LABELS,
   DEFAULT_VEHICLES,
   VEHICLE_KINDS,
-  busRoleOf,
+  vehicleRoleOf,
   localDateString,
   mergeVehicle,
   migrateRequest,
@@ -450,7 +450,7 @@ function VehiclesTab({ vehicles, requests, onChange }: {
                 <div className="flex min-w-0 flex-1 items-center gap-3">
                   <span className={cx("flex h-10 w-10 shrink-0 items-center justify-center rounded-xl", vehicle.available ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-400")}><Truck className="h-5 w-5" /></span>
                   <div className="min-w-0">
-                    <p className="font-semibold text-ink"><span dir="ltr" className="tabular">{vehicle.plate}</span> · {vehicle.kind}{busRoleOf(vehicle) ? ` · ${BUS_ROLE_LABELS[busRoleOf(vehicle)!]}` : ""}</p>
+                    <p className="font-semibold text-ink"><span dir="ltr" className="tabular">{vehicle.plate}</span> · {vehicle.kind}{vehicleRoleOf(vehicle) ? ` · ${BUS_ROLE_LABELS[vehicleRoleOf(vehicle)!]}` : ""}</p>
                     <p className="mt-0.5 flex flex-wrap items-center gap-x-2 text-xs text-slate-500">
                       {vehicle.driver
                         ? <><span>السائق الآن: {vehicle.driver}</span>{vehicle.phone && <><span className="text-slate-300">·</span><span dir="ltr">{vehicle.phone}</span></>}</>
