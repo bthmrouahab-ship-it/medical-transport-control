@@ -840,6 +840,7 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
         {(session.role === "buildingSupervisor" || session.role === "buildingLead") && (
           <SupervisorHome
             uid={session.uid}
+            userName={session.name}
             lead={session.role === "buildingLead"}
             // لا يظهر لمشرف المبنى إلا ما وافق عليه مسؤول العيادة
             appointments={appointments.filter(isApproved)}

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { DEFAULT_HOSPITALS, type Hospital } from "@shared/hospitals";
 import type { Guest, PrivateCar, SpecialNeed } from "@shared/guests";
 import type { Driver } from "@shared/drivers";
+import { normalizeComplaint, sortComplaints, type Complaint } from "@shared/complaints";
 import type { RoleSchedules } from "@shared/transport";
 import { loadState, subscribeState, type SharedKey } from "./appStore";
 import { locationFreshness, type VehicleLocation } from "./vehicleLocation";
@@ -50,6 +51,12 @@ export function useDrivers(): Driver[] {
 /** أوقات سيارات المدارس وباص الجامعة المحفوظة (يعدّلها مشرف السيارات)، وما لم يُحفظ يأخذ الافتراضي (scheduleOf). */
 export function useSchedules(): RoleSchedules | null {
   return useSharedState<RoleSchedules | null>("fox_schedules", null);
+}
+
+/** الشكاوى (تصل لمن سجّلها ولمسؤول مشرفي المباني والمدير)، الأحدث أولًا. */
+export function useComplaints(): Complaint[] {
+  const raw = useSharedState<unknown[]>("fox_complaints", []);
+  return useMemo(() => sortComplaints(raw.map(normalizeComplaint).filter((item): item is Complaint => Boolean(item))), [raw]);
 }
 
 /** الوقت الحالي، يتحدث كل فترة حتى تُغلق مهلة الطلب تلقائيًا على الشاشة. */
