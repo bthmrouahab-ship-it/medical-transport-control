@@ -1,8 +1,8 @@
 import { useMemo, useState } from "react";
 import { CheckCircle2, CircleCheck, CircleDot, Link2, MessageSquareWarning, Plus, Printer, RotateCcw, Search, Trash2, UserRound, X } from "lucide-react";
 import {
-  COMPLAINT_CATEGORIES,
   COMPLAINT_MAX_WITNESSES,
+  COMPLAINT_TOPIC,
   COMPLAINT_RESOLUTION_MAX,
   COMPLAINT_TEXT_MAX,
   buildComplaint,
@@ -17,10 +17,10 @@ import { localDateString } from "@shared/transport";
 import { toWesternDigits } from "@shared/text";
 import { dayText, printComplaint, stampText } from "@/lib/complaints";
 import SignaturePad, { SignatureImage } from "./SignaturePad";
-import { Badge, EmptyState, Modal, btn, choiceClass, cx, inputClass, labelClass, timeLabel } from "./ui-kit";
+import { Badge, EmptyState, Modal, btn, cx, inputClass, labelClass, timeLabel } from "./ui-kit";
 
-/** ضيف مقترح في الاستمارة (من مواعيد اليوم عند مشرف المبنى) */
-export type ComplaintGuest = { name: string; buildingNumber: string; apartmentNumber: string; mobile?: string };
+/** ضيف مقترح في الاستمارة (من مواعيد اليوم عند مشرف المبنى)، مع موعده وسيارة رحلته إن أُرسلت */
+export type ComplaintGuest = { name: string; buildingNumber: string; apartmentNumber: string; mobile?: string; appointmentId?: string; vehiclePlate?: string; driver?: string };
 
 const newId = () => `CMP-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
 
@@ -32,7 +32,7 @@ export function ComplaintStatus({ complaint }: { complaint: Complaint }) {
 }
 
 /**
- * تسجيل شكوى بالاستمارة المعتمدة: الضيف (من مواعيد اليوم أو يُكتب)، والمبنى والشقة، والموضوع والنص، وتاريخها ووقتها،
+ * تسجيل شكوى على النقل والسيارات بالاستمارة المعتمدة: الضيف (من مواعيد اليوم أو يُكتب) ورحلته، والمبنى والشقة، والنص، وتاريخها ووقتها،
  * والتوقيعات على الشاشة (الضيف والمشرف وشاهدان اختياريًا). لا تُعدّل بعد تسجيلها ولا يحذفها إلا مدير النظام.
  */
 export function ComplaintForm({ initial, guests, supervisorName, onSave, onClose }: {
@@ -89,7 +89,7 @@ export function ComplaintForm({ initial, guests, supervisorName, onSave, onClose
       tone="amber"
       icon={MessageSquareWarning}
       title="تسجيل شكوى"
-      description="استمارة الشكاوى المعتمدة في مجمع الثمامة · بعد التسجيل لا تُعدّل الشكوى ولا تُحذف (الحذف لمدير النظام فقط)"
+      description={`شكوى على ${COMPLAINT_TOPIC} بالاستمارة المعتمدة · بعد التسجيل لا تُعدّل الشكوى ولا تُحذف (الحذف لمدير النظام فقط)`}
       onClose={close}
       footer={(
         <>
@@ -123,7 +123,12 @@ export function ComplaintForm({ initial, guests, supervisorName, onSave, onClose
                       role="option"
                       aria-selected={false}
                       onMouseDown={(event) => event.preventDefault()}
-                      onClick={() => { set({ guestName: guest.name, buildingNumber: guest.buildingNumber, apartmentNumber: guest.apartmentNumber, ...(guest.mobile ? { mobile: guest.mobile } : {}) }); setSuggesting(false); }}
+                      onClick={() => {
+                        // الضيف المختار: مبناه وشقته وهاتفه، وموعده وسيارة رحلته
+                        set({ guestName: guest.name, buildingNumber: guest.buildingNumber, apartmentNumber: guest.apartmentNumber, ...(guest.mobile ? { mobile: guest.mobile } : {}),
+                          appointmentId: guest.appointmentId, vehiclePlate: guest.vehiclePlate, driver: guest.driver });
+                        setSuggesting(false);
+                      }}
                       className="flex w-full items-center justify-between gap-2 rounded-lg px-3 py-2 text-start text-sm hover:bg-slate-50"
                     >
                       <span className="font-medium text-ink">{guest.name}</span>
@@ -150,23 +155,6 @@ export function ComplaintForm({ initial, guests, supervisorName, onSave, onClose
           </div>
         </fieldset>
 
-        <fieldset>
-          <legend className={labelClass}>موضوع الشكوى (اختياري)</legend>
-          <div className="flex flex-wrap gap-1.5">
-            {COMPLAINT_CATEGORIES.map((category) => (
-              <button
-                key={category}
-                type="button"
-                aria-pressed={draft.category === category}
-                onClick={() => set({ category: draft.category === category ? undefined : category })}
-                className={cx(choiceClass(draft.category === category), "min-h-9 px-3 text-xs")}
-              >
-                {category}
-              </button>
-            ))}
-          </div>
-        </fieldset>
-
         <label className="block">
           <span className="mb-1.5 flex items-center justify-between text-[13px] font-medium text-slate-700">
             الشكوى
@@ -184,7 +172,7 @@ export function ComplaintForm({ initial, guests, supervisorName, onSave, onClose
         {(draft.appointmentId || trip) && (
           <p className="flex items-start gap-2 rounded-xl bg-slate-50 px-3 py-2 text-xs text-slate-600 ring-1 ring-inset ring-slate-200">
             <Link2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-400" />
-            <span className="min-w-0 flex-1">مرتبطة بموعد الضيف اليوم{trip ? ` · ${trip}` : ""}</span>
+            <span className="min-w-0 flex-1">مرتبطة برحلة الضيف{trip ? ` · ${trip}` : " (لم تُرسل سيارة بعد)"}</span>
             <button type="button" onClick={() => set({ appointmentId: undefined, vehiclePlate: undefined, driver: undefined })} className="shrink-0 font-medium text-slate-500 hover:text-red-700">إلغاء الربط</button>
           </p>
         )}
@@ -280,7 +268,6 @@ export function ComplaintView({ complaint, admin = false, onResolve, onReopen, o
       <div className="space-y-4">
         <div className="flex flex-wrap items-center gap-2">
           <ComplaintStatus complaint={complaint} />
-          {complaint.category && <Badge tone="violet">{complaint.category}</Badge>}
           <span className="text-xs text-slate-500 tabular">{dayText(complaint.date)} · {complaint.time}</span>
         </div>
         <dl className="space-y-1.5">
@@ -335,7 +322,7 @@ export function ComplaintRow({ complaint, showAuthor = false, onOpen }: { compla
         <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
           <span className="font-semibold text-ink">{complaint.guestName}</span>
           <span className="text-xs text-slate-500">مبنى {complaint.buildingNumber} · شقة {complaint.apartmentNumber}</span>
-          {complaint.category && <Badge tone="violet">{complaint.category}</Badge>}
+          {complaint.vehiclePlate && <Badge tone="blue">السيارة {complaint.vehiclePlate}</Badge>}
         </span>
         <span className="mt-1 line-clamp-2 block text-sm text-slate-600">{complaint.text}</span>
         <span className="mt-1 flex flex-wrap items-center gap-x-3 text-xs text-slate-500 tabular">

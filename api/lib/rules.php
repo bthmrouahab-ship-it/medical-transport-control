@@ -103,18 +103,17 @@ const PRIVATE_CAR_MESSAGE = 'هذا الشخص يمتلك سيارة خاصة و
  */
 const SPECIAL_NEED_FIELDS = ['id', 'name', 'gender', 'healthNumber', 'buildingNumber', 'apartmentNumber', 'mobile', 'guestId', '_o'];
 /**
- * الشكاوى (استمارة الشكاوى المعتمدة في المجمع): يسجّلها مشرف المبنى ومسؤولهم، ولا يعدّلها أحد بعد تسجيلها، ولا يحذفها إلا
+ * الشكاوى على النقل والسيارات (استمارة الشكاوى المعتمدة في المجمع): يسجّلها مشرف المبنى ومسؤولهم، ولا يعدّلها أحد بعد تسجيلها، ولا يحذفها إلا
  * المدير. المدير يتابعها (status: open أو resolved مع resolution). رقم الشكوى والمسجّل ووقت التسجيل ومن عالجها يكتبها
  * الخادم وحده (stamp_complaint). التوقيعات خطوط SVG (M وL وأرقام فقط). نفس القيم في shared/complaints.ts.
  */
-const COMPLAINT_FIELDS = ['id', 'number', 'date', 'time', 'guestName', 'buildingNumber', 'apartmentNumber', 'mobile', 'category', 'text',
+const COMPLAINT_FIELDS = ['id', 'number', 'date', 'time', 'guestName', 'buildingNumber', 'apartmentNumber', 'mobile', 'text',
     'appointmentId', 'vehiclePlate', 'driver', 'guestSignature', 'supervisorSignature', 'witnesses',
     'createdAt', 'createdBy', 'createdByName', 'status', 'resolution', 'resolvedBy', 'resolvedAt', '_o'];
 /** يكتبها الخادم وحده: ما يرسله المستخدم منها عند التسجيل يُتجاهل */
 const COMPLAINT_SERVER_FIELDS = ['number', 'createdAt', 'createdBy', 'createdByName', 'status', 'resolution', 'resolvedBy', 'resolvedAt'];
 /** متابعة المدير للشكوى */
 const COMPLAINT_FOLLOW_FIELDS = ['status', 'resolution', 'resolvedBy', 'resolvedAt'];
-const COMPLAINT_CATEGORIES = ['النقل والسيارات', 'السكن والصيانة', 'النظافة', 'الطعام', 'الخدمات الطبية', 'التعامل والسلوك', 'أخرى'];
 const COMPLAINT_TEXT_MAX = 3000;
 const COMPLAINT_SIGNATURE_MAX = 12000;
 const COMPLAINT_MAX_WITNESSES = 2;
@@ -169,7 +168,6 @@ function valid_complaint(array $data, string $id): bool
         && $text($data['guestName'] ?? null, 120)
         && $text($data['buildingNumber'] ?? null, 20) && $text($data['apartmentNumber'] ?? null, 20)
         && (!array_key_exists('mobile', $data) || (is_string($data['mobile']) && preg_match('/^\+?\d{7,15}$/', $data['mobile'])))
-        && (!array_key_exists('category', $data) || in_array($data['category'], COMPLAINT_CATEGORIES, true))
         && $text($data['text'] ?? null, COMPLAINT_TEXT_MAX) && mb_strlen(trim($data['text'])) >= 3
         && (!array_key_exists('appointmentId', $data) || $text($data['appointmentId'], 160))
         && (!array_key_exists('vehiclePlate', $data) || $text($data['vehiclePlate'], 20))

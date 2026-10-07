@@ -8,9 +8,8 @@ import { normalizeMobile, toText } from "./text";
 export const COMPLAINT_FORM_TITLE = "استمارة الشكاوى لجميع الخدمات المقدمة في مجمع الثمامة";
 export const COMPLAINT_FORM_FOOTER = "إدارة مجمع الثمامة";
 
-/** موضوع الشكوى (اختياري): لفرز الشكاوى ومتابعتها */
-export const COMPLAINT_CATEGORIES = ["النقل والسيارات", "السكن والصيانة", "النظافة", "الطعام", "الخدمات الطبية", "التعامل والسلوك", "أخرى"] as const;
-export type ComplaintCategory = (typeof COMPLAINT_CATEGORIES)[number];
+/** الشكاوى في هذا النظام للنقل والسيارات فقط */
+export const COMPLAINT_TOPIC = "النقل والسيارات";
 
 export const COMPLAINT_TEXT_MAX = 3000;
 export const COMPLAINT_TEXT_MIN = 3;
@@ -35,7 +34,6 @@ export type Complaint = {
   buildingNumber: string;
   apartmentNumber: string;
   mobile?: string;
-  category?: ComplaintCategory;
   text: string;
   /** الموعد الذي سُجّلت الشكوى منه (اختياري)، وسيارته وسائقها */
   appointmentId?: string;
@@ -97,7 +95,6 @@ export function buildComplaint(draft: ComplaintDraft, id: string): Complaint {
     buildingNumber: text(draft.buildingNumber),
     apartmentNumber: text(draft.apartmentNumber),
     ...(mobile ? { mobile } : {}),
-    ...(draft.category ? { category: draft.category } : {}),
     text: text(draft.text),
     ...(draft.appointmentId ? { appointmentId: draft.appointmentId } : {}),
     ...(draft.vehiclePlate ? { vehiclePlate: draft.vehiclePlate } : {}),
@@ -117,12 +114,12 @@ export function sortComplaints<T extends Complaint>(complaints: T[]): T[] {
   return [...complaints].sort((a, b) => key(b).localeCompare(key(a)) || (b.number ?? 0) - (a.number ?? 0));
 }
 
-/** البحث في الشكاوى: الرقم أو الضيف أو المبنى أو الشقة أو النص أو الموضوع أو من سجّلها */
+/** البحث في الشكاوى: الرقم أو الضيف أو المبنى أو الشقة أو النص أو السيارة أو السائق أو من سجّلها */
 export function complaintMatches(complaint: Complaint, query: string) {
   const words = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
   if (!words.length) return true;
   const haystack = [complaint.number ? `#${complaint.number} ${complaint.number}` : "", complaint.guestName, `مبنى ${complaint.buildingNumber}`,
-    `شقة ${complaint.apartmentNumber}`, complaint.text, complaint.category, complaint.createdByName, complaint.vehiclePlate, complaint.driver, complaint.mobile]
+    `شقة ${complaint.apartmentNumber}`, complaint.text, complaint.createdByName, complaint.vehiclePlate, complaint.driver, complaint.mobile]
     .filter(Boolean).join(" ").toLowerCase();
   return words.every((word) => haystack.includes(word));
 }
@@ -141,7 +138,6 @@ export function normalizeComplaint(raw: unknown): Complaint | null {
       return name ? [{ name, ...(signature ? { signature } : {}) }] : [];
     })
     : [];
-  const category = COMPLAINT_CATEGORIES.find((value) => value === item.category);
   return {
     id,
     ...(typeof item.number === "number" ? { number: item.number } : {}),
@@ -151,7 +147,6 @@ export function normalizeComplaint(raw: unknown): Complaint | null {
     buildingNumber: toText(item.buildingNumber),
     apartmentNumber: toText(item.apartmentNumber),
     ...(text(item.mobile) ? { mobile: text(item.mobile) } : {}),
-    ...(category ? { category } : {}),
     text: toText(item.text),
     ...Object.fromEntries((["appointmentId", "vehiclePlate", "driver", "guestSignature", "supervisorSignature", "createdAt", "createdBy", "createdByName", "resolution", "resolvedBy", "resolvedAt"] as const)
       .flatMap((field) => (text(item[field]) ? [[field, text(item[field])]] : []))),

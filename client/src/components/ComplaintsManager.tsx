@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { toast } from "sonner";
 import { FileSpreadsheet, MessageSquareWarning, Search } from "lucide-react";
-import { COMPLAINT_CATEGORIES, complaintMatches, isResolved, type Complaint } from "@shared/complaints";
+import { complaintMatches, isResolved, type Complaint } from "@shared/complaints";
 import { toWesternDigits } from "@shared/text";
 import { localDateString } from "@shared/transport";
 import { useComplaints } from "@/lib/useShared";
@@ -13,11 +13,11 @@ type StatusFilter = "open" | "resolved" | "all";
 const PAGE = 50;
 
 /** صف الشكوى في ملف Excel */
-const EXPORT_COLUMNS = ["رقم الشكوى", "التاريخ", "الوقت", "الضيف", "المبنى", "الشقة", "الهاتف", "الموضوع", "الشكوى", "السيارة", "السائق",
+const EXPORT_COLUMNS = ["رقم الشكوى", "التاريخ", "الوقت", "الضيف", "المبنى", "الشقة", "الهاتف", "الشكوى", "السيارة", "السائق",
   "توقيع الضيف", "الشهود", "سجّلها", "وقت التسجيل", "الحالة", "المعالجة", "عالجها", "وقت المعالجة"];
 const exportRow = (complaint: Complaint) => [
   complaint.number ?? "", dayText(complaint.date), complaint.time, complaint.guestName, complaint.buildingNumber, complaint.apartmentNumber,
-  complaint.mobile ?? "", complaint.category ?? "", complaint.text, complaint.vehiclePlate ?? "", complaint.driver ?? "",
+  complaint.mobile ?? "", complaint.text, complaint.vehiclePlate ?? "", complaint.driver ?? "",
   complaint.guestSignature ? "نعم" : "لا", (complaint.witnesses ?? []).map((witness) => witness.name).join("، "),
   complaint.createdByName ?? "", stampText(complaint.createdAt), isResolved(complaint) ? "تمت المعالجة" : "جديدة",
   complaint.resolution ?? "", complaint.resolvedBy ?? "", stampText(complaint.resolvedAt),
@@ -30,13 +30,11 @@ const exportRow = (complaint: Complaint) => [
 export default function ComplaintsManager() {
   const complaints = useComplaints();
   const [status, setStatus] = useState<StatusFilter>("open");
-  const [category, setCategory] = useState("");
   const [query, setQuery] = useState("");
   const [shown, setShown] = useState(PAGE);
   const [openId, setOpenId] = useState<string | null>(null);
   const openCount = complaints.filter((complaint) => !isResolved(complaint)).length;
   const filtered = complaints.filter((complaint) => (status === "all" || (status === "resolved") === isResolved(complaint))
-    && (!category || (category === "-" ? !complaint.category : complaint.category === category))
     && complaintMatches(complaint, toWesternDigits(query)));
   const opened = openId ? complaints.find((complaint) => complaint.id === openId) : undefined;
 
@@ -44,7 +42,7 @@ export default function ComplaintsManager() {
     const { downloadExcel } = await import("@/lib/report");
     await downloadExcel({
       title: "الشكاوى",
-      subtitle: `${filtered.length} شكوى · ${status === "open" ? "الجديدة" : status === "resolved" ? "تمت معالجتها" : "كل الشكاوى"}${category ? ` · ${category === "-" ? "بلا موضوع" : category}` : ""}`,
+      subtitle: `${filtered.length} شكوى · ${status === "open" ? "الجديدة" : status === "resolved" ? "تمت معالجتها" : "كل الشكاوى"}`,
       kpis: [
         { label: "الشكاوى", value: String(filtered.length) },
         { label: "جديدة", value: String(filtered.filter((complaint) => !isResolved(complaint)).length) },
@@ -56,7 +54,7 @@ export default function ComplaintsManager() {
 
   return (
     <>
-      <PageHeader title="الشكاوى" subtitle="يسجّلها مشرفو المباني بالاستمارة المعتمدة · لا يعدّلها ولا يحذفها أحد غير مدير النظام" />
+      <PageHeader title="الشكاوى" subtitle="شكاوى النقل والسيارات · يسجّلها مشرفو المباني بالاستمارة المعتمدة · لا يعدّلها ولا يحذفها أحد غير مدير النظام" />
       <Panel
         icon={MessageSquareWarning}
         tone={openCount ? "amber" : "green"}
@@ -76,16 +74,9 @@ export default function ComplaintsManager() {
               { value: "all", label: `الكل (${complaints.length})` },
             ]}
           />
-          <div className="w-44 shrink-0">
-            <select value={category} onChange={(event) => setCategory(event.target.value)} aria-label="موضوع الشكوى" className={cx(inputClass, "h-9 text-xs")}>
-              <option value="">كل المواضيع</option>
-              {COMPLAINT_CATEGORIES.map((item) => <option key={item} value={item}>{item}</option>)}
-              <option value="-">بلا موضوع</option>
-            </select>
-          </div>
           <label className="relative min-w-48 flex-1">
             <Search className="pointer-events-none absolute start-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-            <input value={query} onChange={(event) => { setQuery(event.target.value); setShown(PAGE); }} placeholder="بحث بالرقم أو الضيف أو المبنى أو النص أو المشرف" aria-label="بحث في الشكاوى" className={cx(inputClass, "h-9 ps-9 text-xs")} />
+            <input value={query} onChange={(event) => { setQuery(event.target.value); setShown(PAGE); }} placeholder="بحث بالرقم أو الضيف أو المبنى أو السيارة أو السائق أو النص أو المشرف" aria-label="بحث في الشكاوى" className={cx(inputClass, "h-9 ps-9 text-xs")} />
           </label>
         </div>
         {filtered.length ? (

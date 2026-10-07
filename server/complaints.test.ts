@@ -30,7 +30,7 @@ describe("complaint form", () => {
   });
 
   it("saves trimmed text without empty fields, and the phone in western digits", () => {
-    const complaint = buildComplaint(draft({ guestName: "  ضيف تجربة ", mobile: "٥٥٥ ٠٠٠ ١١", witnesses: [{ name: " شاهد " }, { name: "  " }], category: undefined }), "CMP-1");
+    const complaint = buildComplaint(draft({ guestName: "  ضيف تجربة ", mobile: "٥٥٥ ٠٠٠ ١١", witnesses: [{ name: " شاهد " }, { name: "  " }] }), "CMP-1");
     expect(complaint).toEqual({
       id: "CMP-1", date: "2026-10-07", time: "14:30", guestName: "ضيف تجربة", buildingNumber: "17", apartmentNumber: "3",
       mobile: "55500011", text: "تأخرت السيارة ساعة عن الموعد", witnesses: [{ name: "شاهد" }],
@@ -53,22 +53,24 @@ describe("complaint form", () => {
 describe("complaints list", () => {
   const list = [
     normalizeComplaint({ id: "A", number: 1, ...draft(), createdAt: "2026-10-06T08:00:00.000Z", createdByName: "مشرف 1" })!,
-    normalizeComplaint({ id: "B", number: 2, ...draft({ guestName: "ضيف آخر", buildingNumber: "5", category: "النظافة" }), createdAt: "2026-10-07T08:00:00.000Z", status: "resolved", resolution: "تم التنظيف" })!,
+    normalizeComplaint({ id: "B", number: 2, ...draft({ guestName: "ضيف آخر", buildingNumber: "5", vehiclePlate: "111", driver: "علي" }), createdAt: "2026-10-07T08:00:00.000Z", status: "resolved", resolution: "تم التنبيه على السائق" })!,
   ];
 
   it("shows the newest first and finds complaints by number, guest, building or text", () => {
     expect(sortComplaints(list).map((complaint) => complaint.id)).toEqual(["B", "A"]);
     expect(list.filter((complaint) => complaintMatches(complaint, "#2")).map((complaint) => complaint.id)).toEqual(["B"]);
     expect(list.filter((complaint) => complaintMatches(complaint, "مبنى 5")).map((complaint) => complaint.id)).toEqual(["B"]);
+    expect(list.filter((complaint) => complaintMatches(complaint, "111 علي")).map((complaint) => complaint.id)).toEqual(["B"]);
     expect(list.filter((complaint) => complaintMatches(complaint, "مشرف 1")).map((complaint) => complaint.id)).toEqual(["A"]);
     expect(list.filter((complaint) => complaintMatches(complaint, "تأخرت")).length).toBe(2);
   });
 
   it("reads saved complaints safely", () => {
     expect(list[0].status).toBe("open");
-    expect(list[1]).toMatchObject({ status: "resolved", resolution: "تم التنظيف", category: "النظافة" });
-    expect(normalizeComplaint({ id: "C", ...draft(), category: "غير موجود", witnesses: [{ name: "" }, { name: "ش" }] })).toMatchObject({ witnesses: [{ name: "ش" }] });
-    expect(normalizeComplaint({ id: "C", ...draft(), category: "غير موجود" })).not.toHaveProperty("category");
+    expect(list[1]).toMatchObject({ status: "resolved", resolution: "تم التنبيه على السائق", vehiclePlate: "111", driver: "علي" });
+    expect(normalizeComplaint({ id: "C", ...draft(), witnesses: [{ name: "" }, { name: "ش" }] })).toMatchObject({ witnesses: [{ name: "ش" }] });
+    // الشكاوى للنقل والسيارات فقط: لا موضوع
+    expect(normalizeComplaint({ id: "C", ...draft(), category: "النظافة" })).not.toHaveProperty("category");
     expect(normalizeComplaint(null)).toBeNull();
   });
 });
@@ -90,7 +92,8 @@ describe("printed complaint form", () => {
     expect(html).toContain("مشرف تجربة");
     // توقيع المشرف والشاهدين بلا توقيع على الشاشة: خط فارغ للتوقيع باليد
     expect(html.match(/sig-blank/g)).toHaveLength(3);
-    // بلا شعار الهلال الأحمر
-    expect(html).not.toMatch(/الهلال|Red Crescent/);
+    // على ورقة الهلال الأحمر القطري كما في النموذج المعتمد
+    expect(html).toContain('src="/qrcs-letterhead-top.png"');
+    expect(html).toContain('src="/qrcs-letterhead-bottom.png"');
   });
 });

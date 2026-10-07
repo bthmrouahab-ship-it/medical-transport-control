@@ -432,10 +432,10 @@ function describe_write(PDO $pdo, string $col, string $id, ?array $before, ?arra
             $who = $complaint['guestName'] ?? '';
             $details = array_filter([
                 'patient' => $who, 'building' => $complaint['buildingNumber'] ?? '', 'apartment' => $complaint['apartmentNumber'] ?? '',
-                'number' => isset($complaint['number']) ? (string)$complaint['number'] : '', 'category' => $complaint['category'] ?? '',
+                'number' => isset($complaint['number']) ? (string)$complaint['number'] : '', 'plate' => $complaint['vehiclePlate'] ?? '',
             ], fn($value) => $value !== '');
-            $topic = empty($complaint['category']) ? '' : " · {$complaint['category']}";
-            if ($before === null) return ['complaint', 'complaint.create', "تسجيل الشكوى {$number}من الضيف $who ($place)$topic", $details];
+            $car = empty($complaint['vehiclePlate']) ? '' : " · السيارة {$complaint['vehiclePlate']}";
+            if ($before === null) return ['complaint', 'complaint.create', "تسجيل الشكوى {$number}من الضيف $who ($place)$car", $details];
             if ($after === null) {
                 $by = empty($before['createdByName']) ? '' : " · سجّلها {$before['createdByName']}";
                 return ['complaint', 'complaint.delete', "حذف الشكوى {$number}من الضيف $who ($place)$by", $details];

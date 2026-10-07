@@ -202,7 +202,12 @@ export function SupervisorHome({ uid, userName = "", lead = false, nurses = fals
     if (seenGuests.has(key) || !appointment.patientName) continue;
     seenGuests.add(key);
     const mobile = appointment.mobile && appointment.mobile !== "-" ? appointment.mobile : undefined;
-    complaintGuests.push({ name: appointment.patientName, buildingNumber: appointment.buildingNumber, apartmentNumber: appointment.apartmentNumber, ...(mobile ? { mobile } : {}) });
+    // آخر سيارة أُرسلت للضيف في هذا الموعد (الشكاوى على النقل والسيارات)
+    const request = requests.filter((item) => item.appointmentId === appointment.id && item.vehiclePlate).at(-1);
+    complaintGuests.push({
+      name: appointment.patientName, buildingNumber: appointment.buildingNumber, apartmentNumber: appointment.apartmentNumber, ...(mobile ? { mobile } : {}),
+      appointmentId: appointment.id, ...(request?.vehiclePlate ? { vehiclePlate: request.vehiclePlate, driver: liveGps.get(request.vehiclePlate)?.driver || request.driver || undefined } : {}),
+    });
   }
   const complaintFrom = (appointment: ClinicAppointment, request?: VehicleRequest, driver?: string) => {
     const mobile = appointment.mobile && appointment.mobile !== "-" ? appointment.mobile : undefined;
@@ -212,7 +217,6 @@ export function SupervisorHome({ uid, userName = "", lead = false, nurses = fals
       apartmentNumber: appointment.apartmentNumber,
       ...(mobile ? { mobile } : {}),
       appointmentId: appointment.id,
-      category: "النقل والسيارات",
       ...(request?.vehiclePlate ? { vehiclePlate: request.vehiclePlate } : {}),
       ...(request?.vehiclePlate && (driver || request.driver) ? { driver: driver || request.driver } : {}),
     });

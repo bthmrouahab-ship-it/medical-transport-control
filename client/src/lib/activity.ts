@@ -58,7 +58,6 @@ export const DETAIL_LABELS: [string, string][] = [
   ["reason", "سبب الإلغاء"],
   ["changes", "التغييرات"],
   ["number", "رقم الشكوى"],
-  ["category", "موضوع الشكوى"],
   ["resolution", "المعالجة"],
   ["ip", "عنوان الشبكة"],
 ];
