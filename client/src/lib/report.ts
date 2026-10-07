@@ -101,7 +101,7 @@ export function statsReport(
       ...(booking && booking.scheduled + booking.sameDay
         ? [
           { label: "مواعيد مجدولة (قبل يومها)", value: booking.scheduled.toLocaleString("en") },
-          { label: "مواعيد عاجلة (في يومها)", value: booking.sameDay.toLocaleString("en") },
+          { label: "مواعيد غير مجدولة (في يومها)", value: booking.sameDay.toLocaleString("en") },
         ]
         : []),
       ...(delays?.trips ? [{ label: "رحلات فيها تأخير", value: `${delays.late} من ${delays.trips}` }] : []),

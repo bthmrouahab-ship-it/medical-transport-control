@@ -112,11 +112,11 @@ export default function HistoryCharts({ summary, onFilter, service, trackedSince
           icon={CalendarClock}
           tone="amber"
           label="تسجيل المواعيد"
-          title={`مجدولة: ${BOOKING_HINTS.scheduled} · عاجلة: ${BOOKING_HINTS.sameDay}${booking.unknown ? ` · ${count(booking.unknown)} موعد سُجّل قبل حفظ وقت التسجيل` : ""}`}
+          title={`مجدولة: ${BOOKING_HINTS.scheduled} · غير مجدولة: ${BOOKING_HINTS.sameDay}${booking.unknown ? ` · ${count(booking.unknown)} موعد سُجّل قبل حفظ وقت التسجيل` : ""}`}
           value={booked ? (
-            <span className="flex items-end gap-4">
-              <span className="leading-none">{count(booking.scheduled)}<span className="mt-1 block text-[11px] font-medium text-slate-500">مجدولة</span></span>
-              <span className="leading-none">{count(booking.sameDay)}<span className="mt-1 block text-[11px] font-medium text-amber-700">عاجلة</span></span>
+            <span className="flex items-end gap-3 sm:gap-4">
+              <span className="leading-none">{count(booking.scheduled)}<span className="mt-1 block whitespace-nowrap text-[11px] font-medium text-slate-500">مجدولة</span></span>
+              <span className="leading-none">{count(booking.sameDay)}<span className="mt-1 block whitespace-nowrap text-[11px] font-medium text-amber-700">غير مجدولة</span></span>
             </span>
           ) : "—"}
           details={booked ? undefined : "تُحسب للمواعيد المسجلة بعد تحديث النظام"}

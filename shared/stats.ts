@@ -58,7 +58,7 @@ export type TripStat = {
   /** رحلات النظام: رحلات السيارات المنجزة (أُرسلت لها سيارة) ذهابًا وعودة؛ النقل بين موعدين ذهاب */
   goTrips?: number;
   returnTrips?: number;
-  /** رحلات النظام: سُجّل الموعد قبل يومه (مجدول) أو في يومه نفسه (عاجل)؛ بلا الخانة لما سُجّل قبل حفظ وقت التسجيل */
+  /** رحلات النظام: سُجّل الموعد قبل يومه (مجدول) أو في يومه نفسه (غير مجدول)؛ بلا الخانة لما سُجّل قبل حفظ وقت التسجيل */
   booking?: Booking;
   /** رحلات النظام: مراحل كل رحلة سيارة للموعد وتأخيرها */
   timings?: RequestTiming[];
@@ -74,9 +74,9 @@ export type TripStat = {
   approval?: ApprovalInfo;
 };
 
-/** المواعيد المجدولة (سُجّلت قبل يوم الموعد) والعاجلة (سُجّلت في يوم الموعد نفسه) */
+/** المواعيد المجدولة (سُجّلت قبل يوم الموعد) وغير المجدولة (سُجّلت في يوم الموعد نفسه) */
 export type Booking = "scheduled" | "sameDay";
-export const BOOKING_LABELS: Record<Booking, string> = { scheduled: "مجدولة", sameDay: "عاجلة" };
+export const BOOKING_LABELS: Record<Booking, string> = { scheduled: "مجدولة", sameDay: "غير مجدولة" };
 export const BOOKING_HINTS: Record<Booking, string> = { scheduled: "سُجّلت قبل يوم الموعد", sameDay: "سُجّلت في يوم الموعد نفسه" };
 
 /** نوع تسجيل الموعد من وقت إضافته (addedAt، يكتبه الخادم)، أو null إن لم يُعرف. */
@@ -334,7 +334,7 @@ export type StatsSummary = {
   /** رحلات السيارات المنجزة ذهابًا وعودة (من النظام)، وما لا يُعرف اتجاهه (ملفات Excel والملخص القديم) */
   /** backOnly: مواعيد منجزة برحلة عودة فقط بلا رحلة ذهاب (طلب العودة فقط من المستشفى) */
   directions?: { go: number; back: number; unknown: number; backOnly: number };
-  /** المواعيد المجدولة والعاجلة (من النظام)، وما لا يُعرف وقت تسجيله */
+  /** المواعيد المجدولة وغير المجدولة (من النظام)، وما لا يُعرف وقت تسجيله */
   booking?: Record<Booking | "unknown", number>;
   /** تأخير رحلات السيارات ومراحله (من النظام) */
   delays?: DelaySummary;
