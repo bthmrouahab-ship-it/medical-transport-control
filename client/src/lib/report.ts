@@ -1,7 +1,23 @@
-import { BOOKING_LABELS, DELAY_LABELS, DELAY_STAGES, bookingOf, clockText, durationText, requestTiming, type ServiceSummary, type StatsSummary } from "@shared/stats";
+import {
+  BOOKING_LABELS,
+  DAY_RATING_LABELS,
+  DELAY_LABELS,
+  DELAY_STAGES,
+  bookingOf,
+  calendarDays,
+  clockText,
+  completionPercent,
+  dayRating,
+  durationText,
+  requestTiming,
+  type CalendarDay,
+  type DayRating,
+  type ServiceSummary,
+  type StatsSummary,
+} from "@shared/stats";
 import type { GuestRecord, guestStats } from "@shared/guests";
 import { DEFAULT_HOSPITALS, type Hospital } from "@shared/hospitals";
-import { BUS_ROLE_LABELS, statusText, type ClinicAppointment, type VehicleRequest } from "@shared/transport";
+import { BUS_ROLE_LABELS, localDateString, statusText, type ClinicAppointment, type VehicleRequest } from "@shared/transport";
 import {
   CANCEL_STAGES,
   CANCEL_STAGE_LABELS,
@@ -32,11 +48,14 @@ export type ReportSection = {
   bar?: number;
   note?: string;
 };
+/** تقويم الأيام (للتصدير لأكثر من يوم): بطاقة لكل يوم، وتحديد يوم أو أكثر في صفحة HTML يعرض إحصائياتها ومواعيدها */
+export type ReportCalendar = { days: CalendarDay[]; today: string };
 export type Report = {
   title: string;
   subtitle: string;
   kpis: { label: string; value: string }[];
   sections: ReportSection[];
+  calendar?: ReportCalendar;
 };
 
 const hm = (iso?: string) => (iso && !Number.isNaN(Date.parse(iso)) ? activityTime(iso).slice(0, 5) : "");
@@ -46,7 +65,17 @@ const hm = (iso?: string) => (iso && !Number.isNaN(Date.parse(iso)) ? activityTi
 /** بالساعات بخانتين عشريتين (للجمع في Excel) */
 const decimalHours = (minutes: number) => Math.round((minutes / 60) * 100) / 100;
 
-export function statsReport(summary: StatsSummary, title: string, subtitle: string, service: ServiceSummary | null = null, ops: OperationsSummary | null = null): Report {
+export function statsReport(
+  summary: StatsSummary,
+  title: string,
+  subtitle: string,
+  service: ServiceSummary | null = null,
+  ops: OperationsSummary | null = null,
+  /** فترة التصدير (فلتر الإحصائيات): لتقويم الأيام */
+  period: { from?: string; to?: string } = {},
+): Report {
+  const today = localDateString();
+  const calendar = calendarDays(summary.daily, period.from, period.to);
   const completion = summary.totalTrips ? Math.round((summary.completedTrips / summary.totalTrips) * 100) : 0;
   const zoneTotal = summary.zones.reduce((total, zone) => total + zone.trips, 0);
   const work = summary.workHours;
@@ -59,6 +88,7 @@ export function statsReport(summary: StatsSummary, title: string, subtitle: stri
   return {
     title,
     subtitle,
+    ...(calendar.length > 1 ? { calendar: { days: calendar, today } } : {}),
     kpis: [
       { label: "إجمالي المواعيد", value: summary.totalTrips.toLocaleString("en") },
       { label: "الرحلات المنجزة (ذهاب وعودة)", value: (directions.go + directions.back + directions.unknown).toLocaleString("en") },
@@ -95,8 +125,12 @@ export function statsReport(summary: StatsSummary, title: string, subtitle: stri
       {
         title: "المواعيد يوميًا",
         sheet: "يوميًا",
-        columns: ["التاريخ", "اليوم", "إجمالي المواعيد", "المنجزة", "سيدان", "احتياجات خاصة", "باص", "السيارات العاملة"],
-        rows: summary.daily.map((day) => [day.date, day.weekday, day.total, day.completed, day.sedan, day.special, day.bus, day.vehicles ?? ""]),
+        columns: ["التاريخ", "اليوم", "إجمالي المواعيد", "المنجزة", "نسبة الإنجاز", "التقييم", "سيدان", "احتياجات خاصة", "باص", "السيارات العاملة"],
+        rows: summary.daily.map((day) => {
+          const [year, month, date] = day.date.split("-").map(Number);
+          const rating = dayRating({ ...day, day: (new Date(Date.UTC(year, month - 1, date)).getUTCDay() + 1) % 7 }, today);
+          return [day.date, day.weekday, day.total, day.completed, `${completionPercent(day)}%`, DAY_RATING_LABELS[rating], day.sedan, day.special, day.bus, day.vehicles ?? ""];
+        }),
         bar: 2,
       },
       { title: "خروج السيارات حسب الساعة", sheet: "حسب الساعة", columns: ["الساعة", "الرحلات"], rows: summary.byHour.filter((item) => item.trips).map((item) => [`${item.hour}:00`, item.trips]), bar: 1 },
@@ -469,8 +503,6 @@ export function activitySection(items: ActivityItem[], truncated = false): Repor
   };
 }
 
-// ————— التصدير —————
-
 function download(blob: Blob, fileName: string) {
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
@@ -482,6 +514,157 @@ function download(blob: Blob, fileName: string) {
   window.setTimeout(() => URL.revokeObjectURL(url), 10000);
 }
 
+// ————— تقويم الأيام —————
+
+const MONTHS = ["يناير", "فبراير", "مارس", "أبريل", "مايو", "يونيو", "يوليو", "أغسطس", "سبتمبر", "أكتوبر", "نوفمبر", "ديسمبر"];
+const CALENDAR_WEEKDAYS = ["السبت", "الأحد", "الإثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة"];
+/** «12/07» */
+const dayMonth = (date: string) => `${date.slice(8, 10)}/${date.slice(5, 7)}`;
+const daysText = (count: number) => (count === 1 ? "يوم واحد" : count === 2 ? "يومان" : count <= 10 ? `${count} أيام` : `${count} يومًا`);
+const RATING_TONE: Record<DayRating, string> = { excellent: "good", average: "mid", weak: "low", holiday: "off", none: "off", today: "now", upcoming: "off" };
+const RATING_ICON: Record<DayRating, string> = { excellent: "✓", average: "!", weak: "✕", holiday: "–", none: "–", today: "●", upcoming: "…" };
+/** أعمدة جدول مواعيد الأيام المحددة (من «الرحلات بالتفصيل») */
+const CALENDAR_COLUMNS = ["التاريخ", "وقت الموعد", "الضيف", "المبنى", "الشقة", "الوجهة", "نوع الرحلة", "حالة الموعد", "سيارة الذهاب", "الوصول إلى الوجهة", "سيارة العودة", "النتيجة"];
+
+/** الأيام أسابيع من السبت إلى الجمعة (الأيام خارج الفترة فارغة) */
+function calendarWeeks(days: CalendarDay[]) {
+  const weeks: (CalendarDay | null)[][] = [];
+  let week: (CalendarDay | null)[] = Array(days[0]?.day ?? 0).fill(null);
+  for (const day of days) {
+    week.push(day);
+    if (week.length === 7) {
+      weeks.push(week);
+      week = [];
+    }
+  }
+  if (week.length) weeks.push([...week, ...Array(7 - week.length).fill(null)]);
+  return weeks;
+}
+
+/** ورقة «الأيام» في Excel: أسبوع في كل صف من السبت إلى الجمعة */
+function calendarSheetRows(calendar: ReportCalendar): Cell[][] {
+  const cellOf = (day: CalendarDay | null) => {
+    if (!day) return "";
+    const rating = DAY_RATING_LABELS[dayRating(day, calendar.today)];
+    return day.total ? `${dayMonth(day.date)} · ${day.total} موعد · إنجاز ${completionPercent(day)}% · ${rating}` : `${dayMonth(day.date)} · لا مواعيد · ${rating}`;
+  };
+  return calendarWeeks(calendar.days).map((week) => {
+    const dates = week.filter((day): day is CalendarDay => Boolean(day));
+    return [`${dayMonth(dates[0].date)} – ${dayMonth(dates[dates.length - 1].date)}`, ...week.map(cellOf)];
+  });
+}
+
+/** بطاقات الأيام في صفحة HTML (لكل شهر عنوانه)، واللوحة التي تعرض إحصائيات الأيام المحددة ومواعيدها */
+function calendarHtml(calendar: ReportCalendar, trips?: ReportSection) {
+  const months = new Map<string, CalendarDay[]>();
+  for (const day of calendar.days) months.set(day.date.slice(0, 7), [...(months.get(day.date.slice(0, 7)) ?? []), day]);
+  const card = (day: CalendarDay | null) => {
+    if (!day) return `<div class="day blank"></div>`;
+    const rating = dayRating(day, calendar.today);
+    const head = `<span class="wd">${day.weekday}</span><span class="dt">${dayMonth(day.date)}</span>`;
+    const badge = `<span class="badge ${RATING_TONE[rating]}">${RATING_ICON[rating]} ${DAY_RATING_LABELS[rating]}</span>`;
+    if (!day.total) return `<div class="day empty">${head}<b class="count">0</b><span class="unit">لا مواعيد</span><span class="foot"><span></span>${badge}</span></div>`;
+    const percent = completionPercent(day);
+    return `<button type="button" class="day" data-date="${day.date}" aria-pressed="false" title="${day.weekday} ${day.date}: ${day.total} موعد، المنجزة ${day.completed}">${head}`
+      + `<b class="count">${day.total.toLocaleString("en")}</b><span class="unit">موعد</span>`
+      + `<span class="cbar"><i class="miss" style="width:${100 - percent}%"></i><i class="done" style="width:${percent}%"></i></span>`
+      + `<span class="foot"><span>إنجاز <b>${percent}%</b></span>${badge}</span></button>`;
+  };
+  const monthHtml = ([key, days]: [string, CalendarDay[]]) => {
+    const total = days.reduce((sum, day) => sum + day.total, 0);
+    const [year, month] = key.split("-").map(Number);
+    return `<div class="month"><h3>${MONTHS[month - 1]} ${year}</h3><i></i><small>${daysText(days.length)} · ${total.toLocaleString("en")} موعد</small>`
+      + `${days.some((day) => day.total) ? `<button type="button" class="link" data-month="${key}">تحديد الشهر</button>` : ""}</div>`
+      + `<div class="cal-scroll"><div class="week head">${CALENDAR_WEEKDAYS.map((name) => `<span>${name}</span>`).join("")}</div>`
+      + calendarWeeks(days).map((week) => `<div class="week">${week.map(card).join("")}</div>`).join("")
+      + `</div>`;
+  };
+  // بيانات الأيام ومواعيدها للتحديد (JSON داخل الصفحة، بلا اتصال)
+  const columns = trips ? CALENDAR_COLUMNS.filter((column) => trips.columns.includes(column)) : [];
+  const indexes = columns.map((column) => trips!.columns.indexOf(column));
+  const data = {
+    days: Object.fromEntries(calendar.days.filter((day) => day.total).map((day) => [day.date, {
+      label: `${day.weekday} ${dayMonth(day.date)}/${day.date.slice(0, 4)}`, t: day.total, c: day.completed, s: day.sedan, sp: day.special, b: day.bus, v: day.vehicles ?? null,
+    }])),
+    columns,
+    rows: trips ? trips.rows.map((row) => indexes.map((index) => row[index] ?? "")) : [],
+  };
+  const json = JSON.stringify(data).replace(/</g, "\\u003c");
+  return `<section class="calendar">
+  <h2>الأيام <small>${calendar.days.length.toLocaleString("en")}</small></h2>
+  <p class="note">اضغط على يوم أو أكثر لعرض إحصائياتها وجدول مواعيدها · Shift مع الضغط لتحديد أيام متتالية · «تحديد الشهر» لكل أيام الشهر · الإنجاز: المواعيد التي أُرسلت لها سيارة (ممتاز 85% فأكثر، متوسط 70% فأكثر)</p>
+  ${Array.from(months).map(monthHtml).join("\n")}
+  <div id="cal-detail" class="cal-detail" hidden>
+    <div class="cal-head"><h3 id="cal-title"></h3><button type="button" class="link" id="cal-clear">إلغاء التحديد</button></div>
+    <div class="kpis small" id="cal-kpis"></div>
+    <div class="scroll" id="cal-table-wrap"><table class="wide"><thead><tr>${columns.map((column) => `<th>${escapeHtml(column)}</th>`).join("")}</tr></thead><tbody id="cal-rows"></tbody></table></div>
+    <p class="empty" id="cal-empty" hidden>لا تفاصيل مواعيد لهذه الأيام (أيام من ملف Excel أو الملخص القديم)</p>
+  </div>
+  <script type="application/json" id="cal-data">${json}</script>
+</section>`;
+}
+
+/** تحديد الأيام في صفحة HTML: الضغط يحدد اليوم أو يلغيه، وShift لمجموعة متتالية، و«تحديد الشهر» */
+const CALENDAR_SCRIPT = `(function () {
+  var source = document.getElementById("cal-data");
+  if (!source) return;
+  var data = JSON.parse(source.textContent);
+  var order = Array.prototype.map.call(document.querySelectorAll(".day[data-date]"), function (el) { return el.getAttribute("data-date"); });
+  var selected = {}, last = null;
+  var fmt = function (n) { return Number(n).toLocaleString("en"); };
+  function setDay(date, on) { if (on) selected[date] = true; else delete selected[date]; }
+  function render() {
+    var dates = order.filter(function (date) { return selected[date]; });
+    document.querySelectorAll(".day[data-date]").forEach(function (el) { el.setAttribute("aria-pressed", selected[el.getAttribute("data-date")] ? "true" : "false"); });
+    var panel = document.getElementById("cal-detail");
+    panel.hidden = !dates.length;
+    if (!dates.length) return;
+    var sum = { t: 0, c: 0, s: 0, sp: 0, b: 0 }, vehicles = [];
+    dates.forEach(function (date) { var d = data.days[date]; sum.t += d.t; sum.c += d.c; sum.s += d.s; sum.sp += d.sp; sum.b += d.b; if (d.v !== null) vehicles.push(d.v); });
+    document.getElementById("cal-title").textContent = dates.length === 1 ? data.days[dates[0]].label : dates.length + " أيام محددة · من " + data.days[dates[0]].label + " إلى " + data.days[dates[dates.length - 1]].label;
+    var percent = sum.t ? Math.round(sum.c / sum.t * 1000) / 10 : 0;
+    var kpis = [["المواعيد", fmt(sum.t)], ["المنجزة", fmt(sum.c)], ["غير المنجزة", fmt(sum.t - sum.c)], ["نسبة الإنجاز", percent + "%"], ["سيدان", fmt(sum.s)], ["احتياجات خاصة", fmt(sum.sp)], ["باص", fmt(sum.b)]];
+    if (vehicles.length) kpis.push([dates.length === 1 ? "السيارات العاملة" : "متوسط السيارات العاملة", String(Math.round(vehicles.reduce(function (a, b) { return a + b; }, 0) / vehicles.length))]);
+    if (dates.length > 1) kpis.push(["متوسط المواعيد يوميًا", fmt(Math.round(sum.t / dates.length))]);
+    var box = document.getElementById("cal-kpis");
+    box.textContent = "";
+    kpis.forEach(function (kpi) { var div = document.createElement("div"); div.className = "kpi"; var label = document.createElement("span"); label.textContent = kpi[0]; var value = document.createElement("b"); value.textContent = kpi[1]; div.appendChild(label); div.appendChild(value); box.appendChild(div); });
+    var rows = data.rows.filter(function (row) { return selected[row[0]]; });
+    var body = document.getElementById("cal-rows");
+    body.textContent = "";
+    rows.forEach(function (row) { var tr = document.createElement("tr"); row.forEach(function (value) { var td = document.createElement("td"); td.textContent = value; tr.appendChild(td); }); body.appendChild(tr); });
+    document.getElementById("cal-table-wrap").hidden = !rows.length;
+    document.getElementById("cal-empty").hidden = rows.length > 0;
+  }
+  document.addEventListener("click", function (event) {
+    var card = event.target.closest(".day[data-date]");
+    if (card) {
+      var date = card.getAttribute("data-date");
+      if (event.shiftKey && last !== null) {
+        var a = order.indexOf(last), b = order.indexOf(date);
+        order.slice(Math.min(a, b), Math.max(a, b) + 1).forEach(function (d) { setDay(d, true); });
+      } else setDay(date, !selected[date]);
+      last = date;
+      render();
+      return;
+    }
+    var month = event.target.closest("[data-month]");
+    if (month) {
+      var key = month.getAttribute("data-month");
+      var inMonth = order.filter(function (d) { return d.indexOf(key) === 0; });
+      var all = inMonth.every(function (d) { return selected[d]; });
+      inMonth.forEach(function (d) { setDay(d, !all); });
+      render();
+      return;
+    }
+    if (event.target.closest("#cal-clear")) { selected = {}; last = null; render(); }
+  });
+})();
+// الجداول الكبيرة مطوية: تُفتح كلها عند الطباعة
+window.addEventListener("beforeprint", function () { document.querySelectorAll("details").forEach(function (el) { el.open = true; }); });`;
+
+// ————— التصدير —————
+
 export async function downloadExcel(report: Report, fileName: string) {
   const XLSX = await import("xlsx");
   const workbook = XLSX.utils.book_new();
@@ -489,6 +672,12 @@ export async function downloadExcel(report: Report, fileName: string) {
   const summary = XLSX.utils.aoa_to_sheet([[report.title], [report.subtitle], [], ...report.kpis.map((kpi) => [kpi.label, kpi.value])]);
   summary["!cols"] = [{ wch: 26 }, { wch: 20 }];
   XLSX.utils.book_append_sheet(workbook, summary, "الملخص");
+  // تقويم الأيام: أسبوع في كل صف
+  if (report.calendar) {
+    const sheet = XLSX.utils.aoa_to_sheet([["الأسبوع", ...CALENDAR_WEEKDAYS], ...calendarSheetRows(report.calendar)]);
+    sheet["!cols"] = [{ wch: 14 }, ...CALENDAR_WEEKDAYS.map(() => ({ wch: 34 }))];
+    XLSX.utils.book_append_sheet(workbook, sheet, "الأيام");
+  }
   for (const section of report.sections) {
     const sheet = XLSX.utils.aoa_to_sheet([section.columns, ...section.rows]);
     // زر الفلترة في عنوان كل عمود
@@ -505,6 +694,8 @@ const escapeHtml = (value: Cell) => String(value).replace(/[&<>"']/g, (char) => 
 
 /** أعمدة النص الطويل في الجداول العريضة: تلتف أسطرها، وبقية الخانات في سطر واحد. */
 const LONG_COLUMNS = new Set(["العملية", "التغييرات", "إلغاء الموعد", "الشرط", "التأخير", "الشرح", "النتيجة"]);
+/** الجدول الأطول من هذا العدد من الصفوف مطوي في صفحة HTML (يُفتح بالضغط، وعند الطباعة) */
+const FOLD_ROWS = 150;
 
 function sectionHtml(section: ReportSection) {
   const max = section.bar === undefined ? 0 : Math.max(1, ...section.rows.map((row) => Number(row[section.bar!]) || 0));
@@ -514,63 +705,141 @@ function sectionHtml(section: ReportSection) {
     const width = Math.round(((Number(value) || 0) / max) * 100);
     return `<td class="num"><span class="bar"><i style="width:${width}%"></i></span><b>${escapeHtml(value)}</b></td>`;
   };
+  const table = `<div class="scroll"><table${wide ? ' class="wide"' : ""}><thead><tr>${section.columns.map((column) => `<th>${escapeHtml(column)}</th>`).join("")}</tr></thead><tbody>${section.rows.map((row) => `<tr>${row.map(cell).join("")}</tr>`).join("")}</tbody></table></div>`;
+  const body = !section.rows.length
+    ? `<p class="empty">لا توجد بيانات</p>`
+    : section.rows.length > FOLD_ROWS
+      ? `<details><summary>عرض الجدول (${section.rows.length.toLocaleString("en")} صفًا${wide ? " · مرّر أفقيًا لباقي الأعمدة" : ""})</summary>${table}</details>`
+      : table;
   return `<section>
   <h2>${escapeHtml(section.title)} <small>${section.rows.length.toLocaleString("en")}</small></h2>
   ${section.note ? `<p class="note">${escapeHtml(section.note)}</p>` : ""}
-  ${section.rows.length
-    ? `<div class="scroll"><table${wide ? ' class="wide"' : ""}><thead><tr>${section.columns.map((column) => `<th>${escapeHtml(column)}</th>`).join("")}</tr></thead><tbody>${section.rows.map((row) => `<tr>${row.map(cell).join("")}</tr>`).join("")}</tbody></table></div>`
-    : `<p class="empty">لا توجد بيانات</p>`}
+  ${body}
 </section>`;
 }
 
-/** صفحة HTML مستقلة (تعمل بلا اتصال، وتُطبع). */
+/** قيمة بطاقة الملخص: الرقم كبيرًا وما بين القوسين تحته صغيرًا («26 (سيدان 19 · …)»). */
+function kpiHtml(kpi: { label: string; value: string }) {
+  const match = /^(.+?)\s*(\(.+\))$/.exec(kpi.value);
+  return `<div class="kpi"><span>${escapeHtml(kpi.label)}</span><b>${escapeHtml(match ? match[1] : kpi.value)}</b>${match ? `<em>${escapeHtml(match[2])}</em>` : ""}</div>`;
+}
+
+/** صفحة HTML مستقلة (تعمل بلا اتصال، وتُطبع)، بوضع فاتح وداكن حسب الجهاز. */
 export function reportHtml(report: Report) {
+  const trips = report.sections.find((section) => section.sheet === "الرحلات");
   return `<!doctype html>
 <html lang="ar" dir="rtl">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
 <title>${escapeHtml(report.title)}</title>
 <style>
-  :root { --ink:#0f1f35; --muted:#64748b; --line:#e2e8f0; --page:#f4f6f9; --brand:#da291c; --navy:#0b2545; --bar:#2a78d6; }
+  :root { color-scheme: light dark; --ink:#0f1f35; --muted:#64748b; --line:#e2e8f0; --page:#f4f6f9; --card:#fff; --thead:#f8fafc; --stripe:#fbfcfd; --track:#f1f5f9; --brand:#da291c; --navy:#0b2545; --bar:#2a78d6; --miss:#e8590c; --select:#fff5f4;
+    --good-ink:#047857; --good-bg:#ecfdf5; --good-line:#a7f3d0; --mid-ink:#92400e; --mid-bg:#fffbeb; --mid-line:#fcd34d; --low-ink:#b91c1c; --low-bg:#fef2f2; --low-line:#fca5a5; --now-ink:#1d4ed8; --now-bg:#eff6ff; --now-line:#bfdbfe; }
+  @media (prefers-color-scheme: dark) {
+    :root { --ink:#e8eaf0; --muted:#9aa3b2; --line:#2c3038; --page:#0e1013; --card:#1a1c21; --thead:#20232a; --stripe:#1d2025; --track:#2c3038; --select:#2a1d1c;
+      --good-ink:#6ee7b7; --good-bg:rgba(16,185,129,.12); --good-line:rgba(16,185,129,.35); --mid-ink:#fcd34d; --mid-bg:rgba(245,158,11,.12); --mid-line:rgba(245,158,11,.4);
+      --low-ink:#fca5a5; --low-bg:rgba(239,68,68,.12); --low-line:rgba(239,68,68,.4); --now-ink:#93c5fd; --now-bg:rgba(59,130,246,.14); --now-line:rgba(59,130,246,.4); }
+  }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--page); color: var(--ink); font: 14px/1.6 "IBM Plex Sans Arabic", "Segoe UI", Tahoma, sans-serif; }
   header { background: var(--navy); color: #fff; border-top: 4px solid var(--brand); padding: 28px 32px; }
   header h1 { margin: 0; font-size: 24px; }
   header p { margin: 4px 0 0; color: #cbd5e1; }
   main { max-width: 1400px; margin: 0 auto; padding: 24px 16px 48px; }
-  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; margin-bottom: 24px; }
-  .kpi { background: #fff; border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px; }
-  .kpi span { display: block; color: var(--muted); font-size: 13px; }
-  .kpi b { font-size: 24px; }
-  section { background: #fff; border: 1px solid var(--line); border-radius: 16px; padding: 18px 20px; margin-bottom: 20px; }
+  .kpis { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; margin-bottom: 24px; }
+  .kpi { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px; min-width: 0; }
+  .kpi span { display: block; color: var(--muted); font-size: 12.5px; line-height: 1.4; }
+  .kpi b { display: block; font-size: 22px; line-height: 1.3; margin-top: 4px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+  .kpi em { display: block; font-style: normal; color: var(--muted); font-size: 12px; line-height: 1.4; overflow-wrap: anywhere; }
+  .kpis.small { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; margin: 12px 0; }
+  .kpis.small .kpi b { font-size: 18px; }
+  section { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 18px 20px; margin-bottom: 20px; }
   h2 { margin: 0 0 4px; font-size: 17px; }
-  h2 small { background: #f1f5f9; color: var(--muted); border-radius: 999px; padding: 1px 8px; font-size: 12px; font-weight: 600; margin-inline-start: 6px; }
+  h2 small { background: var(--track); color: var(--muted); border-radius: 999px; padding: 1px 8px; font-size: 12px; font-weight: 600; margin-inline-start: 6px; }
   .note { margin: 0 0 12px; color: var(--muted); font-size: 12px; }
   .scroll { overflow-x: auto; }
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  th { position: sticky; top: 0; background: #f8fafc; color: var(--muted); font-weight: 600; text-align: start; white-space: nowrap; }
+  th { position: sticky; top: 0; background: var(--thead); color: var(--muted); font-weight: 600; text-align: start; white-space: nowrap; }
   th, td { border-bottom: 1px solid var(--line); padding: 7px 10px; vertical-align: top; }
-  tbody tr:nth-child(even) td { background: #fbfcfd; }
+  tbody tr:nth-child(even) td { background: var(--stripe); }
   td.num { white-space: nowrap; }
   table.wide { width: max-content; min-width: 100%; }
   table.wide td { white-space: nowrap; }
   table.wide td.long { white-space: normal; min-width: 320px; max-width: 480px; }
-  .bar { display: inline-block; width: 120px; height: 8px; border-radius: 99px; background: #f1f5f9; margin-inline-end: 8px; vertical-align: middle; }
+  .bar { display: inline-block; width: 120px; height: 8px; border-radius: 99px; background: var(--track); margin-inline-end: 8px; vertical-align: middle; }
   .bar i { display: block; height: 100%; border-radius: 99px; background: var(--bar); }
+  details > summary { cursor: pointer; color: var(--bar); font-weight: 600; padding: 6px 0; }
+  details[open] > summary { margin-bottom: 8px; }
   .empty { color: var(--muted); }
+  button.link { font: inherit; font-size: 12.5px; font-weight: 600; color: var(--bar); background: none; border: 1px solid var(--line); border-radius: 999px; padding: 3px 12px; cursor: pointer; }
+  .month { display: flex; align-items: center; gap: 12px; margin: 16px 0 10px; }
+  .month h3 { margin: 0; font-size: 16px; white-space: nowrap; }
+  .month i { flex: 1; height: 1px; background: var(--line); }
+  .month small { color: var(--muted); white-space: nowrap; }
+  .cal-scroll { overflow-x: auto; padding-bottom: 4px; }
+  .week { display: grid; grid-template-columns: repeat(7, minmax(108px, 1fr)); gap: 10px; margin-bottom: 10px; }
+  .week.head span { color: var(--muted); font-size: 12px; font-weight: 600; padding: 0 4px; }
+  .day { font: inherit; color: inherit; text-align: start; background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px; display: flex; flex-direction: column; min-height: 150px; min-width: 0; }
+  button.day { cursor: pointer; transition: border-color .15s, box-shadow .15s; }
+  button.day:hover { border-color: var(--muted); }
+  button.day[aria-pressed="true"] { border-color: var(--brand); box-shadow: 0 0 0 2px var(--brand) inset; background: var(--select); }
+  .day.blank { visibility: hidden; }
+  .day.empty { opacity: .55; }
+  .day .wd { font-weight: 700; font-size: 13.5px; }
+  .day .dt { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .day .count { font-size: 30px; font-weight: 800; line-height: 1.15; margin-top: 8px; font-variant-numeric: tabular-nums; }
+  .day .unit { color: var(--muted); font-size: 12px; }
+  .cbar { display: flex; gap: 2px; height: 7px; border-radius: 99px; overflow: hidden; background: var(--track); margin: 10px 0 8px; }
+  .cbar i { display: block; height: 100%; }
+  .cbar .miss { background: var(--miss); }
+  .cbar .done { background: var(--bar); }
+  .day .foot { margin-top: auto; display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 4px 6px; font-size: 12px; }
+  .badge { border: 1px solid; border-radius: 999px; padding: 0 8px; font-size: 11.5px; font-weight: 600; white-space: nowrap; }
+  .badge.good { color: var(--good-ink); background: var(--good-bg); border-color: var(--good-line); }
+  .badge.mid { color: var(--mid-ink); background: var(--mid-bg); border-color: var(--mid-line); }
+  .badge.low { color: var(--low-ink); background: var(--low-bg); border-color: var(--low-line); }
+  .badge.now { color: var(--now-ink); background: var(--now-bg); border-color: var(--now-line); }
+  .badge.off { color: var(--muted); background: var(--track); border-color: var(--line); }
+  .cal-detail { border-top: 1px solid var(--line); margin-top: 8px; padding-top: 14px; }
+  .cal-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+  .cal-head h3 { margin: 0; font-size: 15px; }
   footer { color: var(--muted); font-size: 12px; text-align: center; }
+  /* الهاتف: بطاقات الأيام صغيرة في عرض الشاشة (العدد وشريط الإنجاز ونقطة التقييم)، والتفاصيل عند التحديد */
+  @media (max-width: 760px) {
+    header { padding: 20px 16px; }
+    section { padding: 14px 12px; }
+    .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .cal-scroll { overflow: visible; }
+    .week { grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; margin-bottom: 4px; }
+    .week.head span { font-size: 10px; text-align: center; padding: 0; overflow: hidden; }
+    .day { min-height: 0; padding: 6px 2px; border-radius: 10px; align-items: center; text-align: center; }
+    .day .wd, .day .unit, .day .foot > span:first-child { display: none; }
+    .day .count { font-size: 17px; margin-top: 2px; }
+    .cbar { width: 100%; height: 4px; margin: 4px 0; }
+    .day .foot { justify-content: center; margin-top: 2px; }
+    .badge { font-size: 0; padding: 0; width: 8px; height: 8px; border-radius: 50%; }
+    .badge.good { background: var(--good-ink); } .badge.mid { background: var(--mid-ink); } .badge.low { background: var(--low-ink); } .badge.now { background: var(--now-ink); }
+  }
   @page { size: A4 landscape; margin: 10mm; }
-  @media print { body { background: #fff; font-size: 11px; } table.wide { width: 100%; } table.wide td { white-space: normal; } table.wide td.long { min-width: 0; } header { color: #000; background: #fff; border-bottom: 2px solid var(--brand); } header p { color: #333; } section { border-color: #ccc; } .kpi, tr { break-inside: avoid; } .scroll { overflow: visible; } }
+  @media print {
+    :root { --ink:#0f1f35; --muted:#475569; --line:#ccc; --page:#fff; --card:#fff; --thead:#f8fafc; --stripe:#fff; --track:#eee; }
+    body { background: #fff; font-size: 11px; } table.wide { width: 100%; } table.wide td { white-space: normal; } table.wide td.long { min-width: 0; }
+    header { color: #000; background: #fff; border-bottom: 2px solid var(--brand); } header p { color: #333; } section { border-color: #ccc; }
+    .kpi, tr, .day { break-inside: avoid; } .scroll, .cal-scroll { overflow: visible; } details > summary, button.link { display: none; }
+  }
 </style>
 </head>
 <body>
 <header><h1>${escapeHtml(report.title)}</h1><p>${escapeHtml(report.subtitle)}</p></header>
 <main>
-  ${report.kpis.length ? `<div class="kpis">${report.kpis.map((kpi) => `<div class="kpi"><span>${escapeHtml(kpi.label)}</span><b>${escapeHtml(kpi.value)}</b></div>`).join("")}</div>` : ""}
+  ${report.kpis.length ? `<div class="kpis">${report.kpis.map(kpiHtml).join("")}</div>` : ""}
+  ${report.calendar ? calendarHtml(report.calendar, trips) : ""}
   ${report.sections.map(sectionHtml).join("\n")}
   <footer>سيارات مجمع الثمامة</footer>
 </main>
+<script>${CALENDAR_SCRIPT}</script>
 </body>
 </html>`;
 }
