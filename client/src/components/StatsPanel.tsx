@@ -214,7 +214,9 @@ export default function StatsPanel({ canEdit, actor, hospitals, fleet, appointme
     setExporting(format);
     try {
       const { items, truncated } = await fetchAllActivity(range);
-      const report = statsReport(summary, "إحصائيات سيارات مجمع الثمامة", `${periodLabel} · أنشأه ${actor} في ${stamp()}`, service, operations);
+      // تقويم الأيام في التصدير لأكثر من يوم (من بداية الفلتر ونهايته، وإلا أول يوم وآخر يوم فيهما مواعيد)
+      const report = statsReport(summary, "إحصائيات سيارات مجمع الثمامة", `${periodLabel} · أنشأه ${actor} في ${stamp()}`, service, operations,
+        { from: filter.from || undefined, to: filter.to || undefined });
       const index = guestIndex(guestRecords ?? []);
       report.sections.push(
         ...guestSections(guestSummary),

@@ -449,6 +449,58 @@ export function weekdayOf(date: string) {
   return WEEKDAYS[new Date(Date.UTC(year, month - 1, day)).getUTCDay()];
 }
 
+// ————— تقويم الأيام (في الإحصائيات المصدرة لأكثر من يوم) —————
+
+/** يوم في تقويم التصدير: إحصائياته من «المواعيد يوميًا»، والأيام بلا مواعيد بأصفار */
+export type CalendarDay = DailyStat & { day: number };
+/** تقييم اليوم بنسبة الإنجاز: ممتاز 85% فأكثر، ومتوسط 70% فأكثر، وإلا ضعيف (DAY_RATING_LABELS) */
+export type DayRating = "excellent" | "average" | "weak" | "holiday" | "none" | "today" | "upcoming";
+export const DAY_RATING_LABELS: Record<DayRating, string> = {
+  excellent: "ممتاز", average: "متوسط", weak: "ضعيف", holiday: "عطلة", none: "بلا مواعيد", today: "جارٍ", upcoming: "قادم",
+};
+export const EXCELLENT_PERCENT = 85;
+export const AVERAGE_PERCENT = 70;
+/** أطول تقويم في التصدير (الأيام الأحدث) */
+export const CALENDAR_MAX_DAYS = 400;
+
+const addDay = (date: string, days: number) => {
+  const [year, month, day] = date.split("-").map(Number);
+  return new Date(Date.UTC(year, month - 1, day + days)).toISOString().slice(0, 10);
+};
+
+/**
+ * كل أيام الفترة بالترتيب (من بداية الفلتر أو أول يوم فيه مواعيد، إلى نهايته أو آخر يوم فيه مواعيد)، والأيام بلا مواعيد
+ * بأصفار. day: ترتيب اليوم في الأسبوع من السبت (0) إلى الجمعة (6). فترة يوم واحد أو بلا مواعيد: [].
+ */
+export function calendarDays(daily: DailyStat[], from?: string, to?: string): CalendarDay[] {
+  if (!daily.length) return [];
+  const byDate = new Map(daily.map((day) => [day.date, day]));
+  let start = from || daily[0].date;
+  const end = to || daily[daily.length - 1].date;
+  if (end <= start) return [];
+  const span = Math.round((Date.parse(`${end}T00:00:00Z`) - Date.parse(`${start}T00:00:00Z`)) / 86400000);
+  if (span >= CALENDAR_MAX_DAYS) start = addDay(end, -(CALENDAR_MAX_DAYS - 1));
+  const days: CalendarDay[] = [];
+  for (let date = start; date <= end; date = addDay(date, 1)) {
+    const [year, month, day] = date.split("-").map(Number);
+    const stat = byDate.get(date) ?? { date, weekday: weekdayOf(date), total: 0, completed: 0, sedan: 0, special: 0, bus: 0 };
+    days.push({ ...stat, day: (new Date(Date.UTC(year, month - 1, day)).getUTCDay() + 1) % 7 });
+  }
+  return days;
+}
+
+/** نسبة الإنجاز بمنزلة عشرية واحدة (المواعيد التي أُرسلت لها سيارة من كل المواعيد) */
+export const completionPercent = (day: Pick<DailyStat, "total" | "completed">) => (day.total ? Math.round((day.completed / day.total) * 1000) / 10 : 0);
+
+/** تقييم اليوم: الجمعة بلا مواعيد عطلة، واليوم والأيام القادمة بلا تقييم حتى تنتهي. */
+export function dayRating(day: Pick<CalendarDay, "date" | "total" | "completed" | "day">, today: string): DayRating {
+  if (!day.total) return day.day === 6 ? "holiday" : "none";
+  if (day.date > today) return "upcoming";
+  if (day.date === today) return "today";
+  const percent = completionPercent(day);
+  return percent >= EXCELLENT_PERCENT ? "excellent" : percent >= AVERAGE_PERCENT ? "average" : "weak";
+}
+
 function hospitalOf(trip: Pick<TripStat, "hospitalId">, hospitals: Hospital[]) {
   return trip.hospitalId ? hospitals.find((hospital) => hospital.id === trip.hospitalId) ?? null : null;
 }

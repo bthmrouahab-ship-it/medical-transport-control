@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { activitySection, reportHtml, tripsSection } from "../client/src/lib/report";
+import { calendarDays, completionPercent, dayRating, weekdayOf } from "../shared/stats";
 import type { ActivityItem } from "../client/src/lib/activity";
 import type { ClinicAppointment, VehicleRequest } from "../shared/transport";
 
@@ -44,5 +45,48 @@ describe("statistics report", () => {
     expect(html).toContain('dir="rtl"');
     expect(html).not.toContain("<script>x</script>");
     expect(html).toContain("&lt;script&gt;");
+  });
+});
+
+describe("days calendar in the exported statistics", () => {
+  const stat = (date: string, total: number, completed: number) => ({ date, weekday: weekdayOf(date), total, completed, sedan: completed, special: 0, bus: 0 });
+  // من الخميس 01-10 إلى الإثنين 05-10، والجمعة 02-10 والأحد 04-10 بلا مواعيد
+  const daily = [stat("2026-10-01", 20, 18), stat("2026-10-03", 10, 7), stat("2026-10-05", 10, 6)];
+
+  it("lists every day of the period from Saturday to Friday, with empty days as zeros", () => {
+    const days = calendarDays(daily);
+    expect(days.map((day) => day.date)).toEqual(["2026-10-01", "2026-10-02", "2026-10-03", "2026-10-04", "2026-10-05"]);
+    // الخميس 5، والجمعة 6، والسبت 0
+    expect(days.map((day) => day.day)).toEqual([5, 6, 0, 1, 2]);
+    expect(days[1]).toMatchObject({ total: 0, completed: 0, weekday: "الجمعة" });
+    // فلتر الفترة يمدها إلى أيامه، ويوم واحد بلا تقويم
+    expect(calendarDays(daily, "2026-09-30", "2026-10-06")).toHaveLength(7);
+    expect(calendarDays([stat("2026-10-01", 5, 5)])).toEqual([]);
+    expect(calendarDays(daily, "2026-10-03", "2026-10-03")).toEqual([]);
+  });
+
+  it("rates each finished day by its completion", () => {
+    const days = calendarDays(daily);
+    expect(completionPercent(days[0])).toBe(90);
+    expect(dayRating(days[0], "2026-10-07")).toBe("excellent");
+    expect(dayRating(days[1], "2026-10-07")).toBe("holiday");
+    expect(dayRating(days[2], "2026-10-07")).toBe("average");
+    expect(dayRating(days[3], "2026-10-07")).toBe("none");
+    expect(dayRating(days[4], "2026-10-07")).toBe("weak");
+    // اليوم والأيام القادمة لم تنتهِ
+    expect(dayRating(days[4], "2026-10-05")).toBe("today");
+    expect(dayRating(days[2], "2026-10-01")).toBe("upcoming");
+  });
+
+  it("shows selectable day cards only for more than one day", () => {
+    const calendar = { days: calendarDays(daily), today: "2026-10-07" };
+    const html = reportHtml({ title: "تقرير", subtitle: "", kpis: [], sections: [], calendar });
+    expect(html).toContain('id="cal-data"');
+    // الأيام التي فيها مواعيد فقط تُحدد، والأيام بلا مواعيد بطاقة بلا زر
+    expect(html.match(/<button[^>]*class="day"[^>]*data-date=/g)).toHaveLength(3);
+    expect(html.match(/class="day empty"/g)).toHaveLength(2);
+    expect(html).toContain("ممتاز");
+    expect(html).toContain("عطلة");
+    expect(reportHtml({ title: "تقرير", subtitle: "", kpis: [], sections: [] })).not.toContain('id="cal-data"');
   });
 });
