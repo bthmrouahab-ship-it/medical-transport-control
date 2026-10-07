@@ -11,7 +11,7 @@ export type ViewerRequest = Pick<VehicleRequest, "appointmentId" | "vehiclePlate
 
 /**
  * بيانات صفحة الإحصائيات المصدرة (HTML): الإحصائيات كما على الموقع للفترة كاملة (summary وoperations وservice محسوبة
- * في الموقع)، ورحلات الفترة وسجلاتها لحساب صفحة كل يوم أو الأيام المحددة في الصفحة نفسها، والجداول التفصيلية.
+ * في الموقع)، ورحلات الفترة وسجلاتها لحساب صفحة كل يوم أو الأيام المحددة في الصفحة نفسها، والرحلات بالتفصيل (بلا سجل العمليات).
  */
 export type ReportViewerData = {
   title: string;
@@ -34,6 +34,6 @@ export type ReportViewerData = {
   guests: ReturnType<typeof guestStats> | null;
   /** تقويم الأيام (لأكثر من يوم) */
   calendar: { days: CalendarDay[]; today: string } | null;
-  /** الجداول التفصيلية: الرحلات بالتفصيل وسجل العمليات (تُفلتر بتاريخ كل صفحة يوم) */
+  /** الجداول التفصيلية: الرحلات بالتفصيل (تُفلتر بتاريخ كل صفحة يوم) */
   sections: ReportSection[];
 };

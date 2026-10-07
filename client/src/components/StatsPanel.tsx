@@ -29,7 +29,7 @@ import { assignDrivers, newDriverId, type Driver } from "@shared/drivers";
 import { api } from "@/lib/api";
 import { authErrorMessage } from "@/lib/auth";
 import { dayRange, fetchAllActivity } from "@/lib/activity";
-import { activitySection, downloadExcel, downloadHtml, guestSections, statsReport, tripsSection } from "@/lib/report";
+import { downloadExcel, downloadHtml, guestSections, statsReport, tripsSection } from "@/lib/report";
 import { saveStatsDays, watchStatsDays } from "@/lib/statsStore";
 import { canExportStatsPage, downloadStatsPage } from "@/lib/reportExport";
 import type { ReportViewerData } from "@/report/types";
@@ -212,20 +212,20 @@ export default function StatsPanel({ canEdit, actor, hospitals, fleet, appointme
   );
 
   /**
-   * تصدير الإحصائيات. Excel: الملخص والجداول والأيام، والرحلات بتفاصيلها (من طلب ومن أرسل ومتى)، وسجل العمليات.
-   * HTML: صفحة بنفس عرض الإحصائيات هنا (البطاقات والرسوم البيانية)، وتقويم الأيام: الضغط على يوم يفتح صفحته.
+   * تصدير الإحصائيات (بلا سجل العمليات؛ يُقرأ منه فقط من طلب كل رحلة ومن أرسلها ومتى). Excel: الملخص والجداول والأيام،
+   * والرحلات بتفاصيلها. HTML: صفحة بنفس عرض الإحصائيات هنا (البطاقات والرسوم البيانية)، وتقويم الأيام: الضغط على يوم يفتح صفحته.
    */
   async function exportReport(format: "excel" | "html") {
     setExporting(format);
     try {
-      const { items, truncated } = await fetchAllActivity(range);
+      // من سجل العمليات: من طلب كل رحلة ومن أرسل سيارتها ومتى (في «الرحلات بالتفصيل»)، والسجل نفسه لا يُصدَّر
+      const { items } = await fetchAllActivity(range);
       const title = "إحصائيات سيارات مجمع الثمامة";
       const subtitle = `${periodLabel} · أنشأه ${actor} في ${stamp()}`;
       // تقويم الأيام في التصدير لأكثر من يوم (من بداية الفلتر ونهايته، وإلا أول يوم وآخر يوم فيهما مواعيد)
       const report = statsReport(summary, title, subtitle, service, operations, { from: filter.from || undefined, to: filter.to || undefined });
       const index = guestIndex(guestRecords ?? []);
       const trips = tripsSection(appointments, requests, items, filter.from || undefined, filter.to || undefined, (appointment) => guestOfAppointment(index, appointment), hospitals);
-      const activity = activitySection(items, truncated);
       const name = `althumama-stats-${localDateString()}`;
       if (format === "html" && canExportStatsPage()) {
         // من المواعيد ما يحتاجه جدول «المواعيد بالتفصيل» فقط (بلا الهواتف)
@@ -243,11 +243,11 @@ export default function StatsPanel({ canEdit, actor, hospitals, fleet, appointme
           fleetKinds: Array.from(fleetKinds),
           guests: guestRecords?.length ? guestSummary : null,
           calendar: report.calendar ?? null,
-          sections: [trips, activity],
+          sections: [trips],
         };
         await downloadStatsPage(data, `${name}.html`);
       } else {
-        report.sections.push(...guestSections(guestSummary), trips, activity);
+        report.sections.push(...guestSections(guestSummary), trips);
         if (format === "excel") await downloadExcel(report, `${name}.xlsx`);
         else downloadHtml(report, `${name}.html`);
       }
@@ -276,7 +276,7 @@ export default function StatsPanel({ canEdit, actor, hospitals, fleet, appointme
         actions={(
           <>
             <button type="button" disabled={!filtersActive} onClick={() => { setPreset("all"); setFilter(EMPTY_FILTER); }} className={btn("ghost", "sm")}><FilterX className="h-4 w-4" /> مسح الفلاتر</button>
-            <button type="button" disabled={Boolean(exporting)} onClick={() => exportReport("excel")} title="الملخص والرحلات بتفاصيلها وسجل العمليات" className={btn("primary", "sm")}>
+            <button type="button" disabled={Boolean(exporting)} onClick={() => exportReport("excel")} title="الملخص والجداول والأيام والرحلات بتفاصيلها" className={btn("primary", "sm")}>
               {exporting === "excel" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />} تصدير Excel
             </button>
             <button type="button" disabled={Boolean(exporting)} onClick={() => exportReport("html")} title="صفحة مستقلة بنفس عرض الإحصائيات والرسوم البيانية، وصفحة لكل يوم، تُفتح في المتصفح وتُطبع" className={btn("secondary", "sm")}>

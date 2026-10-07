@@ -233,7 +233,7 @@ function DayCard({ day, today, selected, onSelect }: { day: CalendarDay; today: 
 
 const PAGE_ROWS = 200;
 
-/** جدول تفصيلي (الرحلات بالتفصيل، سجل العمليات…): مطوي في صفحة الفترة، ويُعرض 200 صف ثم «عرض المزيد» */
+/** جدول تفصيلي (الرحلات بالتفصيل): مطوي في صفحة الفترة، ويُعرض 200 صف ثم «عرض المزيد» */
 function SectionTable({ section, open: initiallyOpen = false }: { section: ReportSection; open?: boolean }) {
   const [open, setOpen] = useState(initiallyOpen);
   const [shown, setShown] = useState(PAGE_ROWS);

@@ -22,7 +22,7 @@ export function statsForDates(data: ReportViewerData, dates: string[]) {
   };
 }
 
-/** تاريخ صف في جدول تفصيلي: YYYY-MM-DD (الرحلات) أو DD/MM/YYYY (سجل العمليات) */
+/** تاريخ صف في جدول تفصيلي: YYYY-MM-DD (الرحلات بالتفصيل) أو DD/MM/YYYY */
 export function rowDate(value: unknown): string | null {
   const text = String(value ?? "");
   if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text;
