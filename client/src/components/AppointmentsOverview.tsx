@@ -6,6 +6,11 @@ import {
   isNonMedical,
   isPriority,
   isReturnOnly,
+  isHospitalTransfer,
+  isTransfer,
+  transferLabels,
+  appointmentCategory,
+  HOSPITAL_TRANSFER_LABEL,
   nonMedicalOpen,
   personsText,
   RETURN_ONLY_LABEL,
@@ -28,7 +33,8 @@ const PENDING_APPROVAL = "بانتظار موافقة مسؤول العيادة"
 const EXCLUDED = "مستبعد من مسؤول العيادة";
 
 /** نوع الطلب: ذهاب، عودة، نقل بين موعدين، أو عودة الـ Nurse فقط */
-const requestKind = (request: VehicleRequest) => (request.nurseOnly ? "عودة الـ Nurse فقط" : request.fromAppointmentId ? "نقل بين موعدين" : request.direction);
+const requestKind = (request: VehicleRequest, appointment: ClinicAppointment) => (request.nurseOnly ? "عودة الـ Nurse فقط"
+  : isTransfer(request, appointment) ? transferLabels(appointment).ar : request.direction);
 
 /**
  * كل المواعيد لمشرف السيارات (الطبية وغير الطبية) في جدول بفلترة أعمدة مثل Excel: حالة كل موعد وطلبات سيارته
@@ -114,16 +120,17 @@ export function AppointmentsOverview({ appointments, requests, date, now, onStop
     { key: "building", label: "المبنى", value: (a) => a.buildingNumber, cell: (a) => <span className="tabular">{a.buildingNumber}</span> },
     { key: "apartment", label: "الشقة", value: (a) => a.apartmentNumber, cell: (a) => <span className="tabular">{a.apartmentNumber}</span> },
     { key: "mobile", label: "الموبايل", value: (a) => (a.mobile === "-" ? "" : a.mobile), cell: (a) => (a.mobile && a.mobile !== "-" ? <span className="whitespace-nowrap text-xs"><GuestContact mobile={a.mobile} /></span> : <span className="text-slate-300">—</span>) },
-    { key: "destination", label: "الوجهة", value: (a) => a.clinic, cell: (a) => <span className="block max-w-[200px] whitespace-normal">{a.clinic}</span> },
+    { key: "destination", label: "الوجهة", value: (a) => a.clinic, cell: (a) => <span className="block max-w-[200px] whitespace-normal">{a.clinic}{a.fromClinic && <span className="block text-[11px] text-slate-500">من {a.fromClinic}</span>}</span> },
     { key: "appointmentType", label: "نوع الموعد", value: (a) => a.appointmentType ?? "", cell: (a) => (a.appointmentType ? <span className="block max-w-[150px] whitespace-normal">{a.appointmentType}</span> : <span className="text-slate-300">—</span>) },
     {
       // طبية (موعد)، أو طلب عودة فقط من المستشفى، أو غير طبية
       key: "category",
       label: "الفئة",
-      value: (a) => (isNonMedical(a) ? "غير طبية" : isReturnOnly(a) ? RETURN_ONLY_LABEL : "طبية"),
+      value: (a) => appointmentCategory(a),
       cell: (a) => (isNonMedical(a)
         ? <Badge tone="violet">غير طبية</Badge>
-        : isReturnOnly(a) ? <Badge tone="cyan" icon={House}>{RETURN_ONLY_LABEL}</Badge> : <span className="text-xs text-slate-500">طبية</span>),
+        : isReturnOnly(a) ? <Badge tone="cyan" icon={House}>{RETURN_ONLY_LABEL}</Badge>
+          : isHospitalTransfer(a) ? <Badge tone="cyan" icon={ArrowLeftRight}>{HOSPITAL_TRANSFER_LABEL}</Badge> : <span className="text-xs text-slate-500">طبية</span>),
     },
     { key: "needs", label: "الاحتياجات", value: (a) => a.assistance.join("، "), cell: (a) => (a.assistance.length ? <span className="block max-w-[170px] whitespace-normal text-xs">{a.assistance.join("، ")}</span> : <span className="text-slate-300">—</span>) },
     { key: "persons", label: "الأشخاص", value: (a) => personsText(personsOf(a)), sortValue: (a) => String(personsOf(a)) },
@@ -142,7 +149,7 @@ export function AppointmentsOverview({ appointments, requests, date, now, onStop
       label: "طلب السيارة",
       value: (a) => {
         const request = lastRequest(a);
-        return request ? `${requestKind(request)}: ${statusText(request.status)}` : NOT_REQUESTED;
+        return request ? `${requestKind(request, a)}: ${statusText(request.status)}` : NOT_REQUESTED;
       },
       cell: (a) => {
         const list = requestsOf(a);
@@ -159,7 +166,7 @@ export function AppointmentsOverview({ appointments, requests, date, now, onStop
           <ul className="min-w-[220px] space-y-1">
             {list.map((request) => (
               <li key={request.id} className="flex flex-wrap items-center gap-1.5 text-xs text-slate-600">
-                <Badge tone={request.nurseOnly || request.direction === "عودة" ? "amber" : request.fromAppointmentId ? "cyan" : "neutral"} icon={request.nurseOnly ? Stethoscope : request.fromAppointmentId ? ArrowLeftRight : undefined}>{requestKind(request)}</Badge>
+                <Badge tone={request.nurseOnly || request.direction === "عودة" ? "amber" : isTransfer(request, a) ? "cyan" : "neutral"} icon={request.nurseOnly ? Stethoscope : isTransfer(request, a) ? ArrowLeftRight : undefined}>{requestKind(request, a)}</Badge>
                 <StatusBadge status={request.status} />
                 {request.createdAt && (
                   <span className="text-slate-400">

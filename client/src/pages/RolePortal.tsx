@@ -24,6 +24,10 @@ import {
   type ClinicAppointment,
   type Vehicle,
   type VehicleRequest,
+  transferSource,
+  isDirectRequest,
+  isHospitalTransfer,
+  directStatus,
 } from "@shared/transport";
 import type { UserProfile } from "@shared/users";
 import { useGuests, useHospitals, useNow } from "@/lib/useShared";
@@ -271,7 +275,7 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
   const [view, setView] = useState<ClinicView>("home");
   const [editingAppointment, setEditingAppointment] = useState<ClinicAppointment | null>(null);
   /** نموذج جديد لطلب عودة فقط من المستشفى (بدل موعد) */
-  const [newReturnOnly, setNewReturnOnly] = useState(false);
+  const [newKind, setNewKind] = useState<"appointment" | "return" | "transfer">("appointment");
   const [lang, setLang] = useLang();
   // مسؤول العيادة: المواعيد، أو سيارات الممرضات (مبنى 03) يطلبها ويتابعها مثل مشرف المبنى
   const [leadTab, setLeadTab] = useState<"appointments" | "nurses">("appointments");
@@ -319,19 +323,22 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
     setAppointments(nextAppointments);
     setRequests(nextRequests);
   }
-  /** طلب سيارة العودة لطلب العودة من المستشفى: يصل مباشرة إلى مشرف السيارات، بلا مالك فيتابعه كل مشرفي المباني */
+  /**
+   * طلب السيارة لما تضيفه العيادة مباشرة إلى مشرف السيارات، بلا مالك فيتابعه كل مشرفي المباني: سيارة العودة لطلب العودة
+   * من المستشفى، وسيارة الذهاب من مستشفى الاستلام للنقل من مستشفى إلى مستشفى.
+   */
   function returnCarRequest(appointment: ClinicAppointment, index = 0): VehicleRequest {
     return {
       id: `REQ-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 6)}`,
       appointmentId: appointment.id,
-      direction: "عودة",
+      direction: isReturnOnly(appointment) ? "عودة" : "ذهاب",
       status: "بانتظار التوزيع",
       notificationMethod: "whatsapp",
       createdAt: timeLabel(new Date()),
     };
   }
   /** طلب العودة الذي ينتظر سيارته: تعدّله العيادة أو تحذفه قبل إرسال السيارة */
-  const pendingReturnRequest = (appointment: ClinicAppointment) => (isReturnOnly(appointment) && appointment.status === "طلب عودة"
+  const pendingReturnRequest = (appointment: ClinicAppointment) => (isDirectRequest(appointment) && appointment.status === directStatus(appointment)
     ? requests.find((request) => request.appointmentId === appointment.id && request.status === "بانتظار التوزيع")
     : undefined);
   const clinicCanChange = (appointment: ClinicAppointment) => appointment.status === "بانتظار طلب السيارة" || Boolean(pendingReturnRequest(appointment));
@@ -373,7 +380,7 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
     // عند استلام المريض: وقت بداية الطريق، والوقت المتوقع للوصول، وإحداثيات الوجهة لاكتشاف الوصول عبر GPS
     const passengers = request?.groupId ? requests.filter((item) => item.groupId === request.groupId).length : 1;
     // النقل بين موعدين: الاستلام من مستشفى الموعد الأول
-    const firstAppointment = request?.fromAppointmentId ? appointments.find((item) => item.id === request.fromAppointmentId) ?? null : null;
+    const firstAppointment = (request ? transferSource(request, appointments) : null);
     const pickup = status === "تم استلام المريض" && request && appointment
       ? pickupDetails(request, appointment, hospitals, new Date(), passengers, firstAppointment)
       : {};
@@ -453,7 +460,7 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
   function withApproval(appointment: ClinicAppointment, before?: ClinicAppointment): ClinicAppointment {
     const { approval: _approval, approvedBy: _approvedBy, approvedAt: _approvedAt, excludedBy: _excludedBy, excludedAt: _excludedAt, ...rest } = appointment;
     // طلب العودة من المستشفى لا يمر بموافقة مسؤول العيادة
-    if (isReturnOnly(appointment)) return rest;
+    if (isDirectRequest(appointment)) return rest;
     if (before) {
       // نموذج التعديل لا يحمل خانات الموافقة: تبقى كما كانت للمسؤول وللموعد المستبعد
       if (isClinicLead || approvalOf(before) === "excluded") {
@@ -492,9 +499,10 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
     const stamped = saved.map((appointment) => withApproval(appointment, before));
     const [appointment] = stamped;
     const returnOnly = isReturnOnly(appointment);
-    if (returnOnly && !editingAppointment) {
-      // طلب العودة الجديد يصل مباشرة إلى مشرف السيارات مع طلب سيارة العودة، في حفظ واحد
-      const added = stamped.map((item) => ({ ...item, status: "طلب عودة" as const }));
+    const transfer = isHospitalTransfer(appointment);
+    if ((returnOnly || transfer) && !editingAppointment) {
+      // طلب العودة والنقل من مستشفى يصلان مباشرة إلى مشرف السيارات مع طلب سيارتهما، في حفظ واحد
+      const added = stamped.map((item) => ({ ...item, status: directStatus(item) }));
       updateBoth([...appointments, ...added].sort(byAppointmentTime), [...requests, ...added.map((item, index) => returnCarRequest(item, index))]);
     } else {
       const next = editingAppointment
@@ -506,8 +514,9 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
     setSelectedDate(appointment.appointmentDate);
     setView("home");
     const reset = Boolean(before) && approvalOf(before!) === "approved" && approvalOf(appointment) === "pending";
-    toast.success(editingAppointment ? (returnOnly ? t.updatedReturn : t.updated) : saved.length > 1 ? t.savedTwo : returnOnly ? t.savedReturn : t.saved, {
-      description: reset ? t.resetApproval : returnOnly && !editingAppointment ? t.sentToFleet : undefined,
+    toast.success(editingAppointment ? (returnOnly ? t.updatedReturn : transfer ? t.updatedTransfer : t.updated)
+      : saved.length > 1 ? t.savedTwo : returnOnly ? t.savedReturn : transfer ? t.savedTransfer : t.saved, {
+      description: reset ? t.resetApproval : (returnOnly || transfer) && !editingAppointment ? t.sentToFleet : undefined,
     });
   }
 
@@ -517,7 +526,7 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
       return;
     }
     if (!window.confirm(t.confirmDelete(clinicNames.guest(appointment)))) return;
-    // طلب العودة: يُحذف طلب سيارته معه (قبل إرسال السيارة)
+    // طلب العودة والنقل من مستشفى: يُحذف طلب سيارته معه (قبل إرسال السيارة)
     const carRequest = pendingReturnRequest(appointment);
     if (carRequest) {
       updateBoth(appointments.filter((item) => item.id !== appointment.id), requests.filter((item) => item.id !== carRequest.id), "requests");
@@ -556,7 +565,7 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
         return {
           request,
           appointment,
-          from: request.fromAppointmentId ? appointments.find((item) => item.id === request.fromAppointmentId) ?? null : null,
+          from: transferSource(request, appointments),
           persons: appointment ? requestPersons(request, appointment, next) : 1,
         };
       })
@@ -618,7 +627,7 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
     if (!request || !appointment || !trip.length) return [];
     const groupId = trip.find((item) => item.groupId)?.groupId ?? `GRP-${Date.now()}`;
     const now = new Date();
-    const firstAppointment = request.fromAppointmentId ? appointments.find((item) => item.id === request.fromAppointmentId) ?? null : null;
+    const firstAppointment = transferSource(request, appointments);
     const pickup = pickedUp ? pickupDetails(request, appointment, hospitals, now, trip.length + 1, firstAppointment) : {};
     const joined: VehicleRequest = {
       ...request,
@@ -812,15 +821,15 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
             appointments={appointments.filter((appointment) => !isNonMedical(appointment))}
             date={selectedDate}
             onDateChange={setSelectedDate}
-            onNew={(returnOnly) => { setEditingAppointment(null); setNewReturnOnly(Boolean(returnOnly)); setView("form"); }}
+            onNew={(kind) => { setEditingAppointment(null); setNewKind(kind ?? "appointment"); setView("form"); }}
             onEdit={openEditAppointment}
             onDelete={deleteAppointment}
             canChange={clinicCanChange}
             requestOf={(appointment) => requests.filter((request) => request.appointmentId === appointment.id && !request.nurseOnly).at(-1)}
             onImport={(imported) => {
-              // طلبات العودة من المستشفى في الملف تصل مباشرة إلى مشرف السيارات مع طلب سيارتها
-              const stamped = imported.map((appointment) => (isReturnOnly(appointment) ? { ...withApproval(appointment), status: "طلب عودة" as const } : withApproval(appointment)));
-              const returns = stamped.filter(isReturnOnly);
+              // طلبات العودة من المستشفى والنقل من مستشفى في الملف تصل مباشرة إلى مشرف السيارات مع طلب سيارتها
+              const stamped = imported.map((appointment) => (isDirectRequest(appointment) ? { ...withApproval(appointment), status: directStatus(appointment) } : withApproval(appointment)));
+              const returns = stamped.filter(isDirectRequest);
               const next = [...appointments, ...stamped].sort(byAppointmentTime);
               if (returns.length) updateBoth(next, [...requests, ...returns.map((appointment, index) => returnCarRequest(appointment, index))]);
               else updateAppointments(next);
@@ -835,7 +844,8 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
             lang={lang}
             defaultDate={selectedDate}
             initial={editingAppointment}
-            returnOnly={editingAppointment ? isReturnOnly(editingAppointment) : newReturnOnly}
+            returnOnly={editingAppointment ? isReturnOnly(editingAppointment) : newKind === "return"}
+            transfer={editingAppointment ? isHospitalTransfer(editingAppointment) : newKind === "transfer"}
             onBack={() => { setEditingAppointment(null); setView("home"); }}
             onSave={saveAppointment}
           />

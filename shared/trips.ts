@@ -6,6 +6,8 @@ import {
   inService,
   isRushHour,
   isReturnOnly,
+  isHospitalTransfer,
+  hospitalTransferSource,
   isTransfer,
   localDateString,
   personsText,
@@ -77,8 +79,10 @@ export function tripEndpoints(
   const hospital = appointmentHospital(appointment, hospitals);
   const origin: Point = { lat: ORIGIN.lat, lng: ORIGIN.lng };
   const place: Point | null = hospital ? { lat: hospital.lat, lng: hospital.lng } : null;
-  if (fromAppointment) {
-    const first = appointmentHospital(fromAppointment, hospitals);
+  // النقل من مستشفى إلى مستشفى: الذهاب من مستشفى الاستلام
+  const source = fromAppointment ?? (direction === "ذهاب" && isHospitalTransfer(appointment) ? hospitalTransferSource(appointment) : null);
+  if (source) {
+    const first = appointmentHospital(source, hospitals);
     return { from: first ? { lat: first.lat, lng: first.lng } : null, to: place, destination: hospital?.name ?? appointment.clinic };
   }
   return direction === "عودة"
@@ -320,7 +324,8 @@ export function suggestReturnRedirects(
   const pairs: (ReturnRedirect & { special: boolean })[] = [];
   for (const trip of pendingReturns) {
     // مكان استلام الضيف: مستشفى الموعد في العودة، أو مستشفى الموعد الأول في النقل
-    const pickupAppointment = trip.request.direction === "عودة" ? trip.appointment : trip.request.fromAppointmentId ? trip.from : null;
+    const pickupAppointment = trip.request.direction === "عودة" ? trip.appointment
+      : trip.request.fromAppointmentId ? trip.from : isTransfer(trip.request, trip.appointment) ? hospitalTransferSource(trip.appointment) : null;
     if (!pickupAppointment) continue;
     const hospital = appointmentHospital(pickupAppointment, hospitals);
     if (!hospital) continue;
@@ -404,7 +409,7 @@ export function suggestReturnPickups(
   });
   const pairs: { car: (typeof cars)[number]; trip: RiderTrip; distance: number; pickup: string }[] = [];
   for (const trip of pendingReturns) {
-    if (trip.request.status !== "بانتظار التوزيع" || trip.request.direction !== "عودة" || isTransfer(trip.request)) continue;
+    if (trip.request.status !== "بانتظار التوزيع" || trip.request.direction !== "عودة" || isTransfer(trip.request, trip.appointment)) continue;
     const hospital = appointmentHospital(trip.appointment, hospitals);
     if (!hospital) continue;
     for (const car of cars) {
@@ -474,7 +479,7 @@ export function incomingCars(
   now = new Date(),
   gpsLive: (plate?: string) => boolean = () => false,
 ): IncomingCar[] {
-  const fromHospital = trip.request.direction === "عودة" || isTransfer(trip.request);
+  const fromHospital = trip.request.direction === "عودة" || isTransfer(trip.request, trip.appointment);
   const pickup = fromHospital ? tripEndpoints(trip.appointment, trip.request.direction, hospitals, trip.from ?? null).from : null;
   if (!pickup) return [];
   const cars = new Map<string, IncomingCar>();

@@ -29,6 +29,9 @@ import {
   type UnrequestedMatch,
   type Vehicle,
   type VehicleRequest,
+  transferSource,
+  transferLabels,
+  isHospitalTransfer,
 } from "@shared/transport";
 import { LATE_MINUTES, minutesSince, tripEndpoints, tripPhase, type TripPhase } from "@shared/trips";
 import { distanceKm } from "@shared/hospitals";
@@ -165,7 +168,7 @@ export function SupervisorHome({ uid, userName = "", lead = false, nurses = fals
   const follows = (request: VehicleRequest) => lead || followsRequest(request, uid);
   // الموعد الذي طُلب نقل ضيفه إلى موعده التالي يُتابَع من الموعد التالي
   const transferredFrom = new Set(requests.flatMap((request) => (request.fromAppointmentId ? [request.fromAppointmentId] : [])));
-  const fromOf = (request?: VehicleRequest) => (request?.fromAppointmentId ? appointments.find((item) => item.id === request.fromAppointmentId) ?? null : null);
+  const fromOf = (request?: VehicleRequest) => (request ? transferSource(request, appointments) : null);
   const stageOf = (appointment: ClinicAppointment): Stage | null => {
     if (transferredFrom.has(appointment.id)) return null;
     const request = latest.get(appointment.id);
@@ -790,10 +793,12 @@ function GuestSummary({ appointment, request, from, day, timeTone, status }: {
   /** شارات الحالة تحت الوجهة */
   status?: ReactNode;
 }) {
-  const pickup = from ? from.clinic : appointmentPickupLabel(appointment);
   // طلب العودة فقط: من المستشفى إلى المجمع، قبل طلب سيارته وبعده
   const returnOnly = isReturnOnly(appointment);
   const returning = request ? request.direction === "عودة" : returnOnly;
+  // النقل من مستشفى إلى مستشفى: الذهاب من مستشفى الاستلام (قبل طلب سيارته أيضًا)
+  const hospitalTransfer = isHospitalTransfer(appointment) && !returning;
+  const pickup = from ? from.clinic : hospitalTransfer ? appointment.fromClinic ?? "" : appointmentPickupLabel(appointment);
   return (
     <>
       <TimeBlock time={appointment.appointmentAt} day={day} tone={timeTone} />
@@ -804,8 +809,10 @@ function GuestSummary({ appointment, request, from, day, timeTone, status }: {
           </span>
           {returnOnly
             ? <Badge tone="cyan" icon={House}>{RETURN_ONLY_LABEL}</Badge>
-            : request && (from
-              ? <Badge tone="cyan" icon={ArrowLeftRight}>نقل بين موعدين</Badge>
+            : (from || (hospitalTransfer && !request))
+              ? <Badge tone="cyan" icon={ArrowLeftRight}>{transferLabels(appointment).ar}</Badge>
+              : request && (from
+              ? <Badge tone="cyan" icon={ArrowLeftRight}>{transferLabels(appointment).ar}</Badge>
               : request.nurseOnly ? <Badge tone="amber" icon={Stethoscope}>عودة الـ Nurse فقط</Badge> : <Badge tone={returning ? "amber" : "neutral"}>{request.direction}</Badge>)}
           {isNonMedical(appointment) && <Badge tone="violet">غير طبية</Badge>}
           {appointment.nurse && <Badge tone="violet" icon={BriefcaseMedical}>ممرضة</Badge>}

@@ -8,6 +8,7 @@ import {
   isNonMedical,
   isAllDay,
   isReturnOnly,
+  isTransfer,
   localDateString,
   scheduleOf,
   type RoleSchedules,
@@ -140,7 +141,7 @@ function clockOn(date: string, time: string | undefined) {
 /** مراحل رحلة سيارة أُرسلت (للإحصائيات): الإرسال، والوصول إلى نقطة الاستلام، والاستلام، والوصول إلى الموعد. */
 export function requestTiming(request: VehicleRequest, appointment: ClinicAppointment, hospitals: Hospital[] = DEFAULT_HOSPITALS): RequestTiming | null {
   if (!request.vehiclePlate) return null;
-  const direction = request.fromAppointmentId ? "نقل" : request.direction;
+  const direction = isTransfer(request, appointment) ? "نقل" : request.direction;
   const sent = clockOn(appointment.appointmentDate, request.notificationSentAt);
   // وصول السيارة: كما سجّله السائق من تطبيقه (ما لم ينفه مشرف المبنى)، أو كما سجّله مشرف المبنى
   const arrival = (request.arrivalCheck === "denied" ? null : toDate(request.driverArrivedAt)) ?? toDate(request.pickupArrivedAt);

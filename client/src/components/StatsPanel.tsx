@@ -235,8 +235,8 @@ export default function StatsPanel({ canEdit, actor, hospitals, fleet, appointme
           trackedSince: serviceLog?.trackedSince ?? null,
           opsLog,
           trips: filteredTrips,
-          appointments: appointments.filter((item) => ids.has(item.id)).map(({ id, appointmentDate, appointmentAt, patientName, buildingNumber, clinic, category, returnOnly, status }) => (
-            { id, appointmentDate, appointmentAt, patientName, buildingNumber, clinic, category, returnOnly, status })),
+          appointments: appointments.filter((item) => ids.has(item.id)).map(({ id, appointmentDate, appointmentAt, patientName, buildingNumber, clinic, category, returnOnly, fromClinic, status }) => (
+            { id, appointmentDate, appointmentAt, patientName, buildingNumber, clinic, category, returnOnly, fromClinic, status })),
           requests: requests.filter((item) => ids.has(item.appointmentId)).map(({ appointmentId, vehiclePlate }) => ({ appointmentId, vehiclePlate })),
           hospitals,
           schedules,

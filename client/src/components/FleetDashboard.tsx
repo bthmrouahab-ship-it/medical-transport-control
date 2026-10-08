@@ -3,7 +3,7 @@ import { BarChart3, CarFront, EyeOff, FilterX, Hospital as HospitalIcon, Loader2
 import type { Hospital } from "@shared/hospitals";
 import { shortDriverName } from "@shared/drivers";
 import type { HistorySummary } from "@shared/history";
-import { DEFAULT_VEHICLES, localDateString, migrateAppointment, migrateRequest, type ClinicAppointment, type Vehicle, type VehicleRequest } from "@shared/transport";
+import { DEFAULT_VEHICLES, localDateString, migrateAppointment, migrateRequest, transferSource, type ClinicAppointment, type Vehicle, type VehicleRequest } from "@shared/transport";
 import { arrivalsOn, tripEndpoints, tripPhase, vehicleLocationState } from "@shared/trips";
 import { useArrivalAlerts, useCancellationAlerts } from "@/lib/arrivalAlerts";
 import { saveState } from "@/lib/appStore";
@@ -101,7 +101,7 @@ export default function FleetDashboard({ canEdit = false, alerts = false, actor,
     if (phase.kind !== "toPickup" && phase.kind !== "toDestination") return [];
     const appointment = appointments.find((item) => item.id === request.appointmentId);
     if (!appointment) return [];
-    const firstAppointment = request.fromAppointmentId ? appointments.find((item) => item.id === request.fromAppointmentId) ?? null : null;
+    const firstAppointment = transferSource(request, appointments);
     const { from, to, destination } = tripEndpoints(appointment, request.direction, hospitals, firstAppointment);
     const who = `${request.vehiclePlate ?? ""} · ${driverOf(request.vehiclePlate, request.driver)}`;
     const label = phase.kind === "toPickup"

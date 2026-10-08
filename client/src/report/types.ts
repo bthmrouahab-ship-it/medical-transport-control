@@ -6,7 +6,7 @@ import type { guestStats } from "@shared/guests";
 import type { ReportSection } from "@/lib/report";
 
 /** من الموعد ما يحتاجه جدول «المواعيد بالتفصيل» فقط (بلا الهاتف ولا الاحتياجات) */
-export type ViewerAppointment = Pick<ClinicAppointment, "id" | "appointmentDate" | "appointmentAt" | "patientName" | "buildingNumber" | "clinic" | "category" | "returnOnly" | "status">;
+export type ViewerAppointment = Pick<ClinicAppointment, "id" | "appointmentDate" | "appointmentAt" | "patientName" | "buildingNumber" | "clinic" | "category" | "returnOnly" | "fromClinic" | "status">;
 export type ViewerRequest = Pick<VehicleRequest, "appointmentId" | "vehiclePlate">;
 
 /**

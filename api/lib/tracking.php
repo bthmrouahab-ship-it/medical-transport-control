@@ -96,14 +96,29 @@ function detect_pickup_proximity(PDO $pdo, string $plate, float $lat, float $lng
         $lock->execute([$id]);
         $doc = decode_doc($lock->fetchColumn() ?: null);
         if (!$doc || ($doc['vehiclePlate'] ?? null) !== $plate || ($doc['status'] ?? null) !== 'تم إرسال السيارة' || isset($doc['nearPickupAt'])) continue;
-        // مكان الاستلام مستشفى: العودة من مستشفى الموعد، والنقل من مستشفى الموعد الأول
-        $from = $doc['fromAppointmentId'] ?? (($doc['direction'] ?? '') === 'عودة' ? ($doc['appointmentId'] ?? null) : null);
-        if (!is_string($from) || $from === '') continue;
-        $point = pickup_point($pdo, $from);
+        // مكان الاستلام مستشفى: العودة من مستشفى الموعد، والنقل من مستشفى الموعد الأول أو من مستشفى الاستلام
+        $source = ($doc['direction'] ?? '') === 'عودة' ? null : transfer_source($pdo, $doc);
+        if ($source !== null && hospital_transfer(appointment_doc($pdo, (string)($doc['appointmentId'] ?? '')))) {
+            $point = hospital_point($pdo, (string)($source['hospitalId'] ?? ''));
+        } else {
+            $from = $doc['fromAppointmentId'] ?? (($doc['direction'] ?? '') === 'عودة' ? ($doc['appointmentId'] ?? null) : null);
+            if (!is_string($from) || $from === '') continue;
+            $point = pickup_point($pdo, $from);
+        }
         if ($point === null || distance_m($lat, $lng, $point[0], $point[1]) > PICKUP_NEAR_RADIUS_M) continue;
         $doc['nearPickupAt'] = now_iso();
         save_doc($pdo, 'requests', (string)$id, $doc, $rev);
     }
+}
+
+/** مكان مستشفى من دليل المستشفيات المحفوظ، أو null */
+function hospital_point(PDO $pdo, string $hospitalId): ?array
+{
+    if ($hospitalId === '') return null;
+    $stmt = $pdo->prepare("SELECT data FROM docs WHERE col = 'hospitals' AND id = ?");
+    $stmt->execute([$hospitalId]);
+    $hospital = decode_doc($stmt->fetchColumn() ?: null);
+    return is_numeric($hospital['lat'] ?? null) && is_numeric($hospital['lng'] ?? null) ? [(float)$hospital['lat'], (float)$hospital['lng']] : null;
 }
 
 /**
@@ -113,13 +128,8 @@ function detect_pickup_proximity(PDO $pdo, string $plate, float $lat, float $lng
 function pickup_point(PDO $pdo, string $appointmentId): ?array
 {
     $appointment = appointment_doc($pdo, $appointmentId);
-    $hospitalId = $appointment['hospitalId'] ?? null;
-    if (is_string($hospitalId) && $hospitalId !== '') {
-        $stmt = $pdo->prepare("SELECT data FROM docs WHERE col = 'hospitals' AND id = ?");
-        $stmt->execute([$hospitalId]);
-        $hospital = decode_doc($stmt->fetchColumn() ?: null);
-        if (is_numeric($hospital['lat'] ?? null) && is_numeric($hospital['lng'] ?? null)) return [(float)$hospital['lat'], (float)$hospital['lng']];
-    }
+    $point = hospital_point($pdo, (string)($appointment['hospitalId'] ?? ''));
+    if ($point !== null) return $point;
     $like = '%' . addcslashes('"appointmentId":' . json_encode($appointmentId, JSON_UNESCAPED_UNICODE), '%_\\') . '%';
     $stmt = $pdo->prepare("SELECT data FROM docs WHERE col = 'requests' AND data LIKE ?");
     $stmt->execute([$like]);

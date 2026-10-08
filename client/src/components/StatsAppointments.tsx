@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { CalendarSearch, Filter, X } from "lucide-react";
 import { BOOKING_LABELS, DELAY_LABELS, stageMinutes, type DelayStage, type TripStat } from "@shared/stats";
 import { OUTCOMES, RETURN_OUTCOMES, type Outcome, type ReturnOutcome } from "@shared/operations";
-import { RETURN_ONLY_LABEL, isNonMedical, isReturnOnly, statusText, type ClinicAppointment, type VehicleRequest } from "@shared/transport";
+import { appointmentCategory, statusText, type ClinicAppointment, type VehicleRequest } from "@shared/transport";
 import { FILTER_LABELS_AR, FilterTable, useColumnFilters, type FilterColumn } from "./ExcelFilter";
 import { Badge, EmptyState, Panel, btn } from "./ui-kit";
 
@@ -59,7 +59,7 @@ export default function StatsAppointments({ trips, appointments, requests }: {
         guest: appointment.patientName,
         building: appointment.buildingNumber,
         destination: appointment.clinic,
-        category: isNonMedical(appointment) ? "غير طبية" : isReturnOnly(appointment) ? RETURN_ONLY_LABEL : "طبية",
+        category: appointmentCategory(appointment),
         booking: trip.booking ? BOOKING_LABELS[trip.booking] : "",
         status: statusText(appointment.status),
         outcome: trip.outcome ?? null,
