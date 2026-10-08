@@ -36,6 +36,7 @@ import { CLINIC_TEXT, useLang } from "@/lib/i18n";
 import { ClinicForm, ClinicHome, useAppointmentNames } from "./ClinicPages";
 import { SupervisorHome, type RequestHandlers } from "./SupervisorPage";
 import { FleetSupervisorPage } from "./FleetSupervisorPage";
+import { ReferredComplaints } from "@/components/ComplaintReferrals";
 import Login from "./Login";
 import ChangePasswordForm from "@/components/ChangePasswordForm";
 import { SHARED_KEYS, clearSharedBackend, loadState, removeState, saveState, saveStates, setSharedBackend, subscribeState } from "@/lib/appStore";
@@ -770,6 +771,8 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
       />
 
       <main className={`mx-auto p-4 lg:p-8 ${session.role === "fleetSupervisor" ? "max-w-7xl" : "max-w-6xl"}`}>
+        {/* الشكاوى التي حوّلها مدير النظام إلى هذا الحساب مع ملاحظة، للرد عليها */}
+        {view === "home" && <ReferredComplaints uid={session.uid} />}
         {view === "home" && isClinicLead && (
           <div className="mb-5">
             <Segmented

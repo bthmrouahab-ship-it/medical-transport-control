@@ -110,7 +110,7 @@ const SPECIAL_NEED_FIELDS = ['id', 'name', 'gender', 'healthNumber', 'buildingNu
 const COMPLAINT_FIELDS = ['id', 'number', 'date', 'time', 'guestName', 'buildingNumber', 'apartmentNumber', 'mobile', 'text',
     'appointmentId', 'vehiclePlate', 'driver', 'guestSignature', 'supervisorSignature', 'witnesses',
     'createdAt', 'createdBy', 'createdByName', 'status', 'resolution', 'resolvedBy', 'resolvedAt',
-    'paper', 'paperSupervisor', 'scanType', 'scanSize', 'scanAt', '_o'];
+    'paper', 'paperSupervisor', 'scanType', 'scanSize', 'scanAt', 'referrals', '_o'];
 /** يكتبها الخادم وحده: ما يرسله المستخدم منها عند التسجيل يُتجاهل (ومعها بيانات صورة الاستمارة الورقية: route_complaint_file_save) */
 const COMPLAINT_SERVER_FIELDS = ['number', 'createdAt', 'createdBy', 'createdByName', 'status', 'resolution', 'resolvedBy', 'resolvedAt',
     'scanType', 'scanSize', 'scanAt'];
@@ -128,6 +128,16 @@ const COMPLAINT_MAX_WITNESSES = 2;
 /** من يسجّل الشكاوى، ومن تصله: المسجّل يرى ما سجّله، ومسؤول مشرفي المباني والمدير يرون كل الشكاوى (can_see_complaint) */
 const COMPLAINT_WRITE_ROLES = ['buildingSupervisor', 'buildingLead'];
 const COMPLAINT_ROLES = ['admin', 'buildingSupervisor', 'buildingLead'];
+/**
+ * تحويل الشكوى إلى المعني بها (referrals): المدير يحوّلها مع ملاحظة إلى حساب (مسؤول العيادة، أو مشرف المبنى المعني، أو المشرف
+ * الذي سجّلها ليخبر الضيف…)، فتصله الشكوى (can_see_complaint) ويرد عليها مرة واحدة. التحويلات تُضاف ولا تُعدّل؛ المدير يرسل
+ * to وnote فقط، والمحوَّل إليه يرسل reply فقط، والخادم يكتب الباقي (stamp_complaint).
+ */
+const COMPLAINT_REFERRAL_FIELDS = ['to', 'toName', 'toRole', 'note', 'by', 'at', 'reply', 'replyBy', 'repliedAt'];
+const COMPLAINT_REFERRAL_MAX = 10;
+const COMPLAINT_NOTE_MAX = 1000;
+/** من تُحوَّل إليه الشكوى */
+const COMPLAINT_REFERRAL_ROLES = ['clinic', 'clinicLead', 'buildingSupervisor', 'buildingLead', 'fleetSupervisor'];
 /** المجموعات التي تُزامن مع موظفي المكتب */
 const SYNC_COLLECTIONS = ['appointments', 'requests', 'fleet', 'hospitals', 'vehicleLocations', 'meta', 'guests', 'drivers', 'privateCars', 'specialNeeds', 'complaints'];
 
@@ -140,14 +150,70 @@ function sync_collections(array $user): array
     return array_values(array_filter(SYNC_COLLECTIONS, fn(string $col) => ($col !== 'guests' || in_array($user['role'], GUEST_LIST_ROLES, true))
         && ($col !== 'drivers' || in_array($user['role'], DRIVER_LIST_ROLES, true))
         && (!in_array($col, ['privateCars', 'specialNeeds'], true) || $user['role'] === 'admin')
-        && ($col !== 'complaints' || in_array($user['role'], COMPLAINT_ROLES, true))));
+        && ($col !== 'complaints' || in_array($user['role'], OFFICE_ROLES, true))));
 }
 
-/** الشكوى تصل لمن سجّلها، ولمسؤول مشرفي المباني والمدير */
+/** الشكوى تصل لمن سجّلها، ولمسؤول مشرفي المباني والمدير، ولمن حُوّلت إليه */
 function can_see_complaint(array $user, array $complaint): bool
 {
     return in_array($user['role'], ['admin', 'buildingLead'], true)
-        || ($user['role'] === 'buildingSupervisor' && ($complaint['createdBy'] ?? null) === (string)$user['id']);
+        || ($user['role'] === 'buildingSupervisor' && ($complaint['createdBy'] ?? null) === (string)$user['id'])
+        || referred_to($user, $complaint);
+}
+
+/** هل حُوّلت الشكوى إلى هذا المستخدم */
+function referred_to(array $user, array $complaint): bool
+{
+    foreach (is_array($complaint['referrals'] ?? null) ? $complaint['referrals'] : [] as $referral) {
+        if (is_array($referral) && ($referral['to'] ?? null) === (string)$user['id']) return true;
+    }
+    return false;
+}
+
+function valid_referrals($list): bool
+{
+    if (!is_array($list) || !array_is_list($list) || count($list) > COMPLAINT_REFERRAL_MAX) return false;
+    $text = fn($value, int $max) => is_text($value, $max) && trim($value) !== '';
+    foreach ($list as $entry) {
+        if (!is_array($entry) || !only(array_keys($entry), COMPLAINT_REFERRAL_FIELDS)
+            || !is_string($entry['to'] ?? null) || !preg_match('/^\d{1,10}$/', $entry['to'])
+            || !$text($entry['note'] ?? null, COMPLAINT_NOTE_MAX)
+            || (array_key_exists('reply', $entry) && !$text($entry['reply'], COMPLAINT_NOTE_MAX))) return false;
+        foreach (['toName', 'toRole', 'by', 'at', 'replyBy', 'repliedAt'] as $field) {
+            if (array_key_exists($field, $entry) && !is_text($entry[$field], 120)) return false;
+        }
+    }
+    return true;
+}
+
+/**
+ * تغيير التحويلات: المدير يضيف تحويلًا جديدًا (to وnote فقط) بلا تغيير ما قبله، والمحوَّل إليه يضيف رده (reply فقط) إلى تحويله
+ * الذي لم يُرد عليه. null = مسموح.
+ */
+function referral_change_error(array $user, array $before, array $after): ?string
+{
+    $old = $before['referrals'] ?? [];
+    $new = $after['referrals'] ?? [];
+    $stale = 'تغيّرت الشكوى من مستخدم آخر. حدّث الصفحة وحاول مرة أخرى.';
+    if (!is_array($old) || !valid_referrals($new)) return 'بيانات تحويل الشكوى غير صالحة';
+    if ($user['role'] === 'admin') {
+        if (count($new) <= count($old)) return $stale;
+        foreach ($old as $i => $entry) if ($new[$i] != $entry) return $stale;
+        foreach (array_slice($new, count($old)) as $entry) {
+            if (!only(array_keys($entry), ['to', 'note'])) return 'بيانات تحويل الشكوى غير صالحة';
+        }
+        return null;
+    }
+    if (count($new) !== count($old)) return $stale;
+    $replied = false;
+    foreach ($old as $i => $entry) {
+        if ($new[$i] == $entry) continue;
+        $reply = $new[$i];
+        unset($reply['reply']);
+        if (($entry['to'] ?? null) !== (string)$user['id'] || array_key_exists('reply', $entry) || $reply != $entry) return 'لا يمكن تعديل شكوى بعد تسجيلها';
+        $replied = true;
+    }
+    return $replied ? null : 'لا يمكن تعديل شكوى بعد تسجيلها';
 }
 
 /** توقيع على الشاشة: خطوط SVG بأوامر M وL وأرقام فقط (لا نص ولا وسوم) */
@@ -183,7 +249,8 @@ function valid_complaint(array $data, string $id): bool
         && in_array($data['status'] ?? 'open', ['open', 'resolved'], true)
         && (!array_key_exists('resolution', $data) || is_text($data['resolution'], 1000))
         && ($data['paper'] ?? true) === true
-        && (!array_key_exists('paperSupervisor', $data) || ($text($data['paperSupervisor'], 80) && ($data['paper'] ?? null) === true));
+        && (!array_key_exists('paperSupervisor', $data) || ($text($data['paperSupervisor'], 80) && ($data['paper'] ?? null) === true))
+        && (!array_key_exists('referrals', $data) || valid_referrals($data['referrals']));
 }
 
 /**
@@ -202,6 +269,22 @@ function stamp_complaint(PDO $pdo, array $user, ?array $before, ?array $after): 
         return [...$after, 'number' => $number, 'createdAt' => now_iso(), 'createdBy' => (string)$user['id'],
             'createdByName' => (string)$user['display_name'], 'status' => 'open'];
     }
+    // التحويل الجديد: اسم المحوَّل إليه ودوره من حسابه، ومن حوّلها ومتى؛ والرد: من رد ومتى
+    $old = is_array($before['referrals'] ?? null) ? $before['referrals'] : [];
+    foreach (is_array($after['referrals'] ?? null) ? $after['referrals'] : [] as $i => $entry) {
+        if ($i >= count($old)) {
+            $target = ctype_digit((string)($entry['to'] ?? '')) ? user_row($pdo, (int)$entry['to']) : null;
+            if (!$target || !$target['active'] || !in_array($target['role'], COMPLAINT_REFERRAL_ROLES, true)) {
+                throw new ApiException(400, 'اختر حسابًا صحيحًا لتحويل الشكوى إليه', 'bad_request');
+            }
+            $after['referrals'][$i] = ['to' => (string)$target['id'], 'toName' => (string)$target['display_name'], 'toRole' => (string)$target['role'],
+                'note' => trim((string)$entry['note']), 'by' => (string)$user['display_name'], 'at' => now_iso()];
+        } elseif (array_key_exists('reply', $entry) && !array_key_exists('reply', $old[$i])) {
+            $after['referrals'][$i] = [...$entry, 'reply' => trim((string)$entry['reply']), 'replyBy' => (string)$user['display_name'], 'repliedAt' => now_iso()];
+        }
+    }
+    // رد المحوَّل إليه لا يغيّر حالة الشكوى
+    if ($user['role'] !== 'admin') return $after;
     if (($after['status'] ?? 'open') !== 'resolved') {
         unset($after['resolution'], $after['resolvedBy'], $after['resolvedAt']);
         $after['status'] = 'open';
@@ -1068,8 +1151,13 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
                 foreach (COMPLAINT_SERVER_FIELDS as $field) unset($fresh[$field]);
                 return valid_complaint($fresh, $id) ? null : 'بيانات الشكوى غير صالحة';
             }
-            if ($role !== 'admin') return 'لا يمكن تعديل شكوى بعد تسجيلها';
-            return only($changed, COMPLAINT_FOLLOW_FIELDS) && valid_complaint($after, $id)
+            // من حُوّلت إليه الشكوى يرد على تحويله فقط
+            if ($role !== 'admin') {
+                if ($changed !== ['referrals'] || !referred_to($user, $before)) return 'لا يمكن تعديل شكوى بعد تسجيلها';
+                return referral_change_error($user, $before, $after) ?? (valid_complaint($after, $id) ? null : 'بيانات الشكوى غير صالحة');
+            }
+            if (in_array('referrals', $changed, true) && ($error = referral_change_error($user, $before, $after))) return $error;
+            return only($changed, [...COMPLAINT_FOLLOW_FIELDS, 'referrals']) && valid_complaint($after, $id)
                 && (($after['status'] ?? 'open') !== 'resolved' || (is_string($after['resolution'] ?? null) && trim($after['resolution']) !== ''))
                 ? null : 'بيانات متابعة الشكوى غير صالحة';
 

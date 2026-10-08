@@ -948,11 +948,11 @@ function complaint_doc(PDO $pdo, string $id): array
     return $complaint;
 }
 
-/** صورة الاستمارة الورقية للشكوى أو ملف PDF، لمن يرى الشكوى (المدير ومسؤول مشرفي المباني ومن سجّلها) */
+/** صورة الاستمارة الورقية للشكوى أو ملف PDF، لمن يرى الشكوى (المدير ومسؤول مشرفي المباني ومن سجّلها ومن حُوّلت إليه) */
 function route_complaint_file(PDO $pdo): array
 {
     $user = current_user($pdo);
-    require_role($user, COMPLAINT_ROLES);
+    require_role($user, OFFICE_ROLES);
     $id = (string)($_GET['id'] ?? '');
     $complaint = complaint_doc($pdo, $id);
     if (!can_see_complaint($user, $complaint)) throw new ApiException(403, 'ليست لديك صلاحية لتنفيذ هذا الإجراء.', 'permission_denied');

@@ -188,3 +188,21 @@ export async function printComplaint(complaint: Complaint) {
   window.addEventListener("afterprint", cleanup);
   window.print();
 }
+
+/** المدير: تحويل الشكوى إلى حساب مع ملاحظة (اسمه ودوره ومن حوّلها ومتى من الخادم) */
+export function referComplaint(id: string, to: string, note: string) {
+  const current = rawComplaints();
+  const next = current.map((item) => (item.id === id
+    ? { ...item, referrals: [...(Array.isArray(item.referrals) ? item.referrals : []), { to, note: note.trim() }] }
+    : item));
+  saveState("fox_complaints", next, current);
+}
+
+/** المحوَّل إليه: الرد على تحويله (مرة واحدة، ومن رد ومتى من الخادم) */
+export function replyToReferral(id: string, index: number, reply: string) {
+  const current = rawComplaints();
+  const next = current.map((item) => (item.id === id && Array.isArray(item.referrals)
+    ? { ...item, referrals: item.referrals.map((referral: Raw, at: number) => (at === index ? { ...referral, reply: reply.trim() } : referral)) }
+    : item));
+  saveState("fox_complaints", next, current);
+}

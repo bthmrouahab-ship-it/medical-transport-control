@@ -441,6 +441,21 @@ function describe_write(PDO $pdo, string $col, string $id, ?array $before, ?arra
                 $by = empty($before['createdByName']) ? '' : " · سجّلها {$before['createdByName']}";
                 return ['complaint', 'complaint.delete', "حذف الشكوى {$number}من الضيف $who ($place)$by", $details];
             }
+            // تحويل الشكوى إلى المعني بها، ورده عليها
+            $oldReferrals = is_array($before['referrals'] ?? null) ? $before['referrals'] : [];
+            $newReferrals = is_array($after['referrals'] ?? null) ? $after['referrals'] : [];
+            if (count($newReferrals) > count($oldReferrals)) {
+                $referral = end($newReferrals);
+                $role = ACTIVITY_ROLE_LABELS[$referral['toRole'] ?? ''] ?? '';
+                $details['note'] = $referral['note'] ?? '';
+                return ['complaint', 'complaint.refer', "تحويل الشكوى {$number}من الضيف $who إلى " . ($referral['toName'] ?? '') . ($role ? " ($role)" : '') . ': ' . ($referral['note'] ?? ''), $details];
+            }
+            foreach ($newReferrals as $i => $referral) {
+                if (array_key_exists('reply', $referral) && !array_key_exists('reply', $oldReferrals[$i] ?? [])) {
+                    $details['reply'] = $referral['reply'];
+                    return ['complaint', 'complaint.reply', 'رد ' . ($referral['replyBy'] ?? '') . " على الشكوى {$number}المحوّلة إليه من الضيف $who: {$referral['reply']}", $details];
+                }
+            }
             if (($after['status'] ?? 'open') === 'resolved') {
                 $details['resolution'] = $after['resolution'] ?? '';
                 return ['complaint', 'complaint.resolve', "معالجة الشكوى {$number}من الضيف $who: " . ($after['resolution'] ?? ''), $details];

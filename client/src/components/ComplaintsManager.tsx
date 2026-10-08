@@ -5,8 +5,9 @@ import { complaintMatches, isResolved, type Complaint } from "@shared/complaints
 import { toWesternDigits } from "@shared/text";
 import { localDateString } from "@shared/transport";
 import { useComplaints, useGuests } from "@/lib/useShared";
-import { addComplaint, dayText, deleteComplaint, followUpComplaint, prepareScan, stampText, uploadComplaintScan, type PreparedScan } from "@/lib/complaints";
-import { authErrorMessage } from "@/lib/auth";
+import { addComplaint, dayText, deleteComplaint, followUpComplaint, prepareScan, referComplaint, stampText, uploadComplaintScan, type PreparedScan } from "@/lib/complaints";
+import { authErrorMessage, watchUsers } from "@/lib/auth";
+import type { UserProfile } from "@shared/users";
 import { ComplaintRow, ComplaintView, type ComplaintGuest } from "./Complaints";
 import { PaperComplaintForm } from "./PaperComplaint";
 import { EmptyState, PageHeader, Panel, Segmented, btn, cx, inputClass } from "./ui-kit";
@@ -16,13 +17,15 @@ const PAGE = 50;
 
 /** صف الشكوى في ملف Excel */
 const EXPORT_COLUMNS = ["رقم الشكوى", "النوع", "التاريخ", "الوقت", "الضيف", "المبنى", "الشقة", "الهاتف", "الشكوى", "السيارة", "السائق",
-  "توقيع الضيف", "الشهود", "سجّلها", "وقت التسجيل", "الحالة", "المعالجة", "عالجها", "وقت المعالجة"];
+  "توقيع الضيف", "الشهود", "سجّلها", "وقت التسجيل", "الحالة", "المعالجة", "عالجها", "وقت المعالجة", "التحويل", "الرد"];
 const exportRow = (complaint: Complaint) => [
   complaint.number ?? "", complaint.paper ? "ورقية" : "من النظام", dayText(complaint.date), complaint.time, complaint.guestName, complaint.buildingNumber, complaint.apartmentNumber,
   complaint.mobile ?? "", complaint.text, complaint.vehiclePlate ?? "", complaint.driver ?? "",
   complaint.guestSignature ? "نعم" : "لا", (complaint.witnesses ?? []).map((witness) => witness.name).join("، "),
   complaint.paperSupervisor ?? complaint.createdByName ?? "", stampText(complaint.createdAt), isResolved(complaint) ? "تمت المعالجة" : "جديدة",
   complaint.resolution ?? "", complaint.resolvedBy ?? "", stampText(complaint.resolvedAt),
+  (complaint.referrals ?? []).map((referral) => `${referral.toName ?? ""} (${stampText(referral.at)}): ${referral.note}`).join("\n"),
+  (complaint.referrals ?? []).filter((referral) => referral.reply).map((referral) => `${referral.replyBy ?? referral.toName ?? ""} (${stampText(referral.repliedAt)}): ${referral.reply}`).join("\n"),
 ];
 
 /**
@@ -40,6 +43,13 @@ export default function ComplaintsManager() {
     && complaintMatches(complaint, toWesternDigits(query)));
   const opened = openId ? complaints.find((complaint) => complaint.id === openId) : undefined;
   const [addingPaper, setAddingPaper] = useState(false);
+  // الحسابات لتحويل الشكوى إلى المعني بها (تُحمَّل عند فتح شكوى)
+  const [users, setUsers] = useState<UserProfile[] | null>(null);
+  const viewing = openId !== null;
+  useEffect(() => {
+    if (!viewing) return;
+    return watchUsers(setUsers, () => toast.error("تعذر تحميل الحسابات لتحويل الشكوى"));
+  }, [viewing]);
   const guestList = useGuests();
   const guests: ComplaintGuest[] = guestList.map((guest) => ({ name: guest.name, buildingNumber: guest.buildingNumber, apartmentNumber: guest.apartmentNumber, ...(guest.mobile ? { mobile: guest.mobile } : {}) }));
   // الاستمارة الورقية تُرفع بعد أن يحفظ الخادم الشكوى (يصل رقمها مع المزامنة)
@@ -137,6 +147,11 @@ export default function ComplaintsManager() {
           admin
           onResolve={(resolution) => { followUpComplaint(opened.id, resolution); toast.success(`الشكوى #${opened.number}: تمت المعالجة`); }}
           onReopen={() => followUpComplaint(opened.id, null)}
+          users={users}
+          onRefer={(to, note) => {
+            referComplaint(opened.id, to, note);
+            toast.success(`حُوّلت الشكوى #${opened.number} إلى ${users?.find((user) => user.uid === to)?.displayName ?? ""}`);
+          }}
           onDelete={() => { deleteComplaint(opened.id); setOpenId(null); toast.success(`حُذفت الشكوى #${opened.number}`); }}
           onClose={() => setOpenId(null)}
           scanAction={opened.number ? (
