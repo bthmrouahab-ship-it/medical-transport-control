@@ -15,6 +15,8 @@ import {
   tripPersons,
   type ClinicAppointment,
   type VehicleRequest,
+  transferSource,
+  isHospitalTransfer,
 } from "@shared/transport";
 import { pickupDetails, tripEndpoints, tripPhase } from "@shared/trips";
 import { countdownText, driverCheck, type CheckKind } from "@shared/driverChecks";
@@ -332,7 +334,7 @@ export default function DriverPage({ profile, onLogout, onChangePassword }: {
       if (action === "pickedUp") {
         const appointment = trips.appointments.find((item) => item.id === request.appointmentId);
         if (!appointment) throw new Error(t.appointmentMissing);
-        const from = request.fromAppointmentId ? trips.appointments.find((item) => item.id === request.fromAppointmentId) ?? null : null;
+        const from = transferSource(request, trips.appointments);
         const passengers = request.groupId ? trips.requests.filter((item) => item.groupId === request.groupId).length : 1;
         const details = pickupDetails(request, appointment, trips.hospitals, new Date(), passengers, from);
         body.etaMinutes = Math.max(1, Math.round((Date.parse(details.etaAt ?? "") - Date.now()) / 60000));
@@ -439,7 +441,7 @@ export default function DriverPage({ profile, onLogout, onChangePassword }: {
                   request={request}
                   appointment={appointment}
                   name={guestName(appointment, trips.namesEn, lang)}
-                  from={request.fromAppointmentId ? trips.appointments.find((item) => item.id === request.fromAppointmentId) ?? null : null}
+                  from={transferSource(request, trips.appointments)}
                   hospitals={trips.hospitals}
                   group={request.groupId ? trips.requests.filter((item) => item.groupId === request.groupId).length : 1}
                   persons={tripPersons(appointment, request, trips.nurseBack.has(request.id))}
@@ -600,7 +602,7 @@ function TripCard({ t, lang, request, appointment, name, from, hospitals, group,
               {appointment.gender && !request.nurseOnly && <span className="text-xs text-slate-500 dark:text-slate-400">{t.gender[appointment.gender]}</span>}
             </div>
             <div className="mt-1 flex flex-wrap gap-1.5">
-              {from ? <Badge tone="cyan" icon={ArrowLeftRight}>{t.transfer}</Badge> : request.nurseOnly ? <Badge tone="amber">{t.nurseOnly}</Badge> : <Badge tone={returning ? "amber" : "neutral"}>{t.direction[request.direction]}</Badge>}
+              {from ? <Badge tone="cyan" icon={ArrowLeftRight}>{isHospitalTransfer(appointment) ? t.hospitalTransfer : t.transfer}</Badge> : request.nurseOnly ? <Badge tone="amber">{t.nurseOnly}</Badge> : <Badge tone={returning ? "amber" : "neutral"}>{t.direction[request.direction]}</Badge>}
               {isNonMedical(appointment) && <Badge tone="violet">{t.nonMedical}</Badge>}
               {appointment.kind === "احتياجات خاصة" && <Badge icon={Accessibility}>{t.special}</Badge>}
               {group > 1 && <Badge tone="violet">{t.group(group)}</Badge>}

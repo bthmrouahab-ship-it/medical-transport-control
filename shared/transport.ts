@@ -75,6 +75,13 @@ export type ClinicAppointment = {
    * تعيده إلى المجمع. appointmentAt وقت العودة المتوقع، ومشرف المبنى يطلب له سيارة عودة فقط (لا ذهاب) طوال يومه.
    */
   returnOnly?: boolean;
+  /**
+   * نقل من مستشفى إلى مستشفى (تضيفه العيادة): الضيف في مستشفى الاستلام (fromClinic باسمه العربي من الدليل، وfromHospitalId)
+   * ويحتاج سيارة إلى موعده في المستشفى الآخر (clinic وhospitalId، وappointmentAt وقت الموعد فيه). يصل مباشرة إلى مشرف السيارات
+   * مع طلب سيارة الذهاب (من مستشفى الاستلام)، وبعد وصوله يُطلب له العودة إلى المجمع كأي موعد.
+   */
+  fromClinic?: string;
+  fromHospitalId?: string;
   /** الراكبة ممرضة من قائمة الممرضات (مبنى 03 شقة 001)، يُطلب لها سيارة مثل الضيف */
   nurse?: boolean;
   /** نوع الموعد (اختياري): من APPOINTMENT_TYPES بالعربية، أو مكتوب بعد «أخرى» */
@@ -122,6 +129,16 @@ export function appointmentTypeText(value: string | undefined, lang: "ar" | "en"
 /** طلب عودة فقط من المستشفى (بلا ذهاب) */
 export const isReturnOnly = (appointment: Pick<ClinicAppointment, "returnOnly">) => appointment.returnOnly === true;
 export const RETURN_ONLY_LABEL = "عودة فقط من المستشفى";
+/** نقل من مستشفى إلى مستشفى (الذهاب من مستشفى الاستلام لا من المجمع) */
+export const isHospitalTransfer = (appointment: Pick<ClinicAppointment, "fromClinic"> | null | undefined) => Boolean(appointment?.fromClinic);
+export const HOSPITAL_TRANSFER_LABEL = "نقل من مستشفى إلى مستشفى";
+/** فئة الموعد في الجداول والإحصائيات: غير طبية، أو عودة فقط من المستشفى، أو نقل من مستشفى، أو طبية */
+export const appointmentCategory = (appointment: Pick<ClinicAppointment, "category" | "returnOnly" | "fromClinic">) =>
+  (appointment.category === "غير طبية" ? "غير طبية" : isReturnOnly(appointment) ? RETURN_ONLY_LABEL : isHospitalTransfer(appointment) ? HOSPITAL_TRANSFER_LABEL : "طبية");
+/** يضيفه طلب العيادة مباشرة إلى مشرف السيارات بلا موافقة: طلب العودة فقط والنقل من مستشفى */
+export const isDirectRequest = (appointment: Pick<ClinicAppointment, "returnOnly" | "fromClinic">) => isReturnOnly(appointment) || isHospitalTransfer(appointment);
+/** حالته مع طلب سيارته: «طلب عودة» لطلب العودة، و«تم طلب السيارة» للنقل من مستشفى */
+export const directStatus = (appointment: Pick<ClinicAppointment, "returnOnly">): AppointmentStatus => (isReturnOnly(appointment) ? "طلب عودة" : "تم طلب السيارة");
 
 /** بانتظار موافقة مسؤول العيادة، أو موافق عليه، أو مستبعد (بلا حذف). */
 export type Approval = "pending" | "approved" | "excluded";
@@ -416,6 +433,9 @@ export function migrateAppointment(value: unknown, index = 0): ClinicAppointment
     ...(raw.approval === "approved" ? { approval: "approved" as const, approvedBy: toText(raw.approvedBy) || undefined, approvedAt: toText(raw.approvedAt) || undefined } : {}),
     ...(raw.approval === "excluded" ? { approval: "excluded" as const, excludedBy: toText(raw.excludedBy) || undefined, excludedAt: toText(raw.excludedAt) || undefined } : {}),
     ...(raw.returnOnly === true ? { returnOnly: true } : {}),
+    ...(toText(raw.fromClinic) && raw.category !== "غير طبية" && raw.returnOnly !== true
+      ? { fromClinic: toText(raw.fromClinic), fromHospitalId: toText(raw.fromHospitalId) || matchHospital(toText(raw.fromClinic))?.id || undefined }
+      : {}),
     ...(raw.nurse === true ? { nurse: true } : {}),
     ...(toText(raw.appointmentType) ? { appointmentType: toText(raw.appointmentType).slice(0, APPOINTMENT_TYPE_MAX) } : {}),
     ...(toText(raw.seriesId) ? { seriesId: toText(raw.seriesId) } : {}),
@@ -467,6 +487,8 @@ export function parseImportedAppointments(
     const returnOnly = isYes(readAliased(row, ["عودة فقط", "طلب عودة فقط", "return only"]), /عودة فقط|return only/i);
     // نوع الموعد (اختياري)
     const appointmentType = normalizeAppointmentType(readAliased(row, ["نوع الموعد", "appointment type"]));
+    // نقل من مستشفى إلى مستشفى: مستشفى الاستلام (عمود «من مستشفى»، من الدليل)
+    const fromName = toText(readAliased(row, ["من مستشفى", "مستشفى الاستلام", "from hospital"]));
 
     // مع قائمة الضيوف: الضيف منها (والمبنى والشقة والجنس منها، والهاتف إن لم يُكتب)، والوجهة من دليل المستشفيات
     let guestId: string | undefined;
@@ -500,6 +522,19 @@ export function parseImportedAppointments(
         return;
       }
       destination = hospital.name;
+    }
+    const fromHospital = fromName ? matchHospital(fromName, hospitals) : null;
+    if (fromName && !fromHospital) {
+      errors.push(`الصف ${excelRow}: مستشفى الاستلام «${fromName}» غير موجود في دليل المستشفيات`);
+      return;
+    }
+    if (fromHospital && returnOnly) {
+      errors.push(`الصف ${excelRow}: اختر «عودة فقط» أو «من مستشفى»، لا الاثنين`);
+      return;
+    }
+    if (fromHospital && hospital && fromHospital.id === hospital.id) {
+      errors.push(`الصف ${excelRow}: مستشفى الاستلام هو نفس مستشفى الموعد`);
+      return;
     }
 
     const missing = [
@@ -542,6 +577,7 @@ export function parseImportedAppointments(
       ...(gender ? { gender } : {}),
       ...(cancer ? { cancer: true } : {}),
       ...(returnOnly ? { returnOnly: true } : {}),
+      ...(fromHospital ? { fromClinic: fromHospital.name, fromHospitalId: fromHospital.id } : {}),
       ...(nurse ? { nurse: true } : {}),
       ...(appointmentType ? { appointmentType } : {}),
     });
@@ -729,7 +765,33 @@ export function appointmentsAfterPickup(appointments: ClinicAppointment[], reque
 }
 
 /** طلب نقل بين موعدين (من مستشفى الموعد الأول إلى الثاني). */
-export const isTransfer = (request: Pick<VehicleRequest, "fromAppointmentId">) => Boolean(request.fromAppointmentId);
+/**
+ * النقل: رحلة ذهاب تبدأ من مستشفى لا من المجمع (من موعد سابق للضيف، أو نقل من مستشفى إلى مستشفى)، فلا تُجمع مع رحلات المجمع.
+ * appointment: موعد الطلب (للنقل من مستشفى).
+ */
+export const isTransfer = (request: Pick<VehicleRequest, "fromAppointmentId" | "direction">, appointment?: Pick<ClinicAppointment, "fromClinic"> | null) =>
+  Boolean(request.fromAppointmentId) || (request.direction === "ذهاب" && isHospitalTransfer(appointment));
+
+/**
+ * مكان استلام النقل كموعد (لحساب الطريق وعرضه): الموعد الأول في النقل بين موعدين، أو مستشفى الاستلام في النقل من مستشفى
+ * (الموعد نفسه بمستشفى الاستلام)، أو null.
+ */
+export function transferSource(request: Pick<VehicleRequest, "fromAppointmentId" | "direction" | "appointmentId">, appointments: ClinicAppointment[]): ClinicAppointment | null {
+  if (request.fromAppointmentId) return appointments.find((item) => item.id === request.fromAppointmentId) ?? null;
+  if (request.direction !== "ذهاب") return null;
+  const appointment = appointments.find((item) => item.id === request.appointmentId);
+  return appointment && isHospitalTransfer(appointment) ? hospitalTransferSource(appointment) : null;
+}
+
+/** اسم النقل: من مستشفى إلى مستشفى، أو بين موعدين */
+export const transferLabels = (appointment?: Pick<ClinicAppointment, "fromClinic"> | null) => (isHospitalTransfer(appointment)
+  ? { ar: HOSPITAL_TRANSFER_LABEL, en: "Hospital to hospital transfer" }
+  : { ar: "نقل بين موعدين", en: "Transfer between appointments" });
+
+/** مستشفى الاستلام في النقل من مستشفى، كموعد في ذلك المستشفى */
+export const hospitalTransferSource = (appointment: ClinicAppointment): ClinicAppointment => ({
+  ...appointment, id: `${appointment.id}#from`, clinic: appointment.fromClinic ?? appointment.clinic, hospitalId: appointment.fromHospitalId,
+});
 
 /** الضيف معه Nurse (فيمكن أن تعود وحدها قبله). */
 export const hasNurse = (appointment: Pick<ClinicAppointment, "assistance">) => appointment.assistance.includes("يحتاج Nurse");
@@ -1127,8 +1189,8 @@ export function planDispatch(
   const units: PlannedTrip[] = [];
   const grouped = new Set<string>();
   // النقل بين موعدين يبدأ من مستشفى، فلا يُجمع مع رحلات تبدأ من المجمع
-  const groupable = trips.filter((trip) => !isTransfer(trip.request));
-  const transferIds = new Set(trips.filter((trip) => isTransfer(trip.request)).map((trip) => trip.request.id));
+  const groupable = trips.filter((trip) => !isTransfer(trip.request, trip.appointment));
+  const transferIds = new Set(trips.filter((trip) => isTransfer(trip.request, trip.appointment)).map((trip) => trip.request.id));
   const unit = (members: typeof trips, direction: VehicleRequest["direction"]): PlannedTrip => {
     const requestIds = members.map((trip) => trip.request.id);
     return { requestIds, appointments: members.map((trip) => trip.appointment), direction, persons: sum(requestIds) };
@@ -1686,11 +1748,12 @@ export function buildDriverMessage(
   const index = guestIndex(guests);
   const englishName = (appointment: ClinicAppointment) => guestOfAppointment(index, appointment)?.nameEn || appointment.patientName;
   const returning = sorted[0]?.request.direction === "عودة";
-  const transfer = Boolean(sorted[0]?.from);
+  const transfer = Boolean(sorted[0]?.from) || (!returning && isHospitalTransfer(sorted[0]?.appointment));
+  const transferName = transferLabels(sorted[0]?.appointment);
   const nurseLeg = sorted.length > 0 && sorted.every((trip) => trip.request.nurseOnly);
   const leg = nurseLeg
     ? { ar: "عودة الـ Nurse فقط", en: "Nurse return only" }
-    : { ar: transfer ? "نقل بين موعدين" : returning ? "عودة" : "ذهاب", en: transfer ? "Transfer between appointments" : returning ? "Return" : "Outbound" };
+    : { ar: transfer ? transferName.ar : returning ? "عودة" : "ذهاب", en: transfer ? transferName.en : returning ? "Return" : "Outbound" };
   // عدد الأشخاص دائمًا بجانب رقم السيارة: الضيف ومرافقه والـ Nurse (وفي الرحلة المجمّعة مجموعهم، وعدد كل ضيف تحته)
   const grouped = sorted.length > 1;
   const peopleOf = (trip: (typeof sorted)[number]) => trip.persons ?? tripPersons(trip.appointment, trip.request);
@@ -1717,9 +1780,12 @@ export function buildDriverMessage(
     const needsAr = nurse ? "" : appointment.assistance.join("، ");
     const needsEn = nurse ? "" : appointment.assistance.map((need) => NEED_EN[need]).join(", ");
     // في النقل بين موعدين يُستلم الضيف من مستشفى موعده الأول
-    const firstPlace = from ? destinationLabels(from, hospitals) : null;
-    const pickupAr = firstPlace ? `${firstPlace.ar} (بعد موعده ${from!.appointmentAt})` : `مبنى ${appointment.buildingNumber}، شقة ${appointment.apartmentNumber}`;
-    const pickupEn = firstPlace ? `${firstPlace.en} (after appointment ${from!.appointmentAt})` : `Building ${appointment.buildingNumber}, Apt ${appointment.apartmentNumber}`;
+    // وفي النقل من مستشفى إلى مستشفى من مستشفى الاستلام
+    const source = from ?? (!returning && isHospitalTransfer(appointment) ? hospitalTransferSource(appointment) : null);
+    const firstPlace = source ? destinationLabels(source, hospitals) : null;
+    const after = from && !isHospitalTransfer(appointment);
+    const pickupAr = firstPlace ? `${firstPlace.ar}${after ? ` (بعد موعده ${from.appointmentAt})` : ""}` : `مبنى ${appointment.buildingNumber}، شقة ${appointment.apartmentNumber}`;
+    const pickupEn = firstPlace ? `${firstPlace.en}${after ? ` (after appointment ${from.appointmentAt})` : ""}` : `Building ${appointment.buildingNumber}, Apt ${appointment.apartmentNumber}`;
     ar.push(
       "",
       nurse

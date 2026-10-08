@@ -34,6 +34,7 @@ import {
   UsersRound,
   Search,
   BriefcaseMedical,
+  ArrowLeftRight,
 } from "lucide-react";
 import {
   APPOINTMENT_TYPES,
@@ -45,6 +46,10 @@ import {
   destinationLabels,
   guestAlerts,
   isReturnOnly,
+  isDirectRequest,
+  isHospitalTransfer,
+  hospitalTransferSource,
+  directStatus,
   localDateString,
   parseImportedAppointments,
   REQUEST_GRACE_MINUTES,
@@ -89,8 +94,8 @@ export function ClinicHome({ t, lang, appointments, date, onDateChange, onNew, o
   appointments: ClinicAppointment[];
   date: string;
   onDateChange: (date: string) => void;
-  /** returnOnly: طلب عودة فقط من المستشفى بنفس نموذج الموعد */
-  onNew: (returnOnly?: boolean) => void;
+  /** return: طلب عودة فقط من المستشفى، وtransfer: نقل من مستشفى إلى مستشفى، بنفس نموذج الموعد */
+  onNew: (kind?: "return" | "transfer") => void;
   onEdit: (appointment: ClinicAppointment) => void;
   onDelete: (appointment: ClinicAppointment) => void;
   onImport: (appointments: ClinicAppointment[]) => void;
@@ -162,8 +167,10 @@ export function ClinicHome({ t, lang, appointments, date, onDateChange, onNew, o
         "حالة سرطان": "لا",
         // نعم: طلب عودة فقط من المستشفى («وقت الموعد» وقت العودة)
         "عودة فقط": "لا",
+        // نقل من مستشفى إلى مستشفى: اسم مستشفى الاستلام من الدليل (وإلا يبقى فارغًا)
+        "من مستشفى": "",
       }]);
-      worksheet["!cols"] = [{ wch: 22 }, { wch: 28 }, { wch: 16 }, { wch: 14 }, { wch: 14 }, { wch: 16 }, { wch: 14 }, { wch: 14 }, { wch: 18 }, { wch: 30 }, { wch: 10 }, { wch: 12 }, { wch: 10 }];
+      worksheet["!cols"] = [{ wch: 22 }, { wch: 28 }, { wch: 16 }, { wch: 14 }, { wch: 14 }, { wch: 16 }, { wch: 14 }, { wch: 14 }, { wch: 18 }, { wch: 30 }, { wch: 10 }, { wch: 12 }, { wch: 10 }, { wch: 28 }];
       const workbook = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(workbook, worksheet, "المواعيد");
       XLSX.writeFile(workbook, "appointments-template.xlsx");
@@ -206,10 +213,10 @@ export function ClinicHome({ t, lang, appointments, date, onDateChange, onNew, o
   const approvalColumn: FilterColumn<ClinicAppointment> = {
     key: "approval",
     label: t.cols.approval,
-    value: (a) => (isReturnOnly(a) ? t.noApproval : t.approvalStates[approvalOf(a)]),
+    value: (a) => (isDirectRequest(a) ? t.noApproval : t.approvalStates[approvalOf(a)]),
     cell: (a) => {
-      // طلب العودة من المستشفى لا يمر بالموافقة
-      if (isReturnOnly(a)) return <Badge tone="cyan" icon={Truck}>{t.noApproval}</Badge>;
+      // طلب العودة من المستشفى والنقل من مستشفى لا يمران بالموافقة
+      if (isDirectRequest(a)) return <Badge tone="cyan" icon={Truck}>{t.noApproval}</Badge>;
       const state = approvalOf(a);
       const by = state === "approved" ? a.approvedBy && t.approvedByText(a.approvedBy) : state === "excluded" ? a.excludedBy && t.excludedByText(a.excludedBy) : "";
       return (
@@ -218,7 +225,7 @@ export function ClinicHome({ t, lang, appointments, date, onDateChange, onNew, o
             <Badge tone={approvalTone[state]} icon={state === "approved" ? CheckCircle2 : state === "excluded" ? EyeOff : Clock3}>{t.approvalStates[state]}</Badge>
           </span>
           {by && <span className="text-[11px] text-slate-400">{by}</span>}
-          {lead && a.status === WAITING && !isReturnOnly(a) && (
+          {lead && a.status === WAITING && !isDirectRequest(a) && (
             <span className="flex flex-wrap gap-1.5">
               {state === "pending" && <button type="button" onClick={() => setApproval(a, "approved")} className={btn("success", "sm")}><Check className="h-3.5 w-3.5" /> {t.approve}</button>}
               {state !== "excluded" && <button type="button" onClick={() => setApproval(a, "excluded")} className={cx(btn("ghost", "sm"), "text-slate-600")}><EyeOff className="h-3.5 w-3.5" /> {t.exclude}</button>}
@@ -289,10 +296,12 @@ export function ClinicHome({ t, lang, appointments, date, onDateChange, onNew, o
       // موعد (ذهاب وعودة)، أو طلب عودة فقط من المستشفى
       key: "type",
       label: t.cols.type,
-      value: (a) => t.requestType(isReturnOnly(a)),
+      value: (a) => t.requestType(isReturnOnly(a), isHospitalTransfer(a)),
       cell: (a) => (isReturnOnly(a)
         ? <span className="flex flex-col gap-1"><Badge tone="cyan" icon={House}>{t.returnOnly}</Badge><span className="max-w-[200px] whitespace-normal text-[11px] leading-4 text-slate-500">{t.returnTo(names.place(a))}</span></span>
-        : <span className="text-slate-500">{t.requestType(false)}</span>),
+        : isHospitalTransfer(a)
+          ? <span className="flex flex-col gap-1"><Badge tone="cyan" icon={ArrowLeftRight}>{t.transferBadge}</Badge><span className="max-w-[200px] whitespace-normal text-[11px] leading-4 text-slate-500">{t.transferFromText(names.place(hospitalTransferSource(a)))}</span></span>
+          : <span className="text-slate-500">{t.requestType(false)}</span>),
     },
     approvalColumn,
     ...(lead ? [alertsColumn] : []),
@@ -316,7 +325,7 @@ export function ClinicHome({ t, lang, appointments, date, onDateChange, onNew, o
       cell: (a) => {
         if (expiredOf(a)) return <Badge tone="red">{t.expiredShort}</Badge>;
         // طلب العودة: حالة سيارته (بانتظار سيارة، أُرسلت، استُلم الضيف...)
-        const request = isReturnOnly(a) && a.status === "طلب عودة" ? requestOf?.(a) : undefined;
+        const request = isDirectRequest(a) && a.status === directStatus(a) ? requestOf?.(a) : undefined;
         if (request) return <span className="flex flex-col gap-1"><StatusBadge status={request.status} label={t.requestStatus(request.status)} />{request.vehiclePlate && <span dir="ltr" className="text-[11px] text-slate-500 tabular">{request.vehiclePlate}</span>}</span>;
         return <StatusBadge status={a.status} label={t.status(a.status)} />;
       },
@@ -372,13 +381,14 @@ export function ClinicHome({ t, lang, appointments, date, onDateChange, onNew, o
         ...Object.fromEntries(ASSISTANCE_NEEDS.map((need) => [need, yesNo(appointment.assistance.includes(need))])),
         "حالة سرطان": yesNo(Boolean(appointment.cancer)),
         "عودة فقط": yesNo(isReturnOnly(appointment)),
+        "من مستشفى": appointment.fromClinic ?? "",
         "الحالة": statusText(appointment.status),
         "الموافقة": ({ pending: "بانتظار الموافقة", approved: "موافق عليه", excluded: "مستبعد" } as const)[approvalOf(appointment)],
         "سبب الإلغاء": appointment.cancelReason ?? "",
         "ألغاه": appointment.cancelledBy ?? "",
       }));
       const worksheet = XLSX.utils.json_to_sheet(rows);
-      worksheet["!cols"] = [14, 24, 8, 30, 16, 10, 10, 14, 13, 10, 14, 12, 12, 12, 12, 10, 20, 28, 18].map((wch) => ({ wch }));
+      worksheet["!cols"] = [14, 24, 8, 30, 16, 10, 10, 14, 13, 10, 14, 12, 12, 12, 12, 10, 28, 20, 28, 18].map((wch) => ({ wch }));
       const workbook = XLSX.utils.book_new();
       workbook.Workbook = { Views: [{ RTL: true }] };
       XLSX.utils.book_append_sheet(workbook, worksheet, "المواعيد");
@@ -392,7 +402,7 @@ export function ClinicHome({ t, lang, appointments, date, onDateChange, onNew, o
   const waiting = dayAppointments.filter((appointment) => appointment.status === WAITING).length;
   const cancelled = dayAppointments.filter((appointment) => appointment.status === "ملغي").length;
   // مسؤول العيادة: عدادات الموافقة لليوم المختار، والضغط يفلتر الجدول
-  const active = dayAppointments.filter((appointment) => appointment.status !== "ملغي" && !isReturnOnly(appointment));
+  const active = dayAppointments.filter((appointment) => appointment.status !== "ملغي" && !isDirectRequest(appointment));
   const countOf = (approval: Approval) => active.filter((appointment) => approvalOf(appointment) === approval).length;
   const dayAlerts = active.filter((appointment) => guestAlerts(appointment, appointments).length > 0).length;
   const showOnly = (key: string, values: string[]) => {
@@ -403,7 +413,7 @@ export function ClinicHome({ t, lang, appointments, date, onDateChange, onNew, o
 
   // التحديد (لمسؤول العيادة): مواعيد لم يُطلب لها سيارة بعد، ومن المعروض فقط؛ ما تخفيه الفلاتر أو تغيّرت حالته يخرج من التحديد
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
-  const canSelect = (appointment: ClinicAppointment) => appointment.status === WAITING && !isReturnOnly(appointment);
+  const canSelect = (appointment: ClinicAppointment) => appointment.status === WAITING && !isDirectRequest(appointment);
   useEffect(() => {
     setSelected((current) => {
       if (!current.size) return current;
@@ -436,7 +446,8 @@ export function ClinicHome({ t, lang, appointments, date, onDateChange, onNew, o
             <button onClick={downloadTemplate} className={btn("ghost")}><Download className="h-4 w-4" /> {t.template}</button>
             <button disabled={importing} onClick={() => fileInputRef.current?.click()} className={btn("secondary")}><Upload className="h-4 w-4" /> {importing ? t.importing : t.import}</button>
             <button onClick={exportAppointments} className={btn("secondary")}><FileSpreadsheet className="h-4 w-4" /> {t.exportExcel}</button>
-            <button onClick={() => onNew(true)} className={btn("secondary")}><House className="h-4 w-4" /> {t.addReturn}</button>
+            <button onClick={() => onNew("transfer")} className={btn("secondary")}><ArrowLeftRight className="h-4 w-4" /> {t.addTransfer}</button>
+            <button onClick={() => onNew("return")} className={btn("secondary")}><House className="h-4 w-4" /> {t.addReturn}</button>
             <button onClick={() => onNew()} className={btn("primary")}><ClipboardPlus className="h-4 w-4" /> {t.add}</button>
           </>
         )}
@@ -549,13 +560,15 @@ function CancelReason({ t, lang, appointment }: { t: ClinicText; lang: Lang; app
   );
 }
 
-export function ClinicForm({ t, lang, initial, defaultDate, returnOnly = false, onBack, onSave }: {
+export function ClinicForm({ t, lang, initial, defaultDate, returnOnly = false, transfer = false, onBack, onSave }: {
   t: ClinicText;
   lang: Lang;
   defaultDate: string;
   initial: ClinicAppointment | null;
   /** طلب عودة فقط من المستشفى: نفس النموذج، والمستشفى مكان الاستلام والوقت وقت العودة، بلا موعد ثانٍ */
   returnOnly?: boolean;
+  /** نقل من مستشفى إلى مستشفى: مستشفى الاستلام ومستشفى الموعد، بلا موعد ثانٍ */
+  transfer?: boolean;
   onBack: () => void;
   /** موعد واحد، أو موعدان لنفس الضيف في نفس اليوم يُضافان معًا */
   onSave: (appointments: ClinicAppointment[]) => void;
@@ -570,6 +583,7 @@ export function ClinicForm({ t, lang, initial, defaultDate, returnOnly = false, 
     return {
       guestId: guest?.id ?? "",
       hospitalId: hospital?.id ?? "",
+      fromHospitalId: initial?.fromClinic ? hospitals.find((item) => item.id === initial.fromHospitalId)?.id ?? matchHospital(initial.fromClinic, hospitals)?.id ?? "" : "",
       mobile: initial?.mobile === "-" ? "" : initial?.mobile ?? "",
       appointmentDate: initial?.appointmentDate ?? defaultDate,
       appointmentAt: initial?.appointmentAt ?? "09:00",
@@ -615,9 +629,18 @@ export function ClinicForm({ t, lang, initial, defaultDate, returnOnly = false, 
       toast.error(t.privateCar);
       return;
     }
+    const fromHospital = transfer ? hospitals.find((item) => item.id === form.fromHospitalId) : undefined;
+    if (transfer && !fromHospital) {
+      toast.error(t.errTransferFrom);
+      return;
+    }
     const hospital = hospitals.find((item) => item.id === form.hospitalId);
     if (!hospital) {
       toast.error(t.errHospital);
+      return;
+    }
+    if (fromHospital && fromHospital.id === hospital.id) {
+      toast.error(t.errTransferSame);
       return;
     }
     if (!form.mobile || !form.appointmentDate || !form.appointmentAt) {
@@ -639,7 +662,7 @@ export function ClinicForm({ t, lang, initial, defaultDate, returnOnly = false, 
       return;
     }
     const secondHospital = hospitals.find((item) => item.id === second.hospitalId);
-    if (second.enabled && !initial && !returnOnly) {
+    if (second.enabled && !initial && !returnOnly && !transfer) {
       if (!secondHospital || !second.appointmentAt) {
         toast.error(secondHospital ? t.errSecondIncomplete : t.errSecondHospital);
         return;
@@ -668,11 +691,12 @@ export function ClinicForm({ t, lang, initial, defaultDate, returnOnly = false, 
       ...(form.cancer ? { cancer: true } : {}),
       ...(appointmentType ? { appointmentType } : {}),
       ...(returnOnly ? { returnOnly: true } : {}),
+      ...(fromHospital ? { fromClinic: fromHospital.name, fromHospitalId: fromHospital.id } : {}),
       // ممرضة من قائمة الممرضات: تُعرف بها عند المشرفين والسائق
       ...(isNurse(guest) ? { nurse: true } : {}),
       status: initial?.status ?? WAITING,
     };
-    if (!second.enabled || initial || returnOnly || !secondHospital) {
+    if (!second.enabled || initial || returnOnly || transfer || !secondHospital) {
       onSave([first]);
       return;
     }
@@ -695,9 +719,9 @@ export function ClinicForm({ t, lang, initial, defaultDate, returnOnly = false, 
     <div className="mx-auto max-w-3xl">
       <button onClick={onBack} className={cx(btn("ghost", "sm"), "mb-4 -ms-2")}><BackIcon className="h-4 w-4" /> {t.back}</button>
       <Panel
-        tone={returnOnly ? "cyan" : "brand"}
-        icon={returnOnly ? House : ClipboardPlus}
-        title={returnOnly ? (initial ? t.editReturnTitle : t.newReturnTitle) : initial ? t.editTitle : t.newTitle}
+        tone={returnOnly || transfer ? "cyan" : "brand"}
+        icon={returnOnly ? House : transfer ? ArrowLeftRight : ClipboardPlus}
+        title={returnOnly ? (initial ? t.editReturnTitle : t.newReturnTitle) : transfer ? (initial ? t.editTransferTitle : t.newTransferTitle) : initial ? t.editTitle : t.newTitle}
         description={initial ? initial.id : undefined}
       >
         <form onSubmit={submit} className="grid gap-5 p-5 sm:grid-cols-2 sm:p-6">
@@ -706,9 +730,15 @@ export function ClinicForm({ t, lang, initial, defaultDate, returnOnly = false, 
               <House className="mt-1 h-4 w-4 shrink-0" /> {t.returnHint}
             </p>
           )}
+          {transfer && (
+            <p className="flex items-start gap-2.5 rounded-xl bg-cyan-50 px-4 py-3 text-sm leading-6 text-cyan-900 ring-1 ring-inset ring-cyan-200 sm:col-span-2">
+              <ArrowLeftRight className="mt-1 h-4 w-4 shrink-0" /> {t.transferHint}
+            </p>
+          )}
           <GuestPicker t={t} guests={guests} guest={guest} onSelect={selectGuest} notListed={notListed} />
           {hasSpecialNeeds(guest) && <SpecialNeedsNote t={t} chosen={!initial} />}
-          <HospitalSelect id="hospital-first" label={returnOnly ? t.returnHospital : t.hospital} value={form.hospitalId} onChange={(hospitalId) => setForm({ ...form, hospitalId })} hospitals={hospitals} lang={lang} placeholder={t.hospitalChoose} noMatch={t.hospitalNoMatch} wide />
+          {transfer && <HospitalSelect id="hospital-from" label={t.transferFrom} value={form.fromHospitalId} onChange={(fromHospitalId) => setForm({ ...form, fromHospitalId })} hospitals={hospitals} lang={lang} placeholder={t.hospitalChoose} noMatch={t.hospitalNoMatch} wide />}
+          <HospitalSelect id="hospital-first" label={returnOnly ? t.returnHospital : transfer ? t.transferTo : t.hospital} value={form.hospitalId} onChange={(hospitalId) => setForm({ ...form, hospitalId })} hospitals={hospitals} lang={lang} placeholder={t.hospitalChoose} noMatch={t.hospitalNoMatch} wide />
           <Field label={t.mobile} value={form.mobile} onChange={(value) => setForm({ ...form, mobile: value })} type="tel" dir="ltr" wide />
           {!guest?.gender && <fieldset className="sm:col-span-2">
             <legend className={labelClass}>{t.gender}</legend>
@@ -741,7 +771,7 @@ export function ClinicForm({ t, lang, initial, defaultDate, returnOnly = false, 
             <span className="text-xs font-normal text-slate-500">· {t.cancerHint}</span>
           </label>
 
-          {!initial && !returnOnly && (
+          {!initial && !returnOnly && !transfer && (
             <fieldset className="rounded-xl bg-slate-50 p-4 ring-1 ring-slate-200 sm:col-span-2">
               <label className="flex cursor-pointer items-center gap-2.5 text-sm font-semibold text-ink">
                 <input type="checkbox" checked={second.enabled} onChange={(event) => setSecond({ ...second, enabled: event.target.checked })} className="h-4 w-4 accent-brand-600" />
@@ -759,7 +789,7 @@ export function ClinicForm({ t, lang, initial, defaultDate, returnOnly = false, 
           )}
 
           <div className="flex gap-3 border-t border-slate-100 pt-5 sm:col-span-2">
-            <button className={cx(btn("primary", "lg"), "flex-1")}><CheckCircle2 className="h-4 w-4" /> {initial ? t.saveChanges : returnOnly ? t.saveReturn : t.save}</button>
+            <button className={cx(btn("primary", "lg"), "flex-1")}><CheckCircle2 className="h-4 w-4" /> {initial ? t.saveChanges : returnOnly ? t.saveReturn : transfer ? t.saveTransfer : t.save}</button>
             <button type="button" onClick={onBack} className={btn("secondary", "lg")}>{t.cancel}</button>
           </div>
         </form>

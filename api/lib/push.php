@@ -195,7 +195,7 @@ function push_trip_text(PDO $pdo, array $request): array
         // رقم الطلب: رابط الإشعار يفتح التطبيق على الرحلة (trip_url)
         'id' => (string)($request['id'] ?? ''),
         'appointment' => appointment_doc($pdo, (string)($request['appointmentId'] ?? '')) ?? [],
-        'from' => empty($request['fromAppointmentId']) ? null : appointment_doc($pdo, (string)$request['fromAppointmentId']),
+        'from' => transfer_source($pdo, $request),
         'returning' => ($request['direction'] ?? '') === 'عودة',
         'nurse' => !empty($request['nurseOnly']),
     ];

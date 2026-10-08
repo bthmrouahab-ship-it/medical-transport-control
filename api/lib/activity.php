@@ -19,6 +19,7 @@ const ACTIVITY_ROLE_LABELS = [
 const APPOINTMENT_FIELD_LABELS = [
     'patientName' => 'اسم الضيف',
     'clinic' => 'الوجهة',
+    'fromClinic' => 'من مستشفى',
     'buildingNumber' => 'المبنى',
     'apartmentNumber' => 'الشقة',
     'mobile' => 'الموبايل',
@@ -98,6 +99,19 @@ function appointment_doc(PDO $pdo, string $id): ?array
         $cache[$id] = decode_doc($stmt->fetchColumn() ?: null);
     }
     return $cache[$id];
+}
+
+/**
+ * مكان استلام رحلة ذهاب تبدأ من مستشفى، كموعد: الموعد الأول في النقل بين موعدين، أو مستشفى الاستلام في النقل
+ * من مستشفى إلى مستشفى (الموعد نفسه باسم مستشفى الاستلام ورقمه)، أو null.
+ */
+function transfer_source(PDO $pdo, array $request): ?array
+{
+    if (!empty($request['fromAppointmentId'])) return appointment_doc($pdo, (string)$request['fromAppointmentId']);
+    if (($request['direction'] ?? '') !== 'ذهاب') return null;
+    $appointment = appointment_doc($pdo, (string)($request['appointmentId'] ?? ''));
+    if (!hospital_transfer($appointment)) return null;
+    return ['clinic' => $appointment['fromClinic'], 'hospitalId' => $appointment['fromHospitalId'] ?? ''] + $appointment;
 }
 
 /** بيانات الموعد التي تظهر مع كل عملية عليه. */
@@ -183,8 +197,12 @@ function describe_write(PDO $pdo, string $col, string $id, ?array $before, ?arra
             $nonMedical = ($doc['category'] ?? '') === 'غير طبية';
             // طلب عودة فقط من المستشفى يُسجَّل باسمه لا «موعد»
             $returnOnly = ($doc['returnOnly'] ?? null) === true;
-            $noun = $returnOnly ? 'طلب عودة' : ($nonMedical ? 'رحلة غير طبية' : 'موعد');
+            // النقل من مستشفى إلى مستشفى
+            $transfer = hospital_transfer($doc);
+            if ($transfer) $details['from'] = $doc['fromClinic'];
+            $noun = $returnOnly ? 'طلب عودة' : ($nonMedical ? 'رحلة غير طبية' : ($transfer ? 'نقل' : 'موعد'));
             if ($before === null) {
+                if ($transfer) return ['appointment', 'appointment.create', "إضافة نقل من مستشفى إلى مستشفى لـ $who من {$doc['fromClinic']} إلى {$details['destination']} ($when)", $details];
                 if ($returnOnly) return ['appointment', 'appointment.create', "إضافة طلب عودة من المستشفى لـ $who من {$details['destination']} إلى المجمع ($when)", $details];
                 return ['appointment', 'appointment.create', ($nonMedical ? 'إضافة رحلة غير طبية لـ ' : 'إضافة موعد ') . "$who إلى {$details['destination']} ($when)", $details];
             }
@@ -247,8 +265,14 @@ function describe_write(PDO $pdo, string $col, string $id, ?array $before, ?arra
                 if (($request['autoReturn'] ?? null) === true) {
                     return ['request', 'request.create', "طلب سيارة عودة تلقائي لـ $who من {$details['destination']} إلى المجمع (وقت العودة " . ($request['createdAt'] ?? '') . ') · رحلة غير طبية', $details];
                 }
+                $linked = appointment_doc($pdo, (string)($request['appointmentId'] ?? ''));
+                // النقل من مستشفى إلى مستشفى (من العيادة مباشرة إلى مشرف السيارات)
+                if ($direction === 'ذهاب' && hospital_transfer($linked)) {
+                    $details['from'] = $linked['fromClinic'];
+                    return ['request', 'request.create', "طلب سيارة نقل لـ $who من {$linked['fromClinic']} إلى {$details['destination']} (موعد " . ($details['time'] ?? '') . ') · نقل من مستشفى إلى مستشفى', $details];
+                }
                 // طلب العودة فقط من المستشفى (من العيادة مباشرة إلى مشرف السيارات)
-                if ((appointment_doc($pdo, (string)($request['appointmentId'] ?? ''))['returnOnly'] ?? null) === true) {
+                if (($linked['returnOnly'] ?? null) === true) {
                     return ['request', 'request.create', "طلب سيارة عودة لـ $who من {$details['destination']} إلى المجمع (وقت العودة " . ($details['time'] ?? '') . ") · عودة فقط من المستشفى", $details];
                 }
                 return ['request', 'request.create', "طلب سيارة $direction لـ $who (مبنى {$details['building']} ← {$details['destination']}، " . ($details['time'] ?? '') . ')', $details];

@@ -4,6 +4,7 @@ import {
   approvalOf,
   isNonMedical,
   isReturnOnly,
+  isDirectRequest,
   localDateString,
   requestPersons,
   requestWindow,
@@ -131,7 +132,7 @@ const minutesBetween = (from?: string, to?: string) => {
 
 /** موافقة مسؤول العيادة: للمواعيد الطبية فقط (طلب العودة فقط والرحلات غير الطبية بلا موافقة). */
 export function approvalInfo(appointment: ClinicAppointment, now = new Date()): ApprovalInfo | null {
-  if (isReturnOnly(appointment) || isNonMedical(appointment)) return null;
+  if (isDirectRequest(appointment) || isNonMedical(appointment)) return null;
   const state = approvalOf(appointment);
   if (state === "pending") {
     const past = appointment.appointmentDate < localDateString(now) || !requestWindow(appointment, now).open;

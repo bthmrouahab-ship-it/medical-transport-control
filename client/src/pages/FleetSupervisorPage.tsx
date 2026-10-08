@@ -74,6 +74,8 @@ import {
   regularForSpecialWarning,
   isRushHour,
   isTransfer,
+  transferSource,
+  transferLabels,
   localDateString,
   matchHospitalZone,
   needsAccessibleVehicle,
@@ -295,9 +297,11 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
   const gpsLive = (plate?: string) => Boolean(plate && liveGps.has(plate));
   const driverOf = (plate: string | undefined, fallback?: string) => (plate && liveGps.get(plate)?.driver) || fallback || vehicles.find((vehicle) => vehicle.plate === plate)?.driver || "";
 
+  // رحلة تبدأ من مستشفى (نقل بين موعدين أو من مستشفى إلى مستشفى)
+  const transferRequest = (request: VehicleRequest) => isTransfer(request, appointments.find((item) => item.id === request.appointmentId));
   const withAppointment = (request: VehicleRequest): Trip | null => {
     const appointment = appointments.find((item) => item.id === request.appointmentId);
-    const from = request.fromAppointmentId ? appointments.find((item) => item.id === request.fromAppointmentId) ?? null : null;
+    const from = transferSource(request, appointments);
     const outboundAt = request.direction === "عودة"
       ? requests.filter((item) => item.appointmentId === request.appointmentId && item.direction === "ذهاب").at(-1)?.createdAt
       : undefined;
@@ -343,24 +347,24 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
   };
   // سيارة خارج المجمع لم تقطع نصف طريق العودة تُوجَّه إلى أقرب ضيف ينتظر العودة (أي تاريخ)
   const pendingReturns = requests
-    .filter((request) => request.status === "بانتظار التوزيع" && (request.direction === "عودة" || isTransfer(request)))
+    .filter((request) => request.status === "بانتظار التوزيع" && (request.direction === "عودة" || transferRequest(request)))
     .map(withAppointment)
     .filter(isTrip);
   const redirects = suggestReturnRedirects(pendingReturns, dispatchable, locationStates, hospitals,
-    (vehicle, trip) => !vehicleRestriction(vehicle, { appointments: [trip.appointment], transfer: isTransfer(trip.request) }, rules));
+    (vehicle, trip) => !vehicleRestriction(vehicle, { appointments: [trip.appointment], transfer: isTransfer(trip.request, trip.appointment) }, rules));
   const redirectFor = new Map(redirects.map((item) => [item.request.id, item]));
   // تفضيل السيارة حسب مكانها: رحلة الذهاب تبدأ من المجمع (السيارات داخله أولًا)، والعودة تأخذ السيارة الموجَّهة إليها
-  const transferIds = new Set(requests.filter(isTransfer).map((request) => request.id));
+  const transferIds = new Set(requests.filter(transferRequest).map((request) => request.id));
   /** السيارة المقترحة لرحلة (ضيف أو أكثر) من السيارات المتاحة الآن */
   const suggestFor = (trips: Trip[]) => assignVehicleForTrips(dispatchable, trips.map((trip) => trip.appointment), load,
     locationRank(trips[0]?.request.direction ?? "ذهاب", trips.map((trip) => trip.request.id)),
-    { ...rules, transfer: trips.some((trip) => isTransfer(trip.request)), persons: sumPersons(trips) });
+    { ...rules, transfer: trips.some((trip) => isTransfer(trip.request, trip.appointment)), persons: sumPersons(trips) });
   /**
    * كل السيارات في الخدمة لرحلة: المتاحة لها الآن أولًا (السيارة المجهزة آخرًا للرحلة العادية)، ثم غير المتاحة مع السبب.
    * لرحلة احتياجات خاصة: السيارات المجهزة أولًا، ثم العادية بتنبيه (يرسلها المشرف بعد الموافقة عليه). لا يظهر باص العيادة.
    */
   const choicesFor = (trips: Trip[]): VehicleChoice[] => {
-    const riders = { appointments: trips.map((trip) => trip.appointment), transfer: trips.some((trip) => isTransfer(trip.request)), persons: sumPersons(trips) };
+    const riders = { appointments: trips.map((trip) => trip.appointment), transfer: trips.some((trip) => isTransfer(trip.request, trip.appointment)), persons: sumPersons(trips) };
     const accessible = needsAccessibleVehicle(riders.appointments);
     return vehicles
       .filter((vehicle) => vehicle.available && !forClinic(vehicle))
@@ -393,7 +397,7 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
   const incomingByRequest = new Map(pending.map((trip) => [trip.request.id, incomingCars(trip, requests, appointments, hospitals, now, gpsLive)
     .filter((car) => {
       const vehicle = vehicles.find((item) => item.plate === car.plate);
-      return vehicle && !vehicleRestriction(vehicle, { appointments: [trip.appointment], transfer: isTransfer(trip.request), persons: trip.persons }, rules);
+      return vehicle && !vehicleRestriction(vehicle, { appointments: [trip.appointment], transfer: isTransfer(trip.request, trip.appointment), persons: trip.persons }, rules);
     })] as const));
   const incomingFor = (requestIds: string[]) => {
     const cars = new Map<string, IncomingCar>();
@@ -420,13 +424,13 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
   };
 
   // النقل بين موعدين يبدأ من مستشفى، فلا يُجمع مع رحلات تبدأ من المجمع
-  const groupable = pending.filter((trip) => !isTransfer(trip.request));
+  const groupable = pending.filter((trip) => !isTransfer(trip.request, trip.appointment));
   // الجمع حسب وقت الحاجة إلى السيارة (وقت الطلب)، لا وقت الموعد وحده
   // حتى 14 ضيفًا إن كان باص متاح يناسبهم (رحلات غير طبية مع باصها، ومستشفى الثمامة وقت الذروة مع باص المجمع)
   const groups = buildTripGroups(groupable.map((trip) => ({ appointment: trip.appointment, direction: trip.request.direction, at: trip.at, persons: trip.persons })), hospitals, seatsFor(dispatchable, rules));
   const groupedIds = new Set(groups.flatMap((group) => group.appointmentIds));
   // ضم ضيف إلى سيارة في رحلة: لم تستلم ضيوفها بعد، أو استلمت ضيف الذهاب من المجمع قبل 5 دقائق أو أقل (joinWindow)
-  const joins = suggestJoinDispatched(groupable.filter((trip) => !groupedIds.has(trip.appointment.id)), active.filter((trip) => onDate(trip) && !isTransfer(trip.request)), hospitals, vehicles, rules);
+  const joins = suggestJoinDispatched(groupable.filter((trip) => !groupedIds.has(trip.appointment.id)), active.filter((trip) => onDate(trip) && !isTransfer(trip.request, trip.appointment)), hospitals, vehicles, rules);
   // سيارة عائدة إلى المجمع فيها مقاعد فارغة، وطلب عودة قريب منها (GPS المباشر)
   const joinedIds = new Set(joins.map((join) => join.requestId));
   const returnPickups = suggestReturnPickups(
@@ -821,7 +825,7 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
                         <div className="min-w-0">
                           <div className="flex flex-wrap items-center gap-2">
                             <p className="font-semibold text-ink">{trip.appointment.patientName}</p>
-                            {trip.from ? <Badge tone="cyan">نقل بين موعدين</Badge> : trip.request.nurseOnly ? <Badge tone="amber">عودة الـ Nurse فقط</Badge> : <Badge tone={trip.request.direction === "عودة" ? "amber" : "neutral"}>{trip.request.direction}</Badge>}
+                            {trip.from ? <Badge tone="cyan">{transferLabels(trip.appointment).ar}</Badge> : trip.request.nurseOnly ? <Badge tone="amber">عودة الـ Nurse فقط</Badge> : <Badge tone={trip.request.direction === "عودة" ? "amber" : "neutral"}>{trip.request.direction}</Badge>}
                             {isNonMedical(trip.appointment) && <Badge tone="violet">غير طبية</Badge>}
                             {trip.appointment.seriesId && <Badge tone="blue" icon={Repeat}>متكررة</Badge>}
                             {trip.appointment.nurse && <Badge tone="violet" icon={BriefcaseMedical}>ممرضة</Badge>}
@@ -1673,7 +1677,7 @@ function tripRoute(trip: Trip, hospitals: Hospital[]) {
   return `${from} ← ${tripEndpoints(trip.appointment, trip.request.direction, hospitals, trip.from).destination}`;
 }
 
-const directionText = (trip: Trip) => (trip.from ? "نقل بين موعدين" : trip.request.nurseOnly ? "عودة الـ Nurse" : trip.request.direction);
+const directionText = (trip: Trip) => (trip.from ? transferLabels(trip.appointment).ar : trip.request.nurseOnly ? "عودة الـ Nurse" : trip.request.direction);
 
 function Info({ label, wide = false, children }: { label: string; wide?: boolean; children: ReactNode }) {
   return (
@@ -2031,7 +2035,7 @@ function GroupEditor({ initial, pending, hospitals, load, choicesFor, suggestFor
     return { ok: details.every((item) => canShareVehicle(item, 45)), blocked: false, text: far ? "وجهة بعيدة" : `فارق ${gap} د` };
   };
   const candidates = pending
-    .filter((trip) => !ids.includes(trip.request.id) && !isTransfer(trip.request) && (!direction || trip.request.direction === direction))
+    .filter((trip) => !ids.includes(trip.request.id) && !isTransfer(trip.request, trip.appointment) && (!direction || trip.request.direction === direction))
     .map((trip) => ({ trip, fit: fit(trip) }))
     .sort((a, b) => Number(b.fit.ok) - Number(a.fit.ok) || timeOf(a.trip).getTime() - timeOf(b.trip).getTime());
   const choices = members.length ? choicesFor(members) : [];
