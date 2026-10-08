@@ -12,7 +12,7 @@ import {
   type VehicleRequest,
 } from "../shared/transport";
 
-// الثلاثاء 29-09-2026: الذروة 13:00–16:00، والباصات غير متاحة 6–9 صباحًا
+// الثلاثاء 29-09-2026: الذروة 13:00–16:00
 const at = (hour: number, minute = 0, day = 29) => new Date(2026, 8, day, hour, minute);
 const car = (plate: string, kind: Vehicle["kind"] = "سيدان", extra: Partial<Vehicle> = {}): Vehicle => ({ plate, driver: plate, phone: "1", kind, available: true, ...extra });
 const guest = (id: string, time: string, extra: Partial<ClinicAppointment> = {}): ClinicAppointment => ({
@@ -29,11 +29,10 @@ const outings = car("NM", "باص", { busRole: "nonMedical" });
 const bus = car("BUS", "باص");
 
 describe("buses", () => {
-  it("are not available from 6 to 9 in the morning", () => {
+  it("are available at any hour, including early morning", () => {
     const trip = { appointments: [guest("A", "10:00", { clinic: "مستشفى الوكرة", hospitalId: "wakra" })] };
-    expect(vehicleRestriction(bus, trip, { now: at(7, 30) })).toBe("الباصات غير متاحة من 6 إلى 9 صباحًا");
-    expect(vehicleRestriction(bus, trip, { now: at(9) })).toBeNull();
-    expect(vehicleRestriction(car("A"), trip, { now: at(7, 30) })).toBeNull();
+    expect(vehicleRestriction(bus, trip, { now: at(7, 30) })).toBeNull();
+    expect(vehicleRestriction(bus, trip, { now: at(6) })).toBeNull();
   });
 
   it("carry 14 guests, a car 3 (4 at full capacity), and special needs need an equipped vehicle", () => {
@@ -95,9 +94,10 @@ describe("buses", () => {
     const items = five.map((appointment) => ({ appointment, direction: "ذهاب" as const }));
     // باص متاح: رحلة واحدة لخمسة
     expect(buildTripGroups(items, undefined, seatsFor([bus, car("A")], { now: at(10) })).map((group) => group.appointmentIds.length)).toEqual([5]);
-    // بلا باص (أو قبل 9 صباحًا، أو باص الجامعة في وقته): 3 ثم 2
+    // الباص متاح صباحًا أيضًا
+    expect(buildTripGroups(items, undefined, seatsFor([bus], { now: at(8) })).map((group) => group.appointmentIds.length)).toEqual([5]);
+    // بلا باص (أو باص الجامعة في وقته): 3 ثم 2
     expect(buildTripGroups(items, undefined, seatsFor([car("A")], { now: at(10) })).map((group) => group.appointmentIds.length)).toEqual([3, 2]);
-    expect(buildTripGroups(items, undefined, seatsFor([bus], { now: at(8) })).map((group) => group.appointmentIds.length)).toEqual([3, 2]);
     expect(buildTripGroups(items, undefined, seatsFor([outings, car("A")], { now: at(10) })).map((group) => group.appointmentIds.length)).toEqual([3, 2]);
   });
 
