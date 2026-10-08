@@ -28,7 +28,7 @@ const APPOINTMENT_FIELD_LABELS = [
     'kind' => 'نوع الرحلة',
     'assistance' => 'الاحتياجات',
     'gender' => 'الجنس',
-    'cancer' => 'حالة سرطان',
+    'cancer' => 'أولوية',
     'appointmentType' => 'نوع الموعد',
 ];
 
