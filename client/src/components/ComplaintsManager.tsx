@@ -1,25 +1,27 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { FileSpreadsheet, MessageSquareWarning, Search } from "lucide-react";
+import { FileSpreadsheet, ImageUp, MessageSquareWarning, ScrollText, Search } from "lucide-react";
 import { complaintMatches, isResolved, type Complaint } from "@shared/complaints";
 import { toWesternDigits } from "@shared/text";
 import { localDateString } from "@shared/transport";
-import { useComplaints } from "@/lib/useShared";
-import { dayText, deleteComplaint, followUpComplaint, stampText } from "@/lib/complaints";
-import { ComplaintRow, ComplaintView } from "./Complaints";
+import { useComplaints, useGuests } from "@/lib/useShared";
+import { addComplaint, dayText, deleteComplaint, followUpComplaint, prepareScan, stampText, uploadComplaintScan, type PreparedScan } from "@/lib/complaints";
+import { authErrorMessage } from "@/lib/auth";
+import { ComplaintRow, ComplaintView, type ComplaintGuest } from "./Complaints";
+import { PaperComplaintForm } from "./PaperComplaint";
 import { EmptyState, PageHeader, Panel, Segmented, btn, cx, inputClass } from "./ui-kit";
 
 type StatusFilter = "open" | "resolved" | "all";
 const PAGE = 50;
 
 /** صف الشكوى في ملف Excel */
-const EXPORT_COLUMNS = ["رقم الشكوى", "التاريخ", "الوقت", "الضيف", "المبنى", "الشقة", "الهاتف", "الشكوى", "السيارة", "السائق",
+const EXPORT_COLUMNS = ["رقم الشكوى", "النوع", "التاريخ", "الوقت", "الضيف", "المبنى", "الشقة", "الهاتف", "الشكوى", "السيارة", "السائق",
   "توقيع الضيف", "الشهود", "سجّلها", "وقت التسجيل", "الحالة", "المعالجة", "عالجها", "وقت المعالجة"];
 const exportRow = (complaint: Complaint) => [
-  complaint.number ?? "", dayText(complaint.date), complaint.time, complaint.guestName, complaint.buildingNumber, complaint.apartmentNumber,
+  complaint.number ?? "", complaint.paper ? "ورقية" : "من النظام", dayText(complaint.date), complaint.time, complaint.guestName, complaint.buildingNumber, complaint.apartmentNumber,
   complaint.mobile ?? "", complaint.text, complaint.vehiclePlate ?? "", complaint.driver ?? "",
   complaint.guestSignature ? "نعم" : "لا", (complaint.witnesses ?? []).map((witness) => witness.name).join("، "),
-  complaint.createdByName ?? "", stampText(complaint.createdAt), isResolved(complaint) ? "تمت المعالجة" : "جديدة",
+  complaint.paperSupervisor ?? complaint.createdByName ?? "", stampText(complaint.createdAt), isResolved(complaint) ? "تمت المعالجة" : "جديدة",
   complaint.resolution ?? "", complaint.resolvedBy ?? "", stampText(complaint.resolvedAt),
 ];
 
@@ -37,6 +39,38 @@ export default function ComplaintsManager() {
   const filtered = complaints.filter((complaint) => (status === "all" || (status === "resolved") === isResolved(complaint))
     && complaintMatches(complaint, toWesternDigits(query)));
   const opened = openId ? complaints.find((complaint) => complaint.id === openId) : undefined;
+  const [addingPaper, setAddingPaper] = useState(false);
+  const guestList = useGuests();
+  const guests: ComplaintGuest[] = guestList.map((guest) => ({ name: guest.name, buildingNumber: guest.buildingNumber, apartmentNumber: guest.apartmentNumber, ...(guest.mobile ? { mobile: guest.mobile } : {}) }));
+  // الاستمارة الورقية تُرفع بعد أن يحفظ الخادم الشكوى (يصل رقمها مع المزامنة)
+  const pendingScans = useRef(new Map<string, PreparedScan>());
+  const [uploading, setUploading] = useState<string | null>(null);
+  async function upload(id: string, scan: PreparedScan) {
+    setUploading(id);
+    try {
+      await uploadComplaintScan(id, scan);
+      toast.success("أُرفقت الاستمارة الورقية");
+    } catch (error) {
+      toast.error(authErrorMessage(error, "تعذر رفع الاستمارة الورقية. أرفقها من جديد من نافذة الشكوى."));
+    } finally {
+      setUploading(null);
+    }
+  }
+  useEffect(() => {
+    for (const [id, scan] of Array.from(pendingScans.current)) {
+      if (!complaints.find((complaint) => complaint.id === id)?.number) continue;
+      pendingScans.current.delete(id);
+      void upload(id, scan);
+    }
+  }, [complaints]);
+  async function attach(id: string, file: File | undefined) {
+    if (!file) return;
+    try {
+      await upload(id, await prepareScan(file));
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "تعذر قراءة الملف");
+    }
+  }
 
   async function exportExcel() {
     const { downloadExcel } = await import("@/lib/report");
@@ -54,7 +88,11 @@ export default function ComplaintsManager() {
 
   return (
     <>
-      <PageHeader title="الشكاوى" subtitle="شكاوى النقل والسيارات · يسجّلها مشرفو المباني بالاستمارة المعتمدة · لا يعدّلها ولا يحذفها أحد غير مدير النظام" />
+      <PageHeader
+        title="الشكاوى"
+        subtitle="شكاوى النقل والسيارات · يسجّلها مشرفو المباني بالاستمارة المعتمدة، ويضيف المدير الشكاوى الورقية · لا يعدّلها ولا يحذفها أحد غير مدير النظام"
+        actions={<button type="button" onClick={() => setAddingPaper(true)} className={btn("primary")}><ScrollText className="h-4 w-4" /> إضافة شكوى ورقية</button>}
+      />
       <Panel
         icon={MessageSquareWarning}
         tone={openCount ? "amber" : "green"}
@@ -101,6 +139,26 @@ export default function ComplaintsManager() {
           onReopen={() => followUpComplaint(opened.id, null)}
           onDelete={() => { deleteComplaint(opened.id); setOpenId(null); toast.success(`حُذفت الشكوى #${opened.number}`); }}
           onClose={() => setOpenId(null)}
+          scanAction={opened.number ? (
+            <label className={cx(btn("secondary", "sm"), "cursor-pointer", uploading === opened.id && "pointer-events-none opacity-60")}>
+              <ImageUp className="h-3.5 w-3.5" /> {uploading === opened.id ? "جارٍ الرفع…" : opened.scanType ? "استبدال" : "إرفاق الاستمارة الورقية"}
+              <input type="file" accept="image/*,application/pdf" className="sr-only" onChange={(event) => { void attach(opened.id, event.target.files?.[0]); event.target.value = ""; }} />
+            </label>
+          ) : undefined}
+        />
+      )}
+
+      {addingPaper && (
+        <PaperComplaintForm
+          guests={guests}
+          onClose={() => setAddingPaper(false)}
+          onSave={(complaint, scan) => {
+            pendingScans.current.set(complaint.id, scan);
+            addComplaint(complaint);
+            setAddingPaper(false);
+            setOpenId(complaint.id);
+            toast.success(`أُضيفت الشكوى الورقية من ${complaint.guestName}`, { description: "تُرفع الاستمارة بعد حفظ الشكوى" });
+          }}
         />
       )}
     </>

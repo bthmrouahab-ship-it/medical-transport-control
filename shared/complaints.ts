@@ -51,10 +51,26 @@ export type Complaint = {
   resolution?: string;
   resolvedBy?: string;
   resolvedAt?: string;
+  /**
+   * شكوى ورقية يضيفها مدير النظام من استمارة مكتوبة باليد، واسم المشرف كما في الورقة. صورة الاستمارة أو ملف PDF يرفعها المدير
+   * (api/index.php: complaint-file)، ونوعها وحجمها ووقت رفعها يكتبها الخادم.
+   */
+  paper?: true;
+  paperSupervisor?: string;
+  scanType?: ScanType;
+  scanSize?: number;
+  scanAt?: string;
 };
 
+/** صورة الاستمارة الورقية أو ملف PDF (حتى COMPLAINT_SCAN_MAX، نفس القيم في api/lib/rules.php) */
+export type ScanType = "image/jpeg" | "image/png" | "application/pdf";
+export const SCAN_TYPES: ScanType[] = ["image/jpeg", "image/png", "application/pdf"];
+export const COMPLAINT_SCAN_MAX = 5 * 1024 * 1024;
+/** نص الشكوى الورقية إن لم يُكتب ملخصها */
+export const PAPER_COMPLAINT_TEXT = "الشكوى في الاستمارة الورقية المرفقة";
+
 /** ما يكتبه المشرف في الاستمارة (بلا ما يكتبه الخادم) */
-export type ComplaintDraft = Omit<Complaint, "id" | "number" | "createdAt" | "createdBy" | "createdByName" | "status" | "resolution" | "resolvedBy" | "resolvedAt">;
+export type ComplaintDraft = Omit<Complaint, "id" | "number" | "createdAt" | "createdBy" | "createdByName" | "status" | "resolution" | "resolvedBy" | "resolvedAt" | "scanType" | "scanSize" | "scanAt">;
 
 export const isResolved = (complaint: Pick<Complaint, "status">) => complaint.status === "resolved";
 
@@ -76,6 +92,7 @@ export function complaintError(draft: ComplaintDraft): string | null {
   if (!isDate(draft.date) || !/^([01]\d|2[0-3]):[0-5]\d$/.test(draft.time)) return "اختر تاريخ الشكوى ووقتها";
   if ((draft.witnesses?.length ?? 0) > COMPLAINT_MAX_WITNESSES) return `شاهدان على الأكثر`;
   if (draft.witnesses?.some((witness) => !witness.name.trim())) return "اكتب اسم الشاهد أو احذفه";
+  if (draft.paperSupervisor !== undefined && draft.paperSupervisor.trim().length > 80) return "اسم المشرف طويل";
   if (![draft.guestSignature, draft.supervisorSignature, ...(draft.witnesses ?? []).map((witness) => witness.signature)].every(isSignature)) return "التوقيع غير صالح، امسحه ووقّع من جديد";
   return null;
 }
@@ -102,6 +119,7 @@ export function buildComplaint(draft: ComplaintDraft, id: string): Complaint {
     ...(draft.guestSignature ? { guestSignature: draft.guestSignature } : {}),
     ...(draft.supervisorSignature ? { supervisorSignature: draft.supervisorSignature } : {}),
     ...(witnesses.length ? { witnesses } : {}),
+    ...(draft.paper ? { paper: true as const, ...(text(draft.paperSupervisor) ? { paperSupervisor: text(draft.paperSupervisor) } : {}) } : {}),
   };
 }
 
@@ -119,7 +137,7 @@ export function complaintMatches(complaint: Complaint, query: string) {
   const words = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
   if (!words.length) return true;
   const haystack = [complaint.number ? `#${complaint.number} ${complaint.number}` : "", complaint.guestName, `مبنى ${complaint.buildingNumber}`,
-    `شقة ${complaint.apartmentNumber}`, complaint.text, complaint.createdByName, complaint.vehiclePlate, complaint.driver, complaint.mobile]
+    `شقة ${complaint.apartmentNumber}`, complaint.text, complaint.createdByName, complaint.paperSupervisor, complaint.paper ? "ورقية" : "", complaint.vehiclePlate, complaint.driver, complaint.mobile]
     .filter(Boolean).join(" ").toLowerCase();
   return words.every((word) => haystack.includes(word));
 }
@@ -151,6 +169,10 @@ export function normalizeComplaint(raw: unknown): Complaint | null {
     ...Object.fromEntries((["appointmentId", "vehiclePlate", "driver", "guestSignature", "supervisorSignature", "createdAt", "createdBy", "createdByName", "resolution", "resolvedBy", "resolvedAt"] as const)
       .flatMap((field) => (text(item[field]) ? [[field, text(item[field])]] : []))),
     ...(witnesses.length ? { witnesses } : {}),
+    ...(item.paper === true ? { paper: true as const, ...(text(item.paperSupervisor) ? { paperSupervisor: text(item.paperSupervisor) } : {}) } : {}),
+    ...(SCAN_TYPES.includes(item.scanType as ScanType)
+      ? { scanType: item.scanType as ScanType, ...(typeof item.scanSize === "number" ? { scanSize: item.scanSize } : {}), ...(text(item.scanAt) ? { scanAt: text(item.scanAt) } : {}) }
+      : {}),
     status: item.status === "resolved" ? "resolved" : "open",
   };
 }

@@ -59,6 +59,8 @@ try {
         'GET guests-stats' => 'route_guests_stats',
         'GET service-log' => 'route_service_log',
         'GET ops-log' => 'route_ops_log',
+        'GET complaint-file' => 'route_complaint_file',
+        'POST complaint-file' => 'route_complaint_file_save',
     ];
     $handler = $handlers["$method $route"] ?? null;
     if (!$handler) throw new ApiException(404, 'طلب غير معروف', 'not_found');
@@ -503,6 +505,8 @@ function route_write(PDO $pdo, array $body): array
             save_doc($pdo, $col, $id, $after, $rev);
             if ($entry) log_activity($pdo, empty($entry[4]) ? $user : null, $entry[0], $entry[1], $entry[2], $id, $entry[3]);
             if ($col === 'requests') queue_request_pushes($pdo, $before, $after);
+            // حذف الشكوى يحذف صورة استمارتها الورقية
+            if ($col === 'complaints' && $after === null) $pdo->prepare('DELETE FROM complaint_files WHERE id = ?')->execute([$id]);
             if ($col === 'fleet' || $col === 'drivers') $fleetChanged = true;
             // شقة أُضيفت إلى السيارات الخاصة أو حُذفت منها: يُعاد إرسال ضيوفها بالعلامة الجديدة
             if ($col === 'privateCars') {
@@ -931,4 +935,76 @@ function route_activity(PDO $pdo): array
         'details' => $row['details'] ? (json_decode($row['details'], true) ?: (object)[]) : (object)[],
     ], array_slice($rows, 0, $limit));
     return ['items' => $items, 'more' => $more];
+}
+
+/** الشكوى المحفوظة (أو 404) */
+function complaint_doc(PDO $pdo, string $id): array
+{
+    if (!valid_doc_id($id)) throw new ApiException(400, 'بيانات غير صالحة', 'bad_request');
+    $stmt = $pdo->prepare("SELECT data FROM docs WHERE col = 'complaints' AND id = ?");
+    $stmt->execute([$id]);
+    $complaint = decode_doc($stmt->fetchColumn() ?: null);
+    if (!$complaint) throw new ApiException(404, 'الشكوى غير موجودة', 'not_found');
+    return $complaint;
+}
+
+/** صورة الاستمارة الورقية للشكوى أو ملف PDF، لمن يرى الشكوى (المدير ومسؤول مشرفي المباني ومن سجّلها) */
+function route_complaint_file(PDO $pdo): array
+{
+    $user = current_user($pdo);
+    require_role($user, COMPLAINT_ROLES);
+    $id = (string)($_GET['id'] ?? '');
+    $complaint = complaint_doc($pdo, $id);
+    if (!can_see_complaint($user, $complaint)) throw new ApiException(403, 'ليست لديك صلاحية لتنفيذ هذا الإجراء.', 'permission_denied');
+    $stmt = $pdo->prepare('SELECT mime, data FROM complaint_files WHERE id = ?');
+    $stmt->execute([$id]);
+    $file = $stmt->fetch();
+    if (!$file) throw new ApiException(404, 'لا توجد استمارة ورقية لهذه الشكوى', 'not_found');
+    if (session_status() === PHP_SESSION_ACTIVE) session_write_close();
+    $ext = COMPLAINT_SCAN_TYPES[$file['mime']] ?? 'bin';
+    header('Content-Type: ' . $file['mime']);
+    header('Content-Disposition: inline; filename="complaint-' . (int)($complaint['number'] ?? 0) . '.' . $ext . '"');
+    header('Content-Length: ' . strlen($file['data']));
+    header('Cache-Control: private, no-store');
+    header('X-Content-Type-Options: nosniff');
+    echo $file['data'];
+    exit;
+}
+
+/**
+ * المدير يرفع صورة الاستمارة الورقية للشكوى أو ملف PDF (أو يستبدلها): JPEG أو PNG أو PDF حتى COMPLAINT_SCAN_MAX، ويُفحص
+ * نوعه من أول بايتات الملف. نوعه وحجمه ووقته في الشكوى (تصل مع المزامنة)، والرفع في سجل العمليات.
+ */
+function route_complaint_file_save(PDO $pdo, array $body): array
+{
+    $user = current_user($pdo);
+    require_role($user, ['admin']);
+    $id = (string)($body['id'] ?? '');
+    $mime = (string)($body['type'] ?? '');
+    $data = is_string($body['data'] ?? null) ? base64_decode($body['data'], true) : false;
+    $magic = ['image/jpeg' => "\xFF\xD8\xFF", 'image/png' => "\x89PNG", 'application/pdf' => '%PDF'];
+    if (!isset(COMPLAINT_SCAN_TYPES[$mime]) || $data === false || $data === '' || !str_starts_with($data, $magic[$mime])) {
+        throw new ApiException(400, 'الملف يجب أن يكون صورة (JPEG أو PNG) أو PDF', 'bad_request');
+    }
+    if (strlen($data) > COMPLAINT_SCAN_MAX) throw new ApiException(413, 'الملف أكبر من 5 ميجابايت', 'too_large');
+    $pdo->beginTransaction();
+    try {
+        $stmt = $pdo->prepare("SELECT data FROM docs WHERE col = 'complaints' AND id = ? FOR UPDATE");
+        $stmt->execute([valid_doc_id($id) ? $id : '']);
+        $complaint = decode_doc($stmt->fetchColumn() ?: null);
+        if (!$complaint) throw new ApiException(404, 'الشكوى غير موجودة', 'not_found');
+        $replaced = !empty($complaint['scanType']);
+        $pdo->prepare('REPLACE INTO complaint_files (id, mime, size, data, created_at, created_by) VALUES (?, ?, ?, ?, ?, ?)')
+            ->execute([$id, $mime, strlen($data), $data, now_iso(), (int)$user['id']]);
+        $rev = next_revision($pdo);
+        save_doc($pdo, 'complaints', $id, ['scanType' => $mime, 'scanSize' => strlen($data), 'scanAt' => now_iso()] + $complaint, $rev);
+        $number = isset($complaint['number']) ? "رقم {$complaint['number']} " : '';
+        log_activity($pdo, $user, 'complaint', 'complaint.scan', ($replaced ? 'استبدال' : 'إرفاق') . " الاستمارة الورقية للشكوى {$number}من الضيف " . ($complaint['guestName'] ?? ''),
+            $id, ['number' => isset($complaint['number']) ? (string)$complaint['number'] : '', 'patient' => $complaint['guestName'] ?? '']);
+        $pdo->commit();
+    } catch (Throwable $error) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        throw $error;
+    }
+    return ['rev' => $rev];
 }

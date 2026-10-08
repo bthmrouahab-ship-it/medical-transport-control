@@ -1,5 +1,5 @@
-import { useMemo, useState } from "react";
-import { CheckCircle2, CircleCheck, CircleDot, Link2, MessageSquareWarning, Plus, Printer, RotateCcw, Search, Trash2, UserRound, X } from "lucide-react";
+import { useMemo, useState, type ReactNode } from "react";
+import { CheckCircle2, CircleCheck, CircleDot, ExternalLink, FileText, Link2, MessageSquareWarning, Plus, Printer, RotateCcw, ScrollText, Search, Trash2, UserRound, X } from "lucide-react";
 import {
   COMPLAINT_MAX_WITNESSES,
   COMPLAINT_TOPIC,
@@ -15,7 +15,7 @@ import {
 } from "@shared/complaints";
 import { localDateString } from "@shared/transport";
 import { toWesternDigits } from "@shared/text";
-import { dayText, printComplaint, stampText } from "@/lib/complaints";
+import { complaintScanUrl, dayText, printComplaint, stampText } from "@/lib/complaints";
 import SignaturePad, { SignatureImage } from "./SignaturePad";
 import { Badge, EmptyState, Modal, btn, cx, inputClass, labelClass, timeLabel } from "./ui-kit";
 
@@ -219,9 +219,11 @@ export function ComplaintForm({ initial, guests, supervisorName, onSave, onClose
 /**
  * الشكوى المسجلة: كل بياناتها وتوقيعاتها وطباعة الاستمارة. للمدير وحده المتابعة (تمت المعالجة مع ملاحظة، أو إعادة فتحها) والحذف.
  */
-export function ComplaintView({ complaint, admin = false, onResolve, onReopen, onDelete, onClose }: {
+export function ComplaintView({ complaint, admin = false, onResolve, onReopen, onDelete, onClose, scanAction }: {
   complaint: Complaint;
   admin?: boolean;
+  /** للمدير: إرفاق الاستمارة الورقية أو استبدالها */
+  scanAction?: ReactNode;
   onResolve?: (resolution: string) => void;
   onReopen?: () => void;
   onDelete?: () => void;
@@ -242,7 +244,7 @@ export function ComplaintView({ complaint, admin = false, onResolve, onReopen, o
       tone={isResolved(complaint) ? "green" : "amber"}
       icon={MessageSquareWarning}
       title={<>الشكوى {complaintNumber(complaint)}</>}
-      description={complaint.createdByName ? `سجّلها ${complaint.createdByName}${complaint.createdAt ? ` · ${stampText(complaint.createdAt)}` : ""}` : "تُحفظ الآن…"}
+      description={complaint.createdByName ? `${complaint.paper ? "شكوى ورقية · أضافها" : "سجّلها"} ${complaint.createdByName}${complaint.createdAt ? ` · ${stampText(complaint.createdAt)}` : ""}` : "تُحفظ الآن…"}
       onClose={onClose}
       footer={(
         <>
@@ -275,16 +277,28 @@ export function ComplaintView({ complaint, admin = false, onResolve, onReopen, o
           {row("المبنى والشقة", `مبنى ${complaint.buildingNumber} · شقة ${complaint.apartmentNumber}`)}
           {row("الهاتف", complaint.mobile)}
           {row("الرحلة", trip)}
+          {row("المشرف", complaint.paperSupervisor)}
         </dl>
+        {(complaint.scanType || scanAction) && (
+          <div className="flex flex-wrap items-center gap-2 rounded-xl bg-amber-50/60 px-3.5 py-3 ring-1 ring-inset ring-amber-200">
+            <FileText className="h-5 w-5 shrink-0 text-amber-700" />
+            <span className="min-w-0 flex-1 text-sm">
+              <span className="block font-semibold text-ink">الاستمارة الورقية</span>
+              <span className="text-xs text-slate-600">{complaint.scanType ? `${complaint.scanType === "application/pdf" ? "ملف PDF" : "صورة"}${complaint.scanAt ? ` · أُرفقت ${stampText(complaint.scanAt)}` : ""}` : "لم تُرفق بعد"}</span>
+            </span>
+            {complaint.scanType && <a href={complaintScanUrl(complaint)} target="_blank" rel="noopener" className={btn("secondary", "sm")}><ExternalLink className="h-3.5 w-3.5" /> عرض</a>}
+            {scanAction}
+          </div>
+        )}
         <div>
           <p className="mb-1 text-xs font-medium text-slate-500">الشكوى</p>
           <p className="whitespace-pre-wrap rounded-xl bg-slate-50 px-3.5 py-3 text-sm leading-7 text-ink ring-1 ring-inset ring-slate-200">{complaint.text}</p>
         </div>
-        <div className="grid grid-cols-2 gap-3">
+        {!complaint.paper && <div className="grid grid-cols-2 gap-3">
           {signature(`توقيع الضيف`, complaint.guestSignature)}
           {signature(`توقيع المشرف${complaint.createdByName ? `: ${complaint.createdByName}` : ""}`, complaint.supervisorSignature)}
           {(complaint.witnesses ?? []).map((witness, index) => <div key={index}>{signature(`شاهد (${index + 1}): ${witness.name}`, witness.signature)}</div>)}
-        </div>
+        </div>}
         {isResolved(complaint) && !resolving && (
           <div className="rounded-xl bg-emerald-50 px-3.5 py-3 text-sm text-emerald-900 ring-1 ring-inset ring-emerald-200">
             <p className="font-semibold">المعالجة</p>
@@ -323,6 +337,7 @@ export function ComplaintRow({ complaint, showAuthor = false, onOpen }: { compla
           <span className="font-semibold text-ink">{complaint.guestName}</span>
           <span className="text-xs text-slate-500">مبنى {complaint.buildingNumber} · شقة {complaint.apartmentNumber}</span>
           {complaint.vehiclePlate && <Badge tone="blue">السيارة {complaint.vehiclePlate}</Badge>}
+          {complaint.paper && <Badge tone="amber" icon={ScrollText}>ورقية</Badge>}
         </span>
         <span className="mt-1 line-clamp-2 block text-sm text-slate-600">{complaint.text}</span>
         <span className="mt-1 flex flex-wrap items-center gap-x-3 text-xs text-slate-500 tabular">

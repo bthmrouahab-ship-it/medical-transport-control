@@ -4,6 +4,7 @@ import {
   buildComplaint,
   complaintError,
   complaintMatches,
+  PAPER_COMPLAINT_TEXT,
   normalizeComplaint,
   signaturePath,
   sortComplaints,
@@ -95,5 +96,18 @@ describe("printed complaint form", () => {
     // على ورقة الهلال الأحمر القطري كما في النموذج المعتمد
     expect(html).toContain('src="/qrcs-letterhead-top.png"');
     expect(html).toContain('src="/qrcs-letterhead-bottom.png"');
+  });
+
+  it("keeps a paper complaint added by the admin, with the supervisor written on the paper and its scan", () => {
+    const paper = buildComplaint(draft({ text: PAPER_COMPLAINT_TEXT, paper: true, paperSupervisor: "  مشرفة تجربة " }), "CMP-P");
+    expect(paper).toMatchObject({ paper: true, paperSupervisor: "مشرفة تجربة", text: PAPER_COMPLAINT_TEXT });
+    expect(buildComplaint(draft({ paperSupervisor: "مشرف" }), "CMP-X")).not.toHaveProperty("paperSupervisor");
+    const loaded = normalizeComplaint({ ...paper, number: 9, scanType: "application/pdf", scanSize: 1200, scanAt: "2026-10-08T06:00:00.000Z" })!;
+    expect(loaded).toMatchObject({ paper: true, paperSupervisor: "مشرفة تجربة", scanType: "application/pdf", scanSize: 1200 });
+    expect(normalizeComplaint({ ...paper, scanType: "text/html" })).not.toHaveProperty("scanType");
+    expect(complaintMatches(loaded, "ورقية")).toBe(true);
+    expect(complaintMatches(loaded, "مشرفة")).toBe(true);
+    // الاستمارة المطبوعة باسم المشرف كما في الورقة
+    expect(complaintFormHtml({ ...loaded, createdByName: "مدير النظام" })).toContain("مشرفة تجربة");
   });
 });

@@ -109,9 +109,17 @@ const SPECIAL_NEED_FIELDS = ['id', 'name', 'gender', 'healthNumber', 'buildingNu
  */
 const COMPLAINT_FIELDS = ['id', 'number', 'date', 'time', 'guestName', 'buildingNumber', 'apartmentNumber', 'mobile', 'text',
     'appointmentId', 'vehiclePlate', 'driver', 'guestSignature', 'supervisorSignature', 'witnesses',
-    'createdAt', 'createdBy', 'createdByName', 'status', 'resolution', 'resolvedBy', 'resolvedAt', '_o'];
-/** يكتبها الخادم وحده: ما يرسله المستخدم منها عند التسجيل يُتجاهل */
-const COMPLAINT_SERVER_FIELDS = ['number', 'createdAt', 'createdBy', 'createdByName', 'status', 'resolution', 'resolvedBy', 'resolvedAt'];
+    'createdAt', 'createdBy', 'createdByName', 'status', 'resolution', 'resolvedBy', 'resolvedAt',
+    'paper', 'paperSupervisor', 'scanType', 'scanSize', 'scanAt', '_o'];
+/** يكتبها الخادم وحده: ما يرسله المستخدم منها عند التسجيل يُتجاهل (ومعها بيانات صورة الاستمارة الورقية: route_complaint_file_save) */
+const COMPLAINT_SERVER_FIELDS = ['number', 'createdAt', 'createdBy', 'createdByName', 'status', 'resolution', 'resolvedBy', 'resolvedAt',
+    'scanType', 'scanSize', 'scanAt'];
+/**
+ * الشكوى الورقية (paper: true): يضيفها مدير النظام وحده من استمارة مكتوبة باليد، ومعها اسم المشرف كما في الورقة (paperSupervisor)
+ * وصورة الاستمارة أو ملف PDF (جدول complaint_files، حتى COMPLAINT_SCAN_MAX بايت).
+ */
+const COMPLAINT_SCAN_TYPES = ['image/jpeg' => 'jpg', 'image/png' => 'png', 'application/pdf' => 'pdf'];
+const COMPLAINT_SCAN_MAX = 5 * 1024 * 1024;
 /** متابعة المدير للشكوى */
 const COMPLAINT_FOLLOW_FIELDS = ['status', 'resolution', 'resolvedBy', 'resolvedAt'];
 const COMPLAINT_TEXT_MAX = 3000;
@@ -173,7 +181,9 @@ function valid_complaint(array $data, string $id): bool
         && (!array_key_exists('vehiclePlate', $data) || $text($data['vehiclePlate'], 20))
         && (!array_key_exists('driver', $data) || is_text($data['driver'], 120))
         && in_array($data['status'] ?? 'open', ['open', 'resolved'], true)
-        && (!array_key_exists('resolution', $data) || is_text($data['resolution'], 1000));
+        && (!array_key_exists('resolution', $data) || is_text($data['resolution'], 1000))
+        && ($data['paper'] ?? true) === true
+        && (!array_key_exists('paperSupervisor', $data) || ($text($data['paperSupervisor'], 80) && ($data['paper'] ?? null) === true));
 }
 
 /**
@@ -1052,6 +1062,8 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
             if ($after === null) return $role === 'admin' ? null : 'لا يحذف الشكوى إلا مدير النظام';
             if ($before === null) {
                 if (!has_role($user, [...COMPLAINT_WRITE_ROLES, 'admin'])) return $denied;
+                // الشكوى الورقية يضيفها مدير النظام وحده
+                if (array_key_exists('paper', $after) && $role !== 'admin') return 'يضيف الشكوى الورقية مدير النظام فقط';
                 $fresh = $after;
                 foreach (COMPLAINT_SERVER_FIELDS as $field) unset($fresh[$field]);
                 return valid_complaint($fresh, $id) ? null : 'بيانات الشكوى غير صالحة';

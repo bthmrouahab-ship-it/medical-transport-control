@@ -435,7 +435,8 @@ function describe_write(PDO $pdo, string $col, string $id, ?array $before, ?arra
                 'number' => isset($complaint['number']) ? (string)$complaint['number'] : '', 'plate' => $complaint['vehiclePlate'] ?? '',
             ], fn($value) => $value !== '');
             $car = empty($complaint['vehiclePlate']) ? '' : " · السيارة {$complaint['vehiclePlate']}";
-            if ($before === null) return ['complaint', 'complaint.create', "تسجيل الشكوى {$number}من الضيف $who ($place)$car", $details];
+            $paper = ($complaint['paper'] ?? null) === true ? 'الورقية ' : '';
+            if ($before === null) return ['complaint', 'complaint.create', "تسجيل الشكوى {$paper}{$number}من الضيف $who ($place)$car", $details];
             if ($after === null) {
                 $by = empty($before['createdByName']) ? '' : " · سجّلها {$before['createdByName']}";
                 return ['complaint', 'complaint.delete', "حذف الشكوى {$number}من الضيف $who ($place)$by", $details];
