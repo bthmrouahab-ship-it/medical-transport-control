@@ -57,7 +57,7 @@ import {
 } from "@/components/ui-kit";
 import { useComplaints, useHospitals, useLiveVehicles, useNow } from "@/lib/useShared";
 import { ComplaintForm, ComplaintList, ComplaintView, type ComplaintGuest } from "@/components/Complaints";
-import { addComplaint } from "@/lib/complaints";
+import { addComplaint, replyToReferral } from "@/lib/complaints";
 import type { Complaint, ComplaintDraft } from "@shared/complaints";
 
 /** فتح استمارة الشكوى من بطاقة الموعد (الضيف ورحلته معبأة) */
@@ -136,7 +136,9 @@ export function SupervisorHome({ uid, userName = "", lead = false, nurses = fals
   // الشكاوى: الاستمارة المفتوحة (معبأة من بطاقة الموعد أو فارغة)، والشكوى المعروضة
   const [complaintDraft, setComplaintDraft] = useState<Partial<ComplaintDraft> | null>(null);
   const [complaintId, setComplaintId] = useState<string | null>(null);
-  const complaints = useComplaints();
+  // مشرف المبنى: الشكاوى التي سجّلها (وما حُوّل إليه من غيرها في «شكاوى محوّلة إليك»)، والمسؤول: كل الشكاوى
+  const allComplaints = useComplaints();
+  const complaints = lead ? allComplaints : allComplaints.filter((complaint) => complaint.createdBy === uid);
   const now = useNow();
   const hospitals = useHospitals();
   const liveGps = useLiveVehicles(now);
@@ -474,7 +476,14 @@ export function SupervisorHome({ uid, userName = "", lead = false, nurses = fals
       {complaintDraft && (
         <ComplaintForm initial={complaintDraft} guests={complaintGuests} supervisorName={userName} onSave={saveComplaint} onClose={() => setComplaintDraft(null)} />
       )}
-      {shownComplaint && <ComplaintView complaint={shownComplaint} onClose={() => setComplaintId(null)} />}
+      {shownComplaint && (
+        <ComplaintView
+          complaint={shownComplaint}
+          uid={uid}
+          onReply={(index, reply) => { replyToReferral(shownComplaint.id, index, reply); toast.success(`أُرسل ردك على الشكوى #${shownComplaint.number}`); }}
+          onClose={() => setComplaintId(null)}
+        />
+      )}
 
       {cancelling && (
         <CancelDialog

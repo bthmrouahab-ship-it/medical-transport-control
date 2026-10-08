@@ -18,7 +18,7 @@ const IDLE_SECONDS = 3600;
  * نسخة قاعدة البيانات (settings.schema): 2 = فصل السائقين عن السيارات (migrate_drivers في drivers.php)،
  * 3 = سجل السيارات في الخدمة ووقت تسجيل المواعيد للإحصائيات (migrate_tracking في tracking.php)
  */
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 /** أقصى حجم لطلب واحد (رفع ملف إحصائيات كبير يُقسَّم على عدة طلبات) */
 const MAX_BODY_BYTES = 8 * 1024 * 1024;
 
@@ -172,6 +172,15 @@ function ensure_schema(PDO $pdo): void
         lang VARCHAR(5) NOT NULL DEFAULT 'ar',
         created_at VARCHAR(30) NOT NULL,
         KEY push_user (user_id)
+    ) $options");
+    // صورة الاستمارة الورقية للشكوى أو ملف PDF (النسخة 4)، يرفعها مدير النظام
+    $pdo->exec("CREATE TABLE IF NOT EXISTS complaint_files (
+        id VARCHAR(160) PRIMARY KEY,
+        mime VARCHAR(40) NOT NULL,
+        size INT UNSIGNED NOT NULL,
+        data LONGBLOB NOT NULL,
+        created_at VARCHAR(30) NOT NULL,
+        created_by INT UNSIGNED NOT NULL
     ) $options");
     // لغة الإشعارات أُضيفت بعد إنشاء الجدول في بعض المواقع
     if (!$pdo->query("SHOW COLUMNS FROM push_subscriptions LIKE 'lang'")->fetch()) {

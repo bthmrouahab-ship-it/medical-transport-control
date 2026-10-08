@@ -2,6 +2,9 @@
 
 const API_URL = `${import.meta.env.VITE_API_BASE ?? "/api"}/index.php`;
 
+/** رابط طلب GET يُفتح مباشرة في المتصفح (مثل ملف): الكوكي نفسها، بلا ترويسة */
+export const apiUrl = (route: string, query: Record<string, string> = {}) => `${API_URL}?${new URLSearchParams({ r: route, ...query })}`;
+
 export class ApiError extends Error {
   constructor(message: string, readonly status: number, readonly code: string) {
     super(message);

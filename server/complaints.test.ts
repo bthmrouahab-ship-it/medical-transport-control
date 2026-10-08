@@ -4,7 +4,10 @@ import {
   buildComplaint,
   complaintError,
   complaintMatches,
+  PAPER_COMPLAINT_TEXT,
+  awaitsReply,
   normalizeComplaint,
+  referralsTo,
   signaturePath,
   sortComplaints,
   type ComplaintDraft,
@@ -95,5 +98,40 @@ describe("printed complaint form", () => {
     // على ورقة الهلال الأحمر القطري كما في النموذج المعتمد
     expect(html).toContain('src="/qrcs-letterhead-top.png"');
     expect(html).toContain('src="/qrcs-letterhead-bottom.png"');
+  });
+
+  it("keeps a paper complaint added by the admin, with the supervisor written on the paper and its scan", () => {
+    const paper = buildComplaint(draft({ text: PAPER_COMPLAINT_TEXT, paper: true, paperSupervisor: "  مشرفة تجربة " }), "CMP-P");
+    expect(paper).toMatchObject({ paper: true, paperSupervisor: "مشرفة تجربة", text: PAPER_COMPLAINT_TEXT });
+    expect(buildComplaint(draft({ paperSupervisor: "مشرف" }), "CMP-X")).not.toHaveProperty("paperSupervisor");
+    const loaded = normalizeComplaint({ ...paper, number: 9, scanType: "application/pdf", scanSize: 1200, scanAt: "2026-10-08T06:00:00.000Z" })!;
+    expect(loaded).toMatchObject({ paper: true, paperSupervisor: "مشرفة تجربة", scanType: "application/pdf", scanSize: 1200 });
+    expect(normalizeComplaint({ ...paper, scanType: "text/html" })).not.toHaveProperty("scanType");
+    expect(complaintMatches(loaded, "ورقية")).toBe(true);
+    expect(complaintMatches(loaded, "مشرفة")).toBe(true);
+    // الاستمارة المطبوعة باسم المشرف كما في الورقة
+    expect(complaintFormHtml({ ...loaded, createdByName: "مدير النظام" })).toContain("مشرفة تجربة");
+  });
+
+  it("keeps referrals to the person concerned, with the note and their reply", () => {
+    const loaded = normalizeComplaint({
+      ...buildComplaint(draft(), "CMP-R"), number: 4,
+      referrals: [
+        { to: "12", toName: "مسؤولة تجربة", toRole: "clinicLead", note: "يرجى التحقق مع العيادة", by: "مدير النظام", at: "2026-10-08T06:00:00.000Z", reply: "تم التواصل مع الضيف", replyBy: "مسؤولة تجربة" },
+        { to: "7", toName: "مشرف تجربة", note: "أخبر الضيف بما تم" },
+        { to: "", note: "بلا حساب" },
+        { to: "9" },
+      ],
+    })!;
+    expect(loaded.referrals).toHaveLength(2);
+    expect(loaded.referrals![0]).toMatchObject({ toName: "مسؤولة تجربة", reply: "تم التواصل مع الضيف" });
+    expect(referralsTo(loaded, "7")).toEqual([{ referral: loaded.referrals![1], index: 1 }]);
+    expect(referralsTo(loaded, undefined)).toEqual([]);
+    expect(awaitsReply(loaded, "7")).toBe(true);
+    expect(awaitsReply(loaded, "12")).toBe(false);
+    expect(awaitsReply(loaded, "99")).toBe(false);
+    expect(complaintMatches(loaded, "محوّلة مسؤولة")).toBe(true);
+    expect(complaintMatches(loaded, "تم التواصل")).toBe(true);
+    expect(normalizeComplaint(buildComplaint(draft(), "CMP-N"))).not.toHaveProperty("referrals");
   });
 });

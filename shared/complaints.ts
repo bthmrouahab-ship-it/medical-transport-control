@@ -51,10 +51,57 @@ export type Complaint = {
   resolution?: string;
   resolvedBy?: string;
   resolvedAt?: string;
+  /**
+   * شكوى ورقية يضيفها مدير النظام من استمارة مكتوبة باليد، واسم المشرف كما في الورقة. صورة الاستمارة أو ملف PDF يرفعها المدير
+   * (api/index.php: complaint-file)، ونوعها وحجمها ووقت رفعها يكتبها الخادم.
+   */
+  paper?: true;
+  paperSupervisor?: string;
+  scanType?: ScanType;
+  scanSize?: number;
+  scanAt?: string;
+  /** تحويل الشكوى إلى المعني بها مع ملاحظة، ورده (يُضاف ولا يُعدّل) */
+  referrals?: ComplaintReferral[];
 };
 
+/**
+ * تحويل الشكوى: المدير يحوّلها مع ملاحظة إلى حساب (مسؤول العيادة، أو مشرف المبنى المعني، أو المشرف الذي سجّلها ليخبر الضيف)،
+ * فتصله الشكوى ويرد عليها مرة واحدة. المدير يرسل to وnote فقط، والمحوَّل إليه reply فقط، والخادم يكتب الأسماء والأوقات.
+ */
+export type ComplaintReferral = {
+  /** رقم حساب المحوَّل إليه، واسمه ودوره (يكتبهما الخادم من حسابه) */
+  to: string;
+  toName?: string;
+  toRole?: string;
+  note: string;
+  by?: string;
+  at?: string;
+  reply?: string;
+  replyBy?: string;
+  repliedAt?: string;
+};
+export const COMPLAINT_NOTE_MAX = 1000;
+export const COMPLAINT_REFERRAL_MAX = 10;
+/** من تُحوَّل إليه الشكوى (نفس COMPLAINT_REFERRAL_ROLES في api/lib/rules.php) */
+export const COMPLAINT_REFERRAL_ROLES = ["clinicLead", "clinic", "buildingSupervisor", "buildingLead", "fleetSupervisor"] as const;
+
+/** التحويلات إلى هذا الحساب (مع ترتيبها في الشكوى، للرد) */
+export const referralsTo = (complaint: Pick<Complaint, "referrals">, uid: string | undefined) =>
+  (complaint.referrals ?? []).map((referral, index) => ({ referral, index })).filter(({ referral }) => !!uid && referral.to === uid);
+
+/** تحويل إلى هذا الحساب لم يُرد عليه بعد */
+export const awaitsReply = (complaint: Pick<Complaint, "referrals">, uid: string | undefined) =>
+  referralsTo(complaint, uid).some(({ referral }) => !referral.reply);
+
+/** صورة الاستمارة الورقية أو ملف PDF (حتى COMPLAINT_SCAN_MAX، نفس القيم في api/lib/rules.php) */
+export type ScanType = "image/jpeg" | "image/png" | "application/pdf";
+export const SCAN_TYPES: ScanType[] = ["image/jpeg", "image/png", "application/pdf"];
+export const COMPLAINT_SCAN_MAX = 5 * 1024 * 1024;
+/** نص الشكوى الورقية إن لم يُكتب ملخصها */
+export const PAPER_COMPLAINT_TEXT = "الشكوى في الاستمارة الورقية المرفقة";
+
 /** ما يكتبه المشرف في الاستمارة (بلا ما يكتبه الخادم) */
-export type ComplaintDraft = Omit<Complaint, "id" | "number" | "createdAt" | "createdBy" | "createdByName" | "status" | "resolution" | "resolvedBy" | "resolvedAt">;
+export type ComplaintDraft = Omit<Complaint, "id" | "number" | "createdAt" | "createdBy" | "createdByName" | "status" | "resolution" | "resolvedBy" | "resolvedAt" | "scanType" | "scanSize" | "scanAt" | "referrals">;
 
 export const isResolved = (complaint: Pick<Complaint, "status">) => complaint.status === "resolved";
 
@@ -76,6 +123,7 @@ export function complaintError(draft: ComplaintDraft): string | null {
   if (!isDate(draft.date) || !/^([01]\d|2[0-3]):[0-5]\d$/.test(draft.time)) return "اختر تاريخ الشكوى ووقتها";
   if ((draft.witnesses?.length ?? 0) > COMPLAINT_MAX_WITNESSES) return `شاهدان على الأكثر`;
   if (draft.witnesses?.some((witness) => !witness.name.trim())) return "اكتب اسم الشاهد أو احذفه";
+  if (draft.paperSupervisor !== undefined && draft.paperSupervisor.trim().length > 80) return "اسم المشرف طويل";
   if (![draft.guestSignature, draft.supervisorSignature, ...(draft.witnesses ?? []).map((witness) => witness.signature)].every(isSignature)) return "التوقيع غير صالح، امسحه ووقّع من جديد";
   return null;
 }
@@ -102,6 +150,7 @@ export function buildComplaint(draft: ComplaintDraft, id: string): Complaint {
     ...(draft.guestSignature ? { guestSignature: draft.guestSignature } : {}),
     ...(draft.supervisorSignature ? { supervisorSignature: draft.supervisorSignature } : {}),
     ...(witnesses.length ? { witnesses } : {}),
+    ...(draft.paper ? { paper: true as const, ...(text(draft.paperSupervisor) ? { paperSupervisor: text(draft.paperSupervisor) } : {}) } : {}),
   };
 }
 
@@ -119,7 +168,8 @@ export function complaintMatches(complaint: Complaint, query: string) {
   const words = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
   if (!words.length) return true;
   const haystack = [complaint.number ? `#${complaint.number} ${complaint.number}` : "", complaint.guestName, `مبنى ${complaint.buildingNumber}`,
-    `شقة ${complaint.apartmentNumber}`, complaint.text, complaint.createdByName, complaint.vehiclePlate, complaint.driver, complaint.mobile]
+    `شقة ${complaint.apartmentNumber}`, complaint.text, complaint.createdByName, complaint.paperSupervisor, complaint.paper ? "ورقية" : "", complaint.vehiclePlate, complaint.driver, complaint.mobile,
+    ...(complaint.referrals ?? []).flatMap((referral) => ["محوّلة", referral.toName, referral.note, referral.reply])]
     .filter(Boolean).join(" ").toLowerCase();
   return words.every((word) => haystack.includes(word));
 }
@@ -131,6 +181,16 @@ export function normalizeComplaint(raw: unknown): Complaint | null {
   const id = toText(item.id);
   if (!id) return null;
   const text = (value: unknown) => (typeof value === "string" && value ? value : undefined);
+  const referrals = Array.isArray(item.referrals)
+    ? item.referrals.flatMap((entry): ComplaintReferral[] => {
+      const referral = (entry ?? {}) as Record<string, unknown>;
+      const to = text(referral.to);
+      const note = text(referral.note);
+      if (!to || !note) return [];
+      return [{ to, note, ...Object.fromEntries((["toName", "toRole", "by", "at", "reply", "replyBy", "repliedAt"] as const)
+        .flatMap((field) => (text(referral[field]) ? [[field, text(referral[field])]] : []))) }];
+    })
+    : [];
   const witnesses = Array.isArray(item.witnesses)
     ? item.witnesses.flatMap((witness) => {
       const name = text((witness as Record<string, unknown>)?.name);
@@ -151,6 +211,11 @@ export function normalizeComplaint(raw: unknown): Complaint | null {
     ...Object.fromEntries((["appointmentId", "vehiclePlate", "driver", "guestSignature", "supervisorSignature", "createdAt", "createdBy", "createdByName", "resolution", "resolvedBy", "resolvedAt"] as const)
       .flatMap((field) => (text(item[field]) ? [[field, text(item[field])]] : []))),
     ...(witnesses.length ? { witnesses } : {}),
+    ...(item.paper === true ? { paper: true as const, ...(text(item.paperSupervisor) ? { paperSupervisor: text(item.paperSupervisor) } : {}) } : {}),
+    ...(SCAN_TYPES.includes(item.scanType as ScanType)
+      ? { scanType: item.scanType as ScanType, ...(typeof item.scanSize === "number" ? { scanSize: item.scanSize } : {}), ...(text(item.scanAt) ? { scanAt: text(item.scanAt) } : {}) }
+      : {}),
+    ...(referrals.length ? { referrals } : {}),
     status: item.status === "resolved" ? "resolved" : "open",
   };
 }

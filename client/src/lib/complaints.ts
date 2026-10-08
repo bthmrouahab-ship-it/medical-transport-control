@@ -5,6 +5,8 @@ import {
   SIGNATURE_WIDTH,
   type Complaint,
 } from "@shared/complaints";
+import { COMPLAINT_SCAN_MAX, type ScanType } from "@shared/complaints";
+import { api, apiUrl } from "./api";
 import { loadState, saveState } from "./appStore";
 
 /**
@@ -36,6 +38,49 @@ export function deleteComplaint(id: string) {
   const current = rawComplaints();
   saveState("fox_complaints", current.filter((item) => item.id !== id), current);
 }
+
+// ————— الاستمارة الورقية (المدير) —————
+
+export type PreparedScan = { type: ScanType; data: string; size: number; name: string };
+/** أطول ضلع لصورة الاستمارة بعد تصغيرها (تبقى مقروءة وحجمها صغير) */
+const SCAN_MAX_SIDE = 2200;
+
+const toBase64 = (bytes: Uint8Array) => {
+  let binary = "";
+  for (let at = 0; at < bytes.length; at += 0x8000) binary += String.fromCharCode.apply(null, Array.from(bytes.subarray(at, at + 0x8000)));
+  return btoa(binary);
+};
+
+/**
+ * صورة الاستمارة (من الكاميرا أو ملف) تُصغَّر إلى JPEG، وملف PDF يُرفع كما هو؛ حتى 5 ميجابايت. يرمي رسالة الخطأ بالعربية.
+ */
+export async function prepareScan(file: File): Promise<PreparedScan> {
+  if (file.type === "application/pdf") {
+    if (file.size > COMPLAINT_SCAN_MAX) throw new Error("ملف PDF أكبر من 5 ميجابايت");
+    return { type: "application/pdf", data: toBase64(new Uint8Array(await file.arrayBuffer())), size: file.size, name: file.name };
+  }
+  if (!file.type.startsWith("image/")) throw new Error("اختر صورة الاستمارة أو ملف PDF");
+  const bitmap = await createImageBitmap(file).catch(() => { throw new Error("تعذر فتح الصورة"); });
+  const scale = Math.min(1, SCAN_MAX_SIDE / Math.max(bitmap.width, bitmap.height));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.round(bitmap.width * scale);
+  canvas.height = Math.round(bitmap.height * scale);
+  const context = canvas.getContext("2d")!;
+  context.fillStyle = "#fff";
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  bitmap.close();
+  const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.82));
+  if (!blob) throw new Error("تعذر تجهيز الصورة");
+  if (blob.size > COMPLAINT_SCAN_MAX) throw new Error("الصورة أكبر من 5 ميجابايت");
+  return { type: "image/jpeg", data: toBase64(new Uint8Array(await blob.arrayBuffer())), size: blob.size, name: file.name };
+}
+
+/** رفع الاستمارة الورقية للشكوى (بعد حفظ الشكوى في الخادم)، أو استبدالها */
+export const uploadComplaintScan = (id: string, scan: PreparedScan) => api<{ rev: number }>("complaint-file", { id, type: scan.type, data: scan.data });
+
+/** رابط عرض الاستمارة الورقية (يُفتح في نافذة جديدة) */
+export const complaintScanUrl = (complaint: { id: string; scanAt?: string }) => apiUrl("complaint-file", { id: complaint.id, v: complaint.scanAt ?? "" });
 
 // ————— طباعة الاستمارة —————
 
@@ -74,7 +119,7 @@ export function complaintFormHtml(complaint: Complaint) {
   <div class="row">${field("رقم المبنى", complaint.buildingNumber)}${field("رقم الشقة", complaint.apartmentNumber)}${complaint.mobile ? field("الهاتف", complaint.mobile) : ""}</div>
   <div class="complaint"><span class="label">الشكوى:</span><div class="text">${escapeHtml(complaint.text)}</div></div>
   ${trip ? `<div class="row">${field("الرحلة", trip, "grow")}</div>` : ""}
-  <div class="row">${field("اسم المشرف", complaint.createdByName, "grow")}<div class="field"><span class="label">التوقيع:</span>${signatureSvg(complaint.supervisorSignature)}</div></div>
+  <div class="row">${field("اسم المشرف", complaint.paperSupervisor ?? complaint.createdByName, "grow")}<div class="field"><span class="label">التوقيع:</span>${signatureSvg(complaint.supervisorSignature)}</div></div>
   <div class="witnesses">
     ${witnesses.map((witness, index) => `<div class="witness"><b>شاهد (${index + 1}):</b>${field("الاسم", witness?.name)}<div class="field"><span class="label">التوقيع:</span>${signatureSvg(witness?.signature)}</div></div>`).join("")}
   </div>
@@ -142,4 +187,22 @@ export async function printComplaint(complaint: Complaint) {
   };
   window.addEventListener("afterprint", cleanup);
   window.print();
+}
+
+/** المدير: تحويل الشكوى إلى حساب مع ملاحظة (اسمه ودوره ومن حوّلها ومتى من الخادم) */
+export function referComplaint(id: string, to: string, note: string) {
+  const current = rawComplaints();
+  const next = current.map((item) => (item.id === id
+    ? { ...item, referrals: [...(Array.isArray(item.referrals) ? item.referrals : []), { to, note: note.trim() }] }
+    : item));
+  saveState("fox_complaints", next, current);
+}
+
+/** المحوَّل إليه: الرد على تحويله (مرة واحدة، ومن رد ومتى من الخادم) */
+export function replyToReferral(id: string, index: number, reply: string) {
+  const current = rawComplaints();
+  const next = current.map((item) => (item.id === id && Array.isArray(item.referrals)
+    ? { ...item, referrals: item.referrals.map((referral: Raw, at: number) => (at === index ? { ...referral, reply: reply.trim() } : referral)) }
+    : item));
+  saveState("fox_complaints", next, current);
 }

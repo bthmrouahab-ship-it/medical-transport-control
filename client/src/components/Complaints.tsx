@@ -1,5 +1,5 @@
-import { useMemo, useState } from "react";
-import { CheckCircle2, CircleCheck, CircleDot, Link2, MessageSquareWarning, Plus, Printer, RotateCcw, Search, Trash2, UserRound, X } from "lucide-react";
+import { useMemo, useState, type ReactNode } from "react";
+import { CheckCircle2, CircleCheck, CircleDot, ExternalLink, Forward, FileText, Link2, MessageSquareWarning, Plus, Printer, RotateCcw, ScrollText, Search, Trash2, UserRound, X } from "lucide-react";
 import {
   COMPLAINT_MAX_WITNESSES,
   COMPLAINT_TOPIC,
@@ -15,8 +15,10 @@ import {
 } from "@shared/complaints";
 import { localDateString } from "@shared/transport";
 import { toWesternDigits } from "@shared/text";
-import { dayText, printComplaint, stampText } from "@/lib/complaints";
+import { complaintScanUrl, dayText, printComplaint, stampText } from "@/lib/complaints";
+import type { UserProfile } from "@shared/users";
 import SignaturePad, { SignatureImage } from "./SignaturePad";
+import { ReferForm, ReferralBadge, ReferralsSection } from "./ComplaintReferrals";
 import { Badge, EmptyState, Modal, btn, cx, inputClass, labelClass, timeLabel } from "./ui-kit";
 
 /** ضيف مقترح في الاستمارة (من مواعيد اليوم عند مشرف المبنى)، مع موعده وسيارة رحلته إن أُرسلت */
@@ -217,17 +219,25 @@ export function ComplaintForm({ initial, guests, supervisorName, onSave, onClose
 }
 
 /**
- * الشكوى المسجلة: كل بياناتها وتوقيعاتها وطباعة الاستمارة. للمدير وحده المتابعة (تمت المعالجة مع ملاحظة، أو إعادة فتحها) والحذف.
+ * الشكوى المسجلة: كل بياناتها وتوقيعاتها وطباعة الاستمارة. للمدير وحده المتابعة (تمت المعالجة مع ملاحظة، أو إعادة فتحها)
+ * والتحويل إلى المعني بها مع ملاحظة (users: الحسابات) والحذف؛ والمحوَّل إليه (uid) يرد على تحويله (onReply).
  */
-export function ComplaintView({ complaint, admin = false, onResolve, onReopen, onDelete, onClose }: {
+export function ComplaintView({ complaint, admin = false, onResolve, onReopen, onDelete, onClose, scanAction, users, onRefer, uid, onReply }: {
   complaint: Complaint;
   admin?: boolean;
+  users?: UserProfile[] | null;
+  onRefer?: (to: string, note: string) => void;
+  uid?: string;
+  onReply?: (index: number, reply: string) => void;
+  /** للمدير: إرفاق الاستمارة الورقية أو استبدالها */
+  scanAction?: ReactNode;
   onResolve?: (resolution: string) => void;
   onReopen?: () => void;
   onDelete?: () => void;
   onClose: () => void;
 }) {
   const [resolving, setResolving] = useState(false);
+  const [referring, setReferring] = useState(false);
   const [resolution, setResolution] = useState(complaint.resolution ?? "");
   const trip = [complaint.vehiclePlate && `السيارة ${complaint.vehiclePlate}`, complaint.driver && `السائق ${complaint.driver}`].filter(Boolean).join(" · ");
   const row = (label: string, value?: string) => value ? <div className="flex gap-2 text-sm"><dt className="w-24 shrink-0 text-slate-500">{label}</dt><dd className="min-w-0 font-medium text-ink">{value}</dd></div> : null;
@@ -242,7 +252,7 @@ export function ComplaintView({ complaint, admin = false, onResolve, onReopen, o
       tone={isResolved(complaint) ? "green" : "amber"}
       icon={MessageSquareWarning}
       title={<>الشكوى {complaintNumber(complaint)}</>}
-      description={complaint.createdByName ? `سجّلها ${complaint.createdByName}${complaint.createdAt ? ` · ${stampText(complaint.createdAt)}` : ""}` : "تُحفظ الآن…"}
+      description={complaint.createdByName ? `${complaint.paper ? "شكوى ورقية · أضافها" : "سجّلها"} ${complaint.createdByName}${complaint.createdAt ? ` · ${stampText(complaint.createdAt)}` : ""}` : "تُحفظ الآن…"}
       onClose={onClose}
       footer={(
         <>
@@ -256,8 +266,13 @@ export function ComplaintView({ complaint, admin = false, onResolve, onReopen, o
             </button>
           )}
           {admin && isResolved(complaint) && onReopen && <button type="button" onClick={onReopen} className={btn("secondary")}><RotateCcw className="h-4 w-4" /> إعادة فتح</button>}
+          {admin && !referring && onRefer && (
+            <button type="button" onClick={() => { setReferring(true); setResolving(false); }} className={btn("secondary")} disabled={!complaint.number}>
+              <Forward className="h-4 w-4" /> تحويل
+            </button>
+          )}
           {admin && !resolving && onResolve && (
-            <button type="button" onClick={() => setResolving(true)} className={btn("success")} disabled={!complaint.number}>
+            <button type="button" onClick={() => { setResolving(true); setReferring(false); }} className={btn("success")} disabled={!complaint.number}>
               <CircleCheck className="h-4 w-4" /> {isResolved(complaint) ? "تعديل المعالجة" : "تمت المعالجة"}
             </button>
           )}
@@ -275,16 +290,32 @@ export function ComplaintView({ complaint, admin = false, onResolve, onReopen, o
           {row("المبنى والشقة", `مبنى ${complaint.buildingNumber} · شقة ${complaint.apartmentNumber}`)}
           {row("الهاتف", complaint.mobile)}
           {row("الرحلة", trip)}
+          {row("المشرف", complaint.paperSupervisor)}
         </dl>
+        {(complaint.scanType || scanAction) && (
+          <div className="flex flex-wrap items-center gap-2 rounded-xl bg-amber-50/60 px-3.5 py-3 ring-1 ring-inset ring-amber-200">
+            <FileText className="h-5 w-5 shrink-0 text-amber-700" />
+            <span className="min-w-0 flex-1 text-sm">
+              <span className="block font-semibold text-ink">الاستمارة الورقية</span>
+              <span className="text-xs text-slate-600">{complaint.scanType ? `${complaint.scanType === "application/pdf" ? "ملف PDF" : "صورة"}${complaint.scanAt ? ` · أُرفقت ${stampText(complaint.scanAt)}` : ""}` : "لم تُرفق بعد"}</span>
+            </span>
+            {complaint.scanType && <a href={complaintScanUrl(complaint)} target="_blank" rel="noopener" className={btn("secondary", "sm")}><ExternalLink className="h-3.5 w-3.5" /> عرض</a>}
+            {scanAction}
+          </div>
+        )}
         <div>
           <p className="mb-1 text-xs font-medium text-slate-500">الشكوى</p>
           <p className="whitespace-pre-wrap rounded-xl bg-slate-50 px-3.5 py-3 text-sm leading-7 text-ink ring-1 ring-inset ring-slate-200">{complaint.text}</p>
         </div>
-        <div className="grid grid-cols-2 gap-3">
+        {!complaint.paper && <div className="grid grid-cols-2 gap-3">
           {signature(`توقيع الضيف`, complaint.guestSignature)}
           {signature(`توقيع المشرف${complaint.createdByName ? `: ${complaint.createdByName}` : ""}`, complaint.supervisorSignature)}
           {(complaint.witnesses ?? []).map((witness, index) => <div key={index}>{signature(`شاهد (${index + 1}): ${witness.name}`, witness.signature)}</div>)}
-        </div>
+        </div>}
+        <ReferralsSection complaint={complaint} admin={admin} uid={uid} onReply={onReply} />
+        {referring && onRefer && (
+          <ReferForm complaint={complaint} users={users ?? null} onCancel={() => setReferring(false)} onRefer={(to, note) => { onRefer(to, note); setReferring(false); }} />
+        )}
         {isResolved(complaint) && !resolving && (
           <div className="rounded-xl bg-emerald-50 px-3.5 py-3 text-sm text-emerald-900 ring-1 ring-inset ring-emerald-200">
             <p className="font-semibold">المعالجة</p>
@@ -323,6 +354,8 @@ export function ComplaintRow({ complaint, showAuthor = false, onOpen }: { compla
           <span className="font-semibold text-ink">{complaint.guestName}</span>
           <span className="text-xs text-slate-500">مبنى {complaint.buildingNumber} · شقة {complaint.apartmentNumber}</span>
           {complaint.vehiclePlate && <Badge tone="blue">السيارة {complaint.vehiclePlate}</Badge>}
+          {complaint.paper && <Badge tone="amber" icon={ScrollText}>ورقية</Badge>}
+          <ReferralBadge complaint={complaint} />
         </span>
         <span className="mt-1 line-clamp-2 block text-sm text-slate-600">{complaint.text}</span>
         <span className="mt-1 flex flex-wrap items-center gap-x-3 text-xs text-slate-500 tabular">
