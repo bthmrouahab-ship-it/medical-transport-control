@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import { goTo, reveal } from "@/lib/notify";
-import { Accessibility, AlertTriangle, ArrowLeftRight, Ban, BellRing, BriefcaseMedical, Building2, Check, CheckCircle2, ChevronDown, Clock3, Footprints, Hospital, House, Link2, MapPin, MessageSquareWarning, Pencil, Ribbon, RotateCcw, ShieldCheck, Smartphone, Stethoscope, Timer, Truck, UserMinus, Users, XCircle } from "lucide-react";
+import { Accessibility, AlertTriangle, ArrowLeftRight, Ban, BellRing, BriefcaseMedical, Building2, Check, CheckCircle2, ChevronDown, Clock3, Footprints, Hospital, House, Link2, MapPin, MessageSquareWarning, Pencil, Flag, RotateCcw, ShieldCheck, Smartphone, Stethoscope, Timer, Truck, UserMinus, Users, XCircle } from "lucide-react";
 import { NURSE_BUILDING } from "@shared/guests";
 import { toWesternDigits } from "@shared/text";
 import {
@@ -817,7 +817,8 @@ function GuestSummary({ appointment, request, from, day, timeTone, status }: {
           {isNonMedical(appointment) && <Badge tone="violet">غير طبية</Badge>}
           {appointment.nurse && <Badge tone="violet" icon={BriefcaseMedical}>ممرضة</Badge>}
           {appointment.kind === "احتياجات خاصة" && <Badge icon={Accessibility}>احتياجات خاصة</Badge>}
-          {appointment.cancer && <Badge tone="red" icon={Ribbon}>أولوية · حالة سرطان</Badge>}
+          {/* «أولوية» فقط بلا سببها (حالة سرطان لا تظهر لمشرف المبنى) */}
+          {appointment.cancer && <Badge tone="red" icon={Flag}>أولوية</Badge>}
         </span>
         <span className="mt-1 flex items-start gap-1.5 text-sm text-slate-600">
           <MapPin className="mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-400" />

@@ -33,7 +33,6 @@ import {
   UserCog,
   UserMinus,
   UserPlus,
-  Ribbon,
   Clock3,
   Wand2,
   School,
@@ -198,8 +197,8 @@ function waitedText(createdAt: string, now: Date) {
   return minutes < 1 ? "الآن" : `منذ ${minutesText(minutes)}`;
 }
 
-/** شارة الأولوية (حالة سرطان). */
-const PriorityBadge = () => <Badge tone="red" icon={Ribbon}>أولوية · حالة سرطان</Badge>;
+/** شارة الأولوية: «أولوية» فقط بلا سببها (حالة سرطان لا تظهر لمشرف السيارات). */
+const PriorityBadge = () => <Badge tone="red" icon={Flag}>أولوية</Badge>;
 /** reserved: غير مخصصة للمواعيد (باص العيادة وباص المجمع، وسيارة المدارس وباص الجامعة في أوقاتهما) */
 type VehicleFilter = "all" | "inside" | "outside" | "busy" | "reserved" | "off";
 
