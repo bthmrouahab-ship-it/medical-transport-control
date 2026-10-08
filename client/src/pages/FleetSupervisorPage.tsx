@@ -62,7 +62,6 @@ import {
   buildDriverMessage,
   buildTripGroups,
   busRoleOf,
-  busesOff,
   calculateTripGroupingScore,
   canShareVehicle,
   findUnrequestedMatches,
@@ -288,9 +287,8 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
   const hospitals = useHospitals();
   const now = useNow(15000);
   const today = localDateString(now);
-  // قواعد السيارات الآن: ساعات الباصات (غير متاحة 6–9 صباحًا)، وباص المجمع وقت الذروة، وأوقات المدارس وباص الجامعة
+  // قواعد السيارات الآن: باص المجمع وقت الذروة، وأوقات المدارس وباص الجامعة
   const rules: VehicleRules = { now, hospitals, schedules };
-  const busOffNow = busesOff(now);
 
   // السيارات التي يصل موقعها مباشرة الآن، واسم السائق الذي يقودها فعليًا
   const liveGps = useLiveVehicles(now);
@@ -320,7 +318,6 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
     .filter(isTrip);
   const availability = new Map(vehicles.map((vehicle) => [vehicle.plate, vehicleAvailability(vehicle.plate, requests, now, gpsLive(vehicle.plate))]));
   const isBusy = (plate: string) => Boolean(availability.get(plate)?.busy);
-  const offHours = (vehicle: Vehicle) => vehicle.kind === "باص" && busOffNow;
   // باص العيادة في خدمتها، فلا يُحسب بين السيارات المتاحة للتوزيع
   const forClinic = (vehicle: Vehicle) => busRoleOf(vehicle) === "clinic";
   // سيارة المدارس وباص الجامعة في وقتهما المحجوز (أوقات المدارس، وباص الجامعة طوال اليوم ما لم تتغير): في الخدمة ولا يُرسلان
@@ -328,7 +325,7 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
   // غير مخصصة للمواعيد الآن: باص العيادة وباص المجمع، وسيارة المدارس وباص الجامعة في وقتهما
   const notForAppointments = (vehicle: Vehicle) => forClinic(vehicle) || busRoleOf(vehicle) === "shuttle" || Boolean(reservedNow(vehicle));
   // السيارة بلا سائق لا تُرسل حتى يختار مشرف السيارات سائقها
-  const dispatchable = vehicles.filter((vehicle) => vehicle.available && hasDriver(vehicle) && !isBusy(vehicle.plate) && !offHours(vehicle) && !forClinic(vehicle) && !reservedNow(vehicle));
+  const dispatchable = vehicles.filter((vehicle) => vehicle.available && hasDriver(vehicle) && !isBusy(vehicle.plate) && !forClinic(vehicle) && !reservedNow(vehicle));
   /** خارج الخدمة: موقوفة، أو بلا سائق وليست في رحلة */
   const offDuty = (vehicle: Vehicle) => !vehicle.available || (!hasDriver(vehicle) && !isBusy(vehicle.plate));
   // رحلات كل سيارة في اليوم المختار: السيارة الأقل رحلات تُقترح أولًا حتى يتوزع العمل
@@ -645,7 +642,6 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
       if (forClinic(vehicle)) return { tone: "neutral" as const, text: "في خدمة العيادة" };
       const reserved = reservedNow(vehicle);
       if (reserved) return { tone: "violet" as const, text: reservedText(reserved) };
-      if (offHours(vehicle)) return { tone: "neutral" as const, text: "الباصات غير متاحة من 6 إلى 9 صباحًا" };
       if (busRoleOf(vehicle) === "shuttle") {
         return { tone: "violet" as const, text: isRushHour(now) ? "يلف داخل المجمع · وقت الذروة: يمكن إرساله إلى مستشفى الثمامة" : "يلف داخل المجمع" };
       }
@@ -760,7 +756,7 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
         <StatusBar
           label="حالة التوزيع الآن"
           items={[
-            { key: "available", label: "سيارات متاحة", value: forAppointments.length, tone: "green", hint: `${vehicleCounts.inside} داخل المجمع · ${vehicleCounts.outside} خارجه${busOffNow ? " · الباصات من 9:00" : ""}${vehicleCounts.reserved ? ` · ${vehicleCounts.reserved} غير مخصصة للمواعيد` : ""}`, onClick: () => jump("fleet-vehicles") },
+            { key: "available", label: "سيارات متاحة", value: forAppointments.length, tone: "green", hint: `${vehicleCounts.inside} داخل المجمع · ${vehicleCounts.outside} خارجه${vehicleCounts.reserved ? ` · ${vehicleCounts.reserved} غير مخصصة للمواعيد` : ""}`, onClick: () => jump("fleet-vehicles") },
             { key: "active", label: "رحلات جارية", value: activeGroups.length, tone: "blue", hint: trackingCount ? `${trackingCount} بمتابعة GPS` : "من الإرسال حتى الوجهة", onClick: () => jump("fleet-active") },
             { key: "pending", label: "بانتظار التوزيع", value: pending.length, tone: "amber", hint: date === today ? "طلبات اليوم" : "طلبات التاريخ المحدد", onClick: () => jump("fleet-pending") },
             { key: "late", label: "متأخرة", value: latePending.length + lateTrips.length, tone: "red", hint: `${latePending.length} تنتظر سيارة · ${lateTrips.length} في الطريق`, onClick: () => jump(latePending.length ? "fleet-pending" : "fleet-active") },

@@ -839,8 +839,6 @@ export const SEDAN_PREFERRED_SEATS = 3;
 export const ACCESSIBLE_SEATS = 4;
 /** لا يُجمع ضيفا احتياجات خاصة في سيارة واحدة */
 export const MAX_SPECIAL_PER_VEHICLE = 1;
-/** الباصات غير متاحة من 6 إلى 9 صباحًا */
-export const BUS_OFF_HOURS = { from: 6, to: 9 };
 /** مستشفى الثمامة (مركز الثمامة الصحي): الوجهة الوحيدة لباص المجمع، وقت الذروة فقط */
 export const SHUTTLE_HOSPITAL_ID = "thumama-hc";
 
@@ -958,12 +956,6 @@ export function reservedSoonWarning(vehicle: Pick<Vehicle, "kind" | "busRole">, 
   return soon.role === SCHOOL_ROLE ? `سيارة المدارس · تخرج ${soon.starts}` : `باص الجامعة · يخرج ${soon.starts}`;
 }
 
-/** الباصات غير متاحة في هذا الوقت (6–9 صباحًا). */
-export function busesOff(at: Date) {
-  const hour = at.getHours();
-  return hour >= BUS_OFF_HOURS.from && hour < BUS_OFF_HOURS.to;
-}
-
 /**
  * عدد الأشخاص الذين تتسع لهم السيارة في رحلة واحدة (مع المرافقين والـ Nurse): الباص 14، وسيارة الاحتياجات
  * الخاصة 4 (ضيف احتياجات خاصة واحد و3 عاديون)، والسيدان 3 أو 4 إن شغّلها مشرف السيارات بطاقتها الكاملة.
@@ -990,7 +982,7 @@ export type TripLoad = { appointments: ClinicAppointment[]; transfer?: boolean; 
 
 /** عدد الأشخاص في الرحلة. */
 export const loadPersons = (trip: TripLoad) => trip.persons ?? trip.appointments.reduce((sum, appointment) => sum + tripPersons(appointment), 0);
-/** وقت اختيار السيارة (لساعات الباصات ووقت الذروة) ودليل المستشفيات، وأوقات سيارات المدارس وباص الجامعة (schedules) */
+/** وقت اختيار السيارة (لوقت الذروة) ودليل المستشفيات، وأوقات سيارات المدارس وباص الجامعة (schedules) */
 /**
  * regularForSpecial: مشرف السيارات يختار السيارة بنفسه، فتُقبل سيارة عادية لضيف احتياجات خاصة بعد موافقته على
  * التنبيه (`regularForSpecialWarning`). الاقتراح والتوزيع التلقائي والضم والتوجيه بلا هذا الخيار.
@@ -1007,7 +999,6 @@ export function regularForSpecialWarning(vehicle: Pick<Vehicle, "kind">, appoint
  * - باص العيادة في خدمة العيادة، فلا يُرسل في أي رحلة.
  * - الاحتياجات الخاصة تحتاج سيارة مجهزة، وعدد الأشخاص (مع المرافق والـ Nurse) لا يتجاوز مقاعد السيارة (الباص 14)؛
  *   والضيف الواحد مع مرافقيه يُقبل دائمًا في السيارة المناسبة له.
- * - الباصات غير متاحة من 6 إلى 9 صباحًا.
  * - باص المجمع يلف داخل المجمع، ويُرسل فقط إلى مستشفى الثمامة (ذهابًا أو عودة) وقت الذروة.
  * - سيارة المدارس وباص الجامعة لا يُرسلان في أي رحلة (طبية أو غير طبية) في أوقاتهما المحجوزة (reservedRun:
  *   أوقات المدارس الأحد إلى الخميس 11:00–14:00 و17:30–19:00، وباص الجامعة طوال اليوم، ما لم يغيّرها مشرف السيارات).
@@ -1029,7 +1020,6 @@ export function vehicleRestriction(vehicle: Vehicle, trip: TripLoad, rules: Vehi
     const full = vehicle.kind === "سيدان" && !vehicle.fullCapacity && persons <= SEDAN_SEATS;
     return `تتسع لـ ${personsText(seats)} فقط${full ? " (أو 4 بطاقتها الكاملة)" : ""}`;
   }
-  if (vehicle.kind === "باص" && busesOff(now)) return "الباصات غير متاحة من 6 إلى 9 صباحًا";
   if (role === "shuttle" && !(isRushHour(now) && !trip.transfer && trip.appointments.every((appointment) => isShuttleTrip(appointment, rules.hospitals)))) {
     return "باص المجمع: مستشفى الثمامة وقت الذروة فقط";
   }
