@@ -19,6 +19,7 @@ import {
   type Vehicle,
   type VehicleRequest,
   type VehicleRules,
+  type VehicleWaiting,
 } from "./transport";
 
 /**
@@ -241,6 +242,8 @@ export type VehicleLocationState =
     source: "gps" | "estimate";
     /** لم تقطع نصف طريق العودة بعد، فيمكن توجيهها إلى ضيف ينتظر العودة */
     canRedirect: boolean;
+    /** تنتظر في المستشفى (اختاره مشرف السيارات)، فلا تعود إلى المجمع */
+    waiting?: VehicleWaiting;
   };
 
 /**
@@ -257,6 +260,8 @@ export function vehicleLocationState(
   hospitals: Hospital[] = DEFAULT_HOSPITALS,
   now = new Date(),
   gps: Point | null = null,
+  /** انتظار السيارة في المستشفى (activeWaiting): تبقى خارج المجمع في مكان انتظارها */
+  waiting: VehicleWaiting | null = null,
 ): VehicleLocationState {
   const own = requests.filter((request) => request.vehiclePlate === plate);
   const phases = own.map((request) => ({ request, phase: tripPhase(request, now, Boolean(gps)) }));
@@ -264,6 +269,14 @@ export function vehicleLocationState(
 
   const origin: Point = { lat: ORIGIN.lat, lng: ORIGIN.lng };
   const atComplex = gps ? distanceKm(gps, origin) <= COMPLEX_RADIUS_KM : false;
+  if (waiting && !atComplex) {
+    const place: Point = { lat: waiting.lat, lng: waiting.lng };
+    const since = waiting.since ? new Date(waiting.since) : now;
+    return {
+      kind: "outside", since, from: waiting.place, backAt: new Date(now.getTime() + Math.ceil(driveMinutes(gps ?? place, origin, now)) * 60000),
+      progress: 0, position: gps ?? place, source: gps ? "gps" : "estimate", canRedirect: true, waiting,
+    };
+  }
   let last: { request: VehicleRequest; at: Date } | null = null;
   for (const { request, phase } of phases) {
     if (phase.kind === "arrived" && phase.at && phase.at <= now && (!last || phase.at > last.at)) last = { request, at: phase.at };
@@ -292,6 +305,61 @@ export function vehicleLocationState(
   const progress = Math.min(1, Math.max(0, (now.getTime() - last.at.getTime()) / (backAt.getTime() - last.at.getTime())));
   const position = place ? { lat: place.lat + (origin.lat - place.lat) * progress, lng: place.lng + (origin.lng - place.lng) * progress } : null;
   return { kind: "outside", since: last.at, from, backAt, progress, position, source: "estimate", canRedirect: progress < 0.5 };
+}
+
+// ————— السيارة المتوقفة خارج المجمع —————
+
+/** السيارة التي لم تتحرك من مكانها (خارج المجمع) هذه المدة: تنبيه لمشرف السيارات */
+export const STOPPED_MINUTES = 10;
+/** لم تتحرك: بقيت على هذا البعد من مكان وقوفها (نفس القيمة STILL_RADIUS_M في api/lib/tracking.php) */
+export const STILL_RADIUS_KM = 0.1;
+/** المكان المعروف (مستشفى أو وجهة) على هذا البعد من السيارة يُذكر اسمه */
+export const STOPPED_PLACE_KM = 0.5;
+
+/** موقع السيارة كما يحفظه الخادم: stillSince بداية وقوفها في مكانها (يكتبه الخادم من مواقع السائق) */
+export type StillLocation = Point & { plate: string; sharing?: boolean; updatedAt: string; stillSince?: string; driver?: string };
+
+export type StoppedVehicle = {
+  vehicle: Vehicle;
+  position: Point;
+  /** منذ متى لم تتحرك */
+  since: Date;
+  minutes: number;
+  /** أقرب مستشفى أو وجهة معروفة (على بعد STOPPED_PLACE_KM أو أقل)، وإلا null */
+  place: Hospital | null;
+  driver: string;
+};
+
+/** أقرب مكان معروف إلى نقطة على هذا البعد أو أقل */
+export function nearestPlace(point: Point, places: Hospital[], maxKm = STOPPED_PLACE_KM): Hospital | null {
+  let best: { place: Hospital; km: number } | null = null;
+  for (const place of places) {
+    const km = distanceKm(point, place);
+    if (km <= maxKm && (!best || km < best.km)) best = { place, km };
+  }
+  return best?.place ?? null;
+}
+
+/**
+ * السيارات التي لم تتحرك من مكانها STOPPED_MINUTES دقائق أو أكثر خارج المجمع، وموقعها يصل مباشرة (GPS):
+ * لمشرف السيارات أن يجعلها تنتظر في المستشفى أو يستفسر من السائق عن سبب التأخير.
+ * السيارة التي تنتظر في المستشفى بأمره (activeWaiting) والموقوفة عن الخدمة لا تُذكر.
+ */
+export function stoppedVehicles(vehicles: Vehicle[], locations: StillLocation[], places: Hospital[], now = new Date(),
+  isWaiting: (vehicle: Vehicle) => boolean = () => false): StoppedVehicle[] {
+  const origin: Point = { lat: ORIGIN.lat, lng: ORIGIN.lng };
+  return locations.flatMap((location) => {
+    const vehicle = vehicles.find((item) => item.plate === location.plate);
+    if (!vehicle || !vehicle.available || isWaiting(vehicle) || !location.sharing || !location.stillSince) return [];
+    // الموقع يصل مباشرة (آخر دقيقتين، كما في GPS المباشر)
+    if (now.getTime() - Date.parse(location.updatedAt) > 2 * 60000) return [];
+    if (distanceKm(location, origin) <= COMPLEX_RADIUS_KM) return [];
+    const since = new Date(location.stillSince);
+    const minutes = Math.floor((now.getTime() - since.getTime()) / 60000);
+    if (!(minutes >= STOPPED_MINUTES)) return [];
+    const position = { lat: location.lat, lng: location.lng };
+    return [{ vehicle, position, since, minutes, place: nearestPlace(position, places), driver: location.driver?.trim() || vehicle.driver }];
+  }).sort((a, b) => b.minutes - a.minutes);
 }
 
 export type ReturnRedirect = {

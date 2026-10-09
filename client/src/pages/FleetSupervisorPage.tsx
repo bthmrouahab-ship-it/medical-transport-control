@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import {
   AlertTriangle,
@@ -17,6 +17,7 @@ import {
   Pencil,
   Trash2,
   History,
+  Hourglass,
   Link2,
   MapPin,
   MessageCircle,
@@ -86,6 +87,10 @@ import {
   seatsFor,
   groupSeats,
   mergeVehicle,
+  activeWaiting,
+  nonMedicalPlace,
+  waitingText,
+  NON_MEDICAL_DESTINATIONS,
   stoppableSeriesTrips,
   suggestJoinDispatched,
   vehicleLoad,
@@ -100,10 +105,11 @@ import {
   type Vehicle,
   type VehicleRequest,
   type VehicleRules,
+  type VehicleWaiting,
 } from "@shared/transport";
 import type { Hospital } from "@shared/hospitals";
 import { assignDrivers, shortDriverName } from "@shared/drivers";
-import { LATE_MINUTES, arrivalsOn, incomingCars, minutesSince, neededAt, returningText, suggestReturnPickups, suggestReturnRedirects, tripEndpoints, tripPhase, vehicleAvailability, vehicleLocationState, type IncomingCar, type TripPhase, type VehicleLocationState } from "@shared/trips";
+import { LATE_MINUTES, arrivalsOn, incomingCars, minutesSince, neededAt, returningText, stoppedVehicles, suggestReturnPickups, suggestReturnRedirects, tripEndpoints, tripPhase, vehicleAvailability, vehicleLocationState, type IncomingCar, type StoppedVehicle, type TripPhase, type VehicleLocationState } from "@shared/trips";
 import {
   Badge,
   DateChooser,
@@ -136,12 +142,13 @@ import { KindIcon, KindLabel, VehiclePicker } from "@/components/VehiclePicker";
 import DriverAssignment from "@/components/DriverAssignment";
 import RoleSchedulesDialog from "@/components/RoleSchedulesDialog";
 import AddVehicleDialog from "@/components/AddVehicleDialog";
+import WaitingDialog, { type WaitCandidate } from "@/components/WaitingDialog";
 import { saveState } from "@/lib/appStore";
 import { reveal } from "@/lib/notify";
 import GuestContact from "@/components/GuestContact";
 import { useDrivers, useGuests, useHospitals, useLiveVehicles, useNow, useSchedules, useSharedState } from "@/lib/useShared";
 import { locationFreshness, type VehicleLocation } from "@/lib/vehicleLocation";
-import { NOTIFY_KEY, deviceNotificationsOn, useArrivalAlerts, useCancellationAlerts, useDenialAlerts, useRedirectAlerts } from "@/lib/arrivalAlerts";
+import { NOTIFY_KEY, deviceNotificationsOn, stoppedText, useArrivalAlerts, useCancellationAlerts, useDenialAlerts, useRedirectAlerts, useStoppedAlerts } from "@/lib/arrivalAlerts";
 import { checkStateText, driverCheck } from "@shared/driverChecks";
 
 /**
@@ -283,9 +290,18 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
   const [editingSchedules, setEditingSchedules] = useState(false);
   /** نافذة إضافة سيارة جديدة */
   const [addingVehicle, setAddingVehicle] = useState(false);
+  /** نافذة انتظار السيارة في المستشفى (رقمها) */
+  const [waitingPlate, setWaitingPlate] = useState<string | null>(null);
+  /** سيارات متوقفة تجاهل المشرف تنبيهها (حتى تتحرك: السيارة ووقت بداية وقوفها) */
+  const [ignoredStops, setIgnoredStops] = useState<string[]>([]);
   const drivers = useDrivers();
   const schedules = useSchedules();
   const hospitals = useHospitals();
+  // أماكن انتظار السيارة وتنبيه التوقف: المستشفيات ووجهات الرحلات غير الطبية ذات الموقع
+  const waitPlaces = useMemo<Hospital[]>(() => [
+    ...hospitals,
+    ...NON_MEDICAL_DESTINATIONS.flatMap((destination) => (destination.place ? [{ ...destination.place, name: destination.ar } as Hospital] : [])),
+  ], [hospitals]);
   const now = useNow(15000);
   const today = localDateString(now);
   // قواعد السيارات الآن: باص المجمع وقت الذروة، وأوقات المدارس وباص الجامعة
@@ -337,7 +353,7 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
   // مكان كل سيارة: في رحلة، أو متاحة داخل المجمع، أو متاحة خارجه (عائدة من الوجهة)
   const locationStates = new Map(vehicles.map((vehicle) => {
     const gps = liveGps.get(vehicle.plate);
-    return [vehicle.plate, vehicleLocationState(vehicle.plate, requests, appointments, hospitals, now, gps ? { lat: gps.lat, lng: gps.lng } : null)] as const;
+    return [vehicle.plate, vehicleLocationState(vehicle.plate, requests, appointments, hospitals, now, gps ? { lat: gps.lat, lng: gps.lng } : null, activeWaiting(vehicle, now))] as const;
   }));
   const isOutside = (plate: string) => locationStates.get(plate)?.kind === "outside";
   const placeText = (plate: string) => {
@@ -418,7 +434,12 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
   };
   const locationRank = (direction: VehicleRequest["direction"], requestIds: string[]) => (vehicle: Vehicle) => {
     // العودة والنقل بين موعدين يبدآن من مستشفى: السيارة الموجَّهة إليهما أولًا
-    if (direction === "عودة" || requestIds.some((id) => transferIds.has(id))) return requestIds.some((id) => redirectFor.get(id)?.vehicle.plate === vehicle.plate) ? 0 : 1;
+    if (direction === "عودة" || requestIds.some((id) => transferIds.has(id))) {
+      // السيارة التي تنتظر ضيفها في المستشفى أولًا
+      const waitingFor = activeWaiting(vehicle, now)?.appointmentId;
+      if (waitingFor && requestIds.some((id) => requests.find((request) => request.id === id)?.appointmentId === waitingFor)) return -1;
+      return requestIds.some((id) => redirectFor.get(id)?.vehicle.plate === vehicle.plate) ? 0 : 1;
+    }
     return isOutside(vehicle.plate) ? 1 : 0;
   };
 
@@ -473,7 +494,40 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
   useCancellationAlerts({ requests, appointments, onOpen: openTarget });
   useDenialAlerts({ requests, appointments, onOpen: openTarget });
   useRedirectAlerts({ redirects, driverOf, onDispatch: redirectVehicle, onOpen: openTarget });
+  // السيارة التي لم تتحرك 10 دقائق خارج المجمع: انتظار في المستشفى، أو الاستفسار من السائق عن سبب التأخير
+  const stopKey = (item: StoppedVehicle) => `${item.vehicle.plate}:${item.since.toISOString()}`;
+  const stopped = stoppedVehicles(vehicles, Array.from(liveGps.values()), waitPlaces, now, (vehicle) => Boolean(activeWaiting(vehicle, now)))
+    .filter((item) => !ignoredStops.includes(stopKey(item)));
+  useStoppedAlerts({ stopped, onWait: (item) => setWaitingPlate(item.vehicle.plate), onOpen: openTarget });
   const [notifyDevice, setNotifyDevice] = useState(deviceNotificationsOn);
+
+  /** الضيوف الذين ذهبت بهم السيارة اليوم (الأحدث أولًا)، لتنتظر أحدهم لعودته */
+  const waitCandidates = (plate: string): WaitCandidate[] => {
+    const seen = new Set<string>();
+    return requests
+      .filter((request) => request.vehiclePlate === plate && request.direction === "ذهاب" && request.status !== "بانتظار التوزيع")
+      .map(withAppointment)
+      .filter(isTrip)
+      .filter((trip) => trip.appointment.appointmentDate === today && !seen.has(trip.appointment.id) && seen.add(trip.appointment.id))
+      .sort((a, b) => (b.request.pickedUpAt ?? b.request.notificationSentAt ?? "").localeCompare(a.request.pickedUpAt ?? a.request.notificationSentAt ?? ""))
+      .map((trip) => {
+        const hospital = nonMedicalPlace(trip.appointment) ?? hospitals.find((item) => item.id === trip.appointment.hospitalId);
+        return { appointmentId: trip.appointment.id, name: trip.appointment.patientName, place: hospital?.name ?? trip.appointment.clinic, hospitalId: hospital?.id };
+      });
+  };
+  function setWaiting(plate: string, waiting: VehicleWaiting | null) {
+    onUpdate(vehicles.map((vehicle) => {
+      if (vehicle.plate !== plate) return vehicle;
+      const { waiting: _old, ...rest } = vehicle;
+      return waiting ? { ...rest, waiting } : rest;
+    }));
+    toast.success(waiting ? `السيارة ${plate} تنتظر في ${waiting.place}` : `انتهى انتظار السيارة ${plate}`, {
+      description: waiting ? "لا تُرسل في رحلة أخرى حتى ينتهي الانتظار، وتُقترح أولًا لعودة ضيفها" : "عادت متاحة للتوزيع",
+    });
+  }
+  const guestOf = (appointmentId?: string) => (appointmentId ? appointments.find((item) => item.id === appointmentId)?.patientName : undefined);
+  /** رسالة الاستفسار عن سبب التوقف (واتساب السائق) */
+  const stopMessage = (item: StoppedVehicle) => `السلام عليكم ${item.driver || ""}، السيارة ${item.vehicle.plate} متوقفة منذ ${item.minutes} دقيقة${item.place ? ` قرب ${item.place.name}` : ""}. ما سبب التأخير؟`;
 
   async function toggleDeviceNotifications() {
     if (notifyDevice) {
@@ -652,6 +706,9 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
       // سيارة المدارس أو باص الجامعة قبل وقته: متاحة، مع وقت خروجها
       const soon = reservedSoon(vehicle, now, schedules);
       const schoolNote = soon ? (soon.role === SCHOOL_ROLE ? ` · تخرج للمدارس ${soon.starts}` : ` · يخرج للجامعة ${soon.starts}`) : "";
+      if (place?.kind === "outside" && place.waiting) {
+        return { tone: "cyan" as const, text: waitingText(place.waiting, guestOf(place.waiting.appointmentId)) };
+      }
       if (place?.kind === "outside") {
         return { tone: "cyan" as const, text: `متاحة خارج المجمع · عائدة من ${place.from || "الوجهة"} · تصل ${timeLabel(place.backAt)}${place.canRedirect ? "" : " · قطعت نصف الطريق"}${schoolNote}` };
       }
@@ -665,7 +722,8 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
     : notForAppointments(vehicle) ? "reserved" : isOutside(vehicle.plate) ? "outside" : "inside");
   const groupCount = (group: VehicleFilter) => vehicles.filter((vehicle) => vehicleGroup(vehicle) === group).length;
   // السيارات المتاحة للمواعيد الآن (بلا باص المجمع وباص الجامعة وسيارة المدارس في وقتها)، داخل المجمع وخارجه
-  const forAppointments = dispatchable.filter((vehicle) => !notForAppointments(vehicle));
+  // (السيارة التي تنتظر في المستشفى لعودة ضيفها لا تُعد)
+  const forAppointments = dispatchable.filter((vehicle) => !notForAppointments(vehicle) && !activeWaiting(vehicle, now));
   const vehicleCounts = {
     all: vehicles.length,
     inside: forAppointments.filter((vehicle) => !isOutside(vehicle.plate)).length,
@@ -762,13 +820,44 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
             { key: "available", label: "سيارات متاحة", value: forAppointments.length, tone: "green", hint: `${vehicleCounts.inside} داخل المجمع · ${vehicleCounts.outside} خارجه${vehicleCounts.reserved ? ` · ${vehicleCounts.reserved} غير مخصصة للمواعيد` : ""}`, onClick: () => jump("fleet-vehicles") },
             { key: "active", label: "رحلات جارية", value: activeGroups.length, tone: "blue", hint: trackingCount ? `${trackingCount} بمتابعة GPS` : "من الإرسال حتى الوجهة", onClick: () => jump("fleet-active") },
             { key: "pending", label: "بانتظار التوزيع", value: pending.length, tone: "amber", hint: date === today ? "طلبات اليوم" : "طلبات التاريخ المحدد", onClick: () => jump("fleet-pending") },
-            { key: "late", label: "متأخرة", value: latePending.length + lateTrips.length, tone: "red", hint: `${latePending.length} تنتظر سيارة · ${lateTrips.length} في الطريق`, onClick: () => jump(latePending.length ? "fleet-pending" : "fleet-active") },
+            { key: "late", label: "متأخرة", value: latePending.length + lateTrips.length + stopped.length, tone: "red", hint: `${latePending.length} تنتظر سيارة · ${lateTrips.length} في الطريق${stopped.length ? ` · ${stopped.length} متوقفة` : ""}`, onClick: () => jump(stopped.length ? "fleet-stopped" : latePending.length ? "fleet-pending" : "fleet-active") },
           ]}
         />
       </div>
 
       <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_380px]">
         <div className="min-w-0 space-y-6">
+          {stopped.length > 0 && (
+            <Panel id="fleet-stopped" tone="red" icon={Hourglass} title="سيارات متوقفة خارج المجمع" count={stopped.length} description="لم تتحرك من مكانها 10 دقائق أو أكثر · اجعلها تنتظر في المستشفى، أو استفسر من السائق عن سبب التأخير">
+              <div className="divide-y divide-slate-100">
+                {stopped.map((item) => {
+                  const phone = item.vehicle.phone;
+                  const busy = availability.get(item.vehicle.plate);
+                  return (
+                    <div key={item.vehicle.plate} data-target={`stopped:${item.vehicle.plate}`} className="flex flex-col gap-3 p-4 sm:p-5">
+                      <div className="min-w-0">
+                        <p className="flex flex-wrap items-center gap-2 font-medium text-ink">
+                          <KindIcon vehicle={item.vehicle} size="sm" />
+                          <span dir="ltr" className="font-semibold">{item.vehicle.plate}</span> · {item.driver || "بلا سائق"}
+                          <Badge tone="red" icon={AlertTriangle}>{item.minutes} دقيقة</Badge>
+                        </p>
+                        <p className="mt-0.5 text-sm text-slate-600">
+                          {stoppedText(item)} · منذ {timeLabel(item.since)}
+                          {busy?.busy ? ` · ${busy.toPickup ? "في الطريق إلى الاستلام" : "في رحلة مع الضيف"}` : ""}
+                        </p>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        {!busy?.busy && <button type="button" onClick={() => setWaitingPlate(item.vehicle.plate)} className={btn("primary", "sm")}><Hourglass className="h-4 w-4" /> انتظار في المستشفى</button>}
+                        {phone && <a href={`tel:${phone}`} className={btn("secondary", "sm")}><Phone className="h-4 w-4" /> اتصال بالسائق</a>}
+                        {phone && <a href={whatsappLink(phone, stopMessage(item))} target="_blank" rel="noreferrer" className={cx(btn("secondary", "sm"), "text-emerald-700")}><MessageCircle className="h-4 w-4" /> استفسار بواتساب</a>}
+                        <button type="button" onClick={() => setIgnoredStops((list) => [...list, stopKey(item)])} className={btn("ghost", "sm")}>تجاهل حتى تتحرك</button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </Panel>
+          )}
           {redirects.length > 0 && (
             <Panel tone="violet" icon={Navigation} title="توجيه سيارات خارج المجمع" count={redirects.length} description="سيارة عائدة من وجهتها لم تقطع نصف الطريق إلى المجمع، وهي أقرب إلى ضيف ينتظر العودة من المجمع">
               <div className="divide-y divide-slate-100">
@@ -779,7 +868,7 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
                         <span dir="ltr">{item.vehicle.plate}</span> · {driverOf(item.vehicle.plate, item.vehicle.driver)} ← {item.appointment.patientName}
                         {item.appointment.kind === "احتياجات خاصة" && <Badge tone="amber" className="ms-2">احتياجات خاصة</Badge>}
                       </p>
-                      <p className="mt-0.5 text-sm text-slate-600">عائدة من {item.from || "الوجهة"} · الضيف في {item.pickup} على بعد {item.distanceKm} كم</p>
+                      <p className="mt-0.5 text-sm text-slate-600">{activeWaiting(item.vehicle, now) ? `تنتظر في ${activeWaiting(item.vehicle, now)!.place}` : `عائدة من ${item.from || "الوجهة"}`} · الضيف في {item.pickup} على بعد {item.distanceKm} كم</p>
                     </div>
                     <button onClick={() => redirectVehicle(item)} className={btn("primary")}><Navigation className="h-4 w-4" /> توجيه السيارة</button>
                   </div>
@@ -812,6 +901,8 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
                   const suggested = suggestFor([trip]);
                   const redirect = redirectFor.get(trip.request.id);
                   const incoming = incomingByRequest.get(trip.request.id) ?? [];
+                  // السيارة التي تنتظر هذا الضيف في المستشفى (تُقترح أولًا لعودته)
+                  const waitingCar = vehicles.find((vehicle) => activeWaiting(vehicle, now)?.appointmentId === trip.appointment.id);
                   const selectedPlate = selectedVehicles[trip.request.id] || suggested?.plate || "";
                   // المتاحة لها أولًا، ثم المشغولة وما لا يناسبها (الباصات: الساعات والتخصيص) مع السبب
                   const choices = choicesFor([trip]);
@@ -833,6 +924,7 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
                             {groupedIds.has(trip.appointment.id) && <Badge tone="violet" icon={Sparkles}>قابلة للجمع</Badge>}
                             {redirect && <Badge tone="cyan" icon={Navigation}>سيارة قريبة {redirect.vehicle.plate} · {redirect.distanceKm} كم</Badge>}
                             {incoming.length > 0 && <Badge tone="amber" icon={Navigation}>سيارة ذاهبة إلى نفس المكان</Badge>}
+                            {waitingCar && <Badge tone="cyan" icon={Hourglass}>السيارة {waitingCar.plate} تنتظره في {activeWaiting(waitingCar, now)!.place}</Badge>}
                           </div>
                           <p className="mt-1 text-sm text-slate-600">{routeLabel(trip.appointment, trip.from)}{zone && <span className="text-slate-400"> · {zone}</span>}</p>
                           <p className="mt-0.5 text-xs text-slate-500">{riderDetails(trip)}</p>
@@ -1145,6 +1237,11 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
                         </button>
                       )}
                     </div>
+                    {activeWaiting(vehicle, now) ? (
+                      <button type="button" onClick={() => setWaiting(vehicle.plate, null)} title="تعود متاحة للتوزيع" className={cx(btn("secondary", "sm"), "shrink-0 text-cyan-800")}>إنهاء الانتظار</button>
+                    ) : isOutside(vehicle.plate) && vehicle.available && !isBusy(vehicle.plate) && (
+                      <button type="button" onClick={() => setWaitingPlate(vehicle.plate)} aria-label={`انتظار السيارة ${vehicle.plate} في المستشفى`} title="انتظار في المستشفى" className={cx(btn("ghost", "sm"), "shrink-0 px-2")}><Hourglass className="h-4 w-4" /></button>
+                    )}
                     <Switch
                       checked={vehicle.available}
                       label={vehicle.available ? `إيقاف السيارة ${vehicle.plate}` : `إتاحة السيارة ${vehicle.plate}`}
@@ -1179,6 +1276,24 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
           onClose={() => setEditing(null)}
         />
       )}
+      {waitingPlate && (() => {
+        const vehicle = vehicles.find((item) => item.plate === waitingPlate);
+        if (!vehicle) return null;
+        const live = liveGps.get(vehicle.plate);
+        const place = locationStates.get(vehicle.plate);
+        const position = live ? { lat: live.lat, lng: live.lng } : place?.kind === "outside" ? place.position : null;
+        return (
+          <WaitingDialog
+            vehicle={vehicle}
+            driver={driverOf(vehicle.plate)}
+            position={position}
+            places={waitPlaces}
+            candidates={waitCandidates(vehicle.plate)}
+            onConfirm={(waiting) => { setWaiting(vehicle.plate, waiting); setWaitingPlate(null); }}
+            onClose={() => setWaitingPlate(null)}
+          />
+        );
+      })()}
       {driverMessages && <DriverMessagesDialog messages={driverMessages} driverOf={driverOf} onClose={() => setDriverMessages(null)} />}
       {shownVehicle && (
         <VehicleDetailsDialog

@@ -66,3 +66,32 @@ export async function fetchRoadMatrix(points: RoadPoint[], fetcher: typeof fetch
   const km = data.distances.flatMap((row) => list.map((_, j) => (typeof row?.[j] === "number" ? Math.round(row[j]! / 100) : -1)));
   return { ids: list.map((point) => point.id), km, key: roadKey(list), at: new Date().toISOString() };
 }
+
+// ————— مسار الطريق على الخريطة —————
+
+/** خدمة المسار (OSRM العامة): خط الطريق الذي تسلكه السيارة بين نقطتين أو أكثر */
+export const ROUTE_SERVICE = "https://router.project-osrm.org/route/v1/driving/";
+
+export type RoadRoute = {
+  /** نقاط الطريق [خط العرض، خط الطول] */
+  path: [number, number][];
+  km: number;
+  minutes: number;
+};
+
+/** مسار الطريق بين النقاط بالترتيب (من السيارة إلى نقطة الاستلام أو الوجهة) */
+export async function fetchRoute(points: { lat: number; lng: number }[], fetcher: typeof fetch = fetch, signal?: AbortSignal): Promise<RoadRoute> {
+  if (points.length < 2) throw new Error("route: two points needed");
+  const coordinates = points.map((point) => `${point.lng.toFixed(6)},${point.lat.toFixed(6)}`).join(";");
+  const response = await fetcher(`${ROUTE_SERVICE}${coordinates}?overview=full&geometries=geojson`, { signal });
+  if (!response.ok) throw new Error(`route service ${response.status}`);
+  const data = await response.json() as { code?: string; routes?: { distance?: number; duration?: number; geometry?: { coordinates?: [number, number][] } }[] };
+  const route = data.routes?.[0];
+  const line = route?.geometry?.coordinates;
+  if (data.code !== "Ok" || !route || !Array.isArray(line) || line.length < 2) throw new Error("route service: bad response");
+  return {
+    path: line.filter((pair) => Array.isArray(pair) && Number.isFinite(pair[0]) && Number.isFinite(pair[1])).map(([lng, lat]) => [lat, lng]),
+    km: Math.round((route.distance ?? 0) / 100) / 10,
+    minutes: Math.round((route.duration ?? 0) / 60),
+  };
+}

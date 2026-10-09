@@ -497,6 +497,8 @@ function route_write(PDO $pdo, array $body): array
             if ($error = authorize_write($user, $col, $id, $before, $after, $docOf, $requestsOf)) throw new ApiException(403, $error, 'permission_denied');
             // رقم الشكوى ومن سجّلها أو عالجها: يكتبها الخادم وحده، قبل الوصف حتى يظهر الرقم في السجل
             if ($col === 'complaints') $after = stamp_complaint($pdo, $user, $before, $after);
+            // انتظار السيارة في المستشفى: وقته ومن اختاره يكتبهما الخادم
+            if ($col === 'fleet') $after = stamp_waiting($user, $before, $after);
             // الوصف قبل الحفظ (يقرأ الموعد المرتبط بالطلب كما كان)، والتسجيل بعده في نفس المعاملة
             $entry = describe_write($pdo, $col, $id, $before, $after);
             // وقت تسجيل الموعد ووصول السيارة إلى نقطة الاستلام: يكتبها الخادم وحده (للإحصائيات)
@@ -505,6 +507,8 @@ function route_write(PDO $pdo, array $body): array
             save_doc($pdo, $col, $id, $after, $rev);
             if ($entry) log_activity($pdo, empty($entry[4]) ? $user : null, $entry[0], $entry[1], $entry[2], $id, $entry[3]);
             if ($col === 'requests') queue_request_pushes($pdo, $before, $after);
+            // السيارة التي كانت تنتظر في المستشفى أُرسلت في رحلة: ينتهي انتظارها
+            if ($col === 'requests' && $after !== null) end_waiting_on_dispatch($pdo, $before, $after, $rev);
             // حذف الشكوى يحذف صورة استمارتها الورقية
             if ($col === 'complaints' && $after === null) $pdo->prepare('DELETE FROM complaint_files WHERE id = ?')->execute([$id]);
             if ($col === 'fleet' || $col === 'drivers') $fleetChanged = true;
@@ -839,13 +843,17 @@ function route_location(PDO $pdo, array $body): array
             $pdo->commit();
             return ['ok' => true];
         }
+        $precise = $sharing && ($after['accuracy'] === null || $after['accuracy'] <= ARRIVAL_MAX_ACCURACY_M);
+        // منذ متى لم تتحرك السيارة (تنبيه السيارة المتوقفة خارج المجمع لمشرف السيارات)
+        if ($sharing) $after = stamp_still($before, $after, $precise);
         save_doc($pdo, 'vehicleLocations', $plate, $after, $rev);
         // بداية مشاركة الموقع وإيقافها (لا تُسجَّل كل نقطة موقع)
         $wasSharing = (bool)($before['sharing'] ?? false);
         if ($sharing !== $wasSharing) {
             log_activity($pdo, $user, 'location', $sharing ? 'location.start' : 'location.stop', ($sharing ? 'بدء' : 'إيقاف') . " مشاركة موقع السيارة $plate", $plate, ['plate' => $plate, 'driver' => $user['display_name']]);
         }
-        $precise = $sharing && ($after['accuracy'] === null || $after['accuracy'] <= ARRIVAL_MAX_ACCURACY_M);
+        // مسار السيارة في رحلتها الجارية (يُمحى عند بداية رحلتها التالية)
+        if ($precise) record_track($pdo, $plate, (float)$after['lat'], (float)$after['lng'], $rev);
         $arrived = $precise ? detect_arrivals($pdo, $plate, (float)$after['lat'], (float)$after['lng'], $rev, $user) : 0;
         // سيارة العودة أو النقل وصلت قرب المستشفى ولم يُسجَّل وصولها بعد (لإحصائيات التأخير)
         if ($precise) detect_pickup_proximity($pdo, $plate, (float)$after['lat'], (float)$after['lng'], $rev);

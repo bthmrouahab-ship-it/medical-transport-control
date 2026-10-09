@@ -20,6 +20,7 @@ const COLLECTIONS: Partial<Record<SharedKey, { col: string; idField: string; sor
   fox_hospitals: { col: "hospitals", idField: "id" },
   // مواقع GPS يرسلها السائقون من صفحتهم؛ هنا للقراءة والمتابعة فقط
   fox_locations: { col: "vehicleLocations", idField: "plate" },
+  fox_tracks: { col: "vehicleTracks", idField: "plate" },
   // قائمة ضيوف المجمع (للمدير والعيادة فقط، وبلا العمر والرقم الصحي)
   fox_guests: { col: "guests", idField: "id", sort: (a, b) => String(a.name ?? "").localeCompare(String(b.name ?? ""), "ar") },
   // قائمة السائقين (للمدير ومشرف السيارات): مستقلة عن السيارات، ومشرف السيارات يخصصهم للسيارات

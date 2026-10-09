@@ -46,7 +46,9 @@ const REQUEST_FIELDS = ['id', 'appointmentId', 'vehiclePlate', 'driver', 'direct
 /** خانات مرحلة الطريق إلى الوجهة (تُكتب عند استلام المريض وعند الوصول) */
 const TRIP_FIELDS = ['pickedUpAt', 'etaAt', 'destLat', 'destLng', 'arrivedAt', 'arrivalSource'];
 /** driver وphone: اسم السائق المخصص للسيارة ورقمه، منسوخان من قائمة السائقين (driverId) ويحدّثهما الخادم */
-const VEHICLE_FIELDS = ['plate', 'driver', 'phone', 'kind', 'available', 'busRole', 'fullCapacity', 'driverId', 'driverSince', '_o'];
+const VEHICLE_FIELDS = ['plate', 'driver', 'phone', 'kind', 'available', 'busRole', 'fullCapacity', 'driverId', 'driverSince', 'waiting', '_o'];
+/** انتظار السيارة في المستشفى (يختاره مشرف السيارات)؛ since وby يكتبهما الخادم (stamp_waiting في tracking.php) */
+const VEHICLE_WAITING_FIELDS = ['place', 'hospitalId', 'lat', 'lng', 'appointmentId', 'note', 'since', 'by'];
 /** تخصيص السائق للسيارة (مشرف السيارات في بداية الشفت) */
 const VEHICLE_DRIVER_FIELDS = ['driverId', 'driver', 'phone', 'driverSince'];
 /** قائمة السائقين (المدير): uid حساب تطبيق السائق المرتبط به، يربطه المدير من «المستخدمين» فقط */
@@ -139,7 +141,7 @@ const COMPLAINT_NOTE_MAX = 1000;
 /** من تُحوَّل إليه الشكوى */
 const COMPLAINT_REFERRAL_ROLES = ['clinic', 'clinicLead', 'buildingSupervisor', 'buildingLead', 'fleetSupervisor'];
 /** المجموعات التي تُزامن مع موظفي المكتب */
-const SYNC_COLLECTIONS = ['appointments', 'requests', 'fleet', 'hospitals', 'vehicleLocations', 'meta', 'guests', 'drivers', 'privateCars', 'specialNeeds', 'complaints'];
+const SYNC_COLLECTIONS = ['appointments', 'requests', 'fleet', 'hospitals', 'vehicleLocations', 'vehicleTracks', 'meta', 'guests', 'drivers', 'privateCars', 'specialNeeds', 'complaints'];
 
 /**
  * مجموعات المزامنة لهذا المستخدم: قائمة الضيوف للمدير والعيادة ومشرف السيارات، وقائمة السائقين للمدير ومشرف السيارات،
@@ -148,7 +150,7 @@ const SYNC_COLLECTIONS = ['appointments', 'requests', 'fleet', 'hospitals', 'veh
 function sync_collections(array $user): array
 {
     return array_values(array_filter(SYNC_COLLECTIONS, fn(string $col) => ($col !== 'guests' || in_array($user['role'], GUEST_LIST_ROLES, true))
-        && ($col !== 'drivers' || in_array($user['role'], DRIVER_LIST_ROLES, true))
+        && (!in_array($col, ['drivers', 'vehicleTracks'], true) || in_array($user['role'], DRIVER_LIST_ROLES, true))
         && (!in_array($col, ['privateCars', 'specialNeeds'], true) || $user['role'] === 'admin')
         && ($col !== 'complaints' || in_array($user['role'], OFFICE_ROLES, true))));
 }
@@ -168,6 +170,22 @@ function referred_to(array $user, array $complaint): bool
         if (is_array($referral) && ($referral['to'] ?? null) === (string)$user['id']) return true;
     }
     return false;
+}
+
+/** انتظار السيارة في المستشفى: المكان (اسمه وموقعه في قطر)، والموعد الذي تنتظر ضيفه وملاحظة اختياريًا */
+function valid_waiting(array $vehicle): bool
+{
+    if (!array_key_exists('waiting', $vehicle)) return true;
+    $waiting = $vehicle['waiting'];
+    return is_array($waiting) && !array_is_list($waiting) && only(array_keys($waiting), VEHICLE_WAITING_FIELDS)
+        && is_text($waiting['place'] ?? null, 120) && trim($waiting['place']) !== ''
+        && is_numeric($waiting['lat'] ?? null) && $waiting['lat'] > 24 && $waiting['lat'] < 27
+        && is_numeric($waiting['lng'] ?? null) && $waiting['lng'] > 50 && $waiting['lng'] < 52.5
+        && (!array_key_exists('hospitalId', $waiting) || is_text($waiting['hospitalId'], 60))
+        && (!array_key_exists('appointmentId', $waiting) || (is_string($waiting['appointmentId']) && valid_doc_id($waiting['appointmentId'])))
+        && (!array_key_exists('note', $waiting) || is_text($waiting['note'], 300))
+        && (!array_key_exists('since', $waiting) || is_text($waiting['since'], 40))
+        && (!array_key_exists('by', $waiting) || is_text($waiting['by'], 120));
 }
 
 function valid_referrals($list): bool
@@ -1133,7 +1151,7 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
             if ($role === 'admin') {
                 return only(array_keys($after), VEHICLE_FIELDS) && ($after['plate'] ?? null) === $id
                     && in_array($after['kind'] ?? null, VEHICLE_KINDS, true) && valid_bus_role($after) && valid_full_capacity($after)
-                    && valid_vehicle_driver($after, $docOf) ? null : 'بيانات السيارة غير صالحة';
+                    && valid_waiting($after) && valid_vehicle_driver($after, $docOf) ? null : 'بيانات السيارة غير صالحة';
             }
             // مشرف السيارات يضيف سيارة جديدة برقم غير مسجل: رقمها ونوعها، متاحة أو موقوفة، وسائقها اختياري (لا يحذف السيارات)
             if ($role === 'fleetSupervisor' && $before === null) {
@@ -1144,8 +1162,8 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
             // مشرف السيارات يغيّر إتاحة السيارة، وتخصيصها (باص المجمع أو الجامعة أو العيادة، أو سيارة المدارس)،
             // وتشغيل السيدان بطاقتها الكاملة (4 أشخاص)، والسائق الذي يقودها (في بداية الشفت)
             if ($role === 'fleetSupervisor' && $before !== null) {
-                return only($changed, ['available', 'busRole', 'fullCapacity', ...VEHICLE_DRIVER_FIELDS]) && is_bool($after['available'] ?? null)
-                    && valid_bus_role($after) && valid_full_capacity($after)
+                return only($changed, ['available', 'busRole', 'fullCapacity', 'waiting', ...VEHICLE_DRIVER_FIELDS]) && is_bool($after['available'] ?? null)
+                    && valid_bus_role($after) && valid_full_capacity($after) && valid_waiting($after)
                     && (!array_intersect($changed, VEHICLE_DRIVER_FIELDS) || valid_vehicle_driver($after, $docOf)) ? null : $denied;
             }
             return $denied;
@@ -1203,6 +1221,8 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
                 && (($after['status'] ?? 'open') !== 'resolved' || (is_string($after['resolution'] ?? null) && trim($after['resolution']) !== ''))
                 ? null : 'بيانات متابعة الشكوى غير صالحة';
 
+        case 'vehicleTracks':
+            // مسار السيارة في رحلتها يكتبه الخادم من مواقع السائق؛ هنا الحذف للمدير
         case 'vehicleLocations':
             // السائق يرسل موقعه من صفحة السائق فقط؛ هنا الحذف للمدير
             return ($after === null && $role === 'admin') ? null : $denied;

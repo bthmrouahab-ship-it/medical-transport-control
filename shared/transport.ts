@@ -170,7 +170,41 @@ export type Vehicle = {
   busRole?: VehicleRole;
   /** للسيدان فقط: يشغّلها مشرف السيارات بطاقتها الكاملة (4 أشخاص بدل 3) */
   fullCapacity?: boolean;
+  /** السيارة تنتظر في المستشفى (يختاره مشرف السيارات): لا تُرسل في رحلة أخرى، وتبقى لعودة ضيفها */
+  waiting?: VehicleWaiting;
 };
+
+/**
+ * انتظار السيارة في المستشفى (أو أي مكان خارج المجمع) بدل عودتها إلى المجمع: يختاره مشرف السيارات (من تنبيه
+ * السيارة المتوقفة أو من قائمة السيارات)، ومعه الضيف الذي تنتظره اختياريًا. since وby يكتبهما الخادم.
+ * ينتهي بـ «إنهاء الانتظار»، أو بإرسال السيارة في رحلة (يمحوه الخادم)، أو بانتهاء يومه.
+ */
+export type VehicleWaiting = {
+  place: string;
+  hospitalId?: string;
+  lat: number;
+  lng: number;
+  /** الموعد الذي تنتظر ضيفها (لعودته) */
+  appointmentId?: string;
+  note?: string;
+  since?: string;
+  by?: string;
+};
+
+/** انتظار السيارة الآن (في يومه فقط)، أو null */
+export function activeWaiting(vehicle: Pick<Vehicle, "waiting">, now = new Date()): VehicleWaiting | null {
+  const waiting = vehicle.waiting;
+  if (!waiting || typeof waiting !== "object") return null;
+  if (waiting.since && localDateString(new Date(waiting.since)) !== localDateString(now)) return null;
+  return waiting;
+}
+
+/** «تنتظر في مستشفى الوكرة منذ 10:20» */
+export function waitingText(waiting: VehicleWaiting, guest?: string) {
+  const since = waiting.since ? new Date(waiting.since) : null;
+  const clock = since ? ` منذ ${String(since.getHours()).padStart(2, "0")}:${String(since.getMinutes()).padStart(2, "0")}` : "";
+  return `تنتظر في ${waiting.place}${clock}${guest ? ` · لعودة ${guest}` : ""}`;
+}
 
 /**
  * تخصيص الباص يختاره مشرف السيارات: shuttle «باص المجمع» يلف داخل المجمع (ويمكن إرساله إلى مستشفى الثمامة
@@ -1065,6 +1099,7 @@ export function regularForSpecialWarning(vehicle: Pick<Vehicle, "kind">, appoint
  * - باص المجمع يلف داخل المجمع، ويُرسل فقط إلى مستشفى الثمامة (ذهابًا أو عودة) وقت الذروة.
  * - سيارة المدارس وباص الجامعة لا يُرسلان في أي رحلة (طبية أو غير طبية) في أوقاتهما المحجوزة (reservedRun:
  *   أوقات المدارس الأحد إلى الخميس 11:00–14:00 و17:30–19:00، وباص الجامعة طوال اليوم، ما لم يغيّرها مشرف السيارات).
+ * - السيارة التي تنتظر في المستشفى (activeWaiting) لعودة ضيفها فقط، وبلا ضيف محدد لا تُرسل حتى ينتهي الانتظار.
  */
 export function vehicleRestriction(vehicle: Vehicle, trip: TripLoad, rules: VehicleRules = {}): string | null {
   const now = rules.now ?? new Date();
@@ -1074,6 +1109,11 @@ export function vehicleRestriction(vehicle: Vehicle, trip: TripLoad, rules: Vehi
   if (role === "clinic") return "في خدمة العيادة";
   const reserved = reservedRun(vehicle, now, rules.schedules);
   if (reserved) return reservedText(reserved);
+  // تنتظر في المستشفى: لعودة ضيفها فقط (وبلا ضيف محدد لا تُرسل حتى ينتهي الانتظار)
+  const waiting = activeWaiting(vehicle, now);
+  if (waiting && !(waiting.appointmentId && trip.appointments.some((appointment) => appointment.id === waiting.appointmentId))) {
+    return `تنتظر في ${waiting.place} · أنهِ الانتظار أولًا`;
+  }
   if (!rules.regularForSpecial && needsAccessibleVehicle(trip.appointments) && vehicle.kind !== "احتياجات خاصة") return "تحتاج سيارة احتياجات خاصة";
   if (specialCount(trip.appointments) > MAX_SPECIAL_PER_VEHICLE) return "ضيف احتياجات خاصة واحد فقط في السيارة";
   const seats = vehicleSeats(vehicle);
