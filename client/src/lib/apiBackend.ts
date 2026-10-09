@@ -38,6 +38,8 @@ const COLLECTIONS: Partial<Record<SharedKey, { col: string; idField: string; sor
 const SINGLE_DOCS: Partial<Record<SharedKey, { col: string; id: string; field: string }>> = {
   fox_history: { col: "meta", id: "history", field: "data" },
   fox_schedules: { col: "meta", id: "schedules", field: "data" },
+  // مسافات الطرق بين المستشفيات (shared/roads.ts) لجمع الرحلات
+  fox_roads: { col: "meta", id: "roads", field: "data" },
 };
 
 /** كل كم ثانية يسأل الموقع عن تغييرات المستخدمين الآخرين (أبطأ عندما تكون الصفحة في الخلفية). */

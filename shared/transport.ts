@@ -1,5 +1,6 @@
 import { DEFAULT_HOSPITALS, distanceKm, matchHospital, type Hospital } from "./hospitals";
 import { FLEET_SEED } from "./seedData";
+import { roadKm } from "./roads";
 import { normalizeGender, normalizeMobile, readAliased, toText, toWesternDigits } from "./text";
 import { PRIVATE_CAR_MESSAGE, findGuestByName, guestIndex, guestOfAppointment, hasPrivateCar, isMinor, type Guest } from "./guests";
 
@@ -1255,10 +1256,14 @@ export function planDispatch(
   return plan;
 }
 
-/** المسافة التي تُعتبر فيها الوجهتان متجاورتين (مثل مباني مدينة حمد الطبية). */
+/** المسافة المستقيمة التي يُعتبر فيها مكانان متجاورين (السيارة الذاهبة إلى مكان العودة: incomingCars). */
 export const NEARBY_KM = 3;
-/** وجهتان في نفس الاتجاه يمكن توصيلهما في رحلة واحدة. */
-export const SAME_DIRECTION_KM = 8;
+/**
+ * الجمع بمسافة الطريق الفعلي بين الوجهتين (roadKm في shared/roads.ts، لا الخط المستقيم): متجاورتان حتى 4 كم بالطريق
+ * (مثل مباني مدينة حمد الطبية)، وفي نفس الاتجاه حتى 6 كم بالطريق. فلا تُجمع حمد العام مع سدرة، ولا الثمامة مع روضة الخيل.
+ */
+export const ROAD_NEARBY_KM = 4;
+export const ROAD_SAME_DIRECTION_KM = 6;
 
 function hospitalFor(appointment: ClinicAppointment, hospitals: Hospital[]) {
   if (isNonMedical(appointment)) return nonMedicalPlace(appointment);
@@ -1278,7 +1283,7 @@ export function matchHospitalZone(appointment: ClinicAppointment, hospitals: Hos
 
 /**
  * نقاط الجمع (لترتيب الاقتراحات): 45 للقرب الزمني ناقص فرق الدقائق،
- * +25 لنفس الوجهة أو +20 لوجهات متجاورة (≤ 3 كم) أو +10 لنفس الاتجاه (≤ 8 كم)، +10 لنفس نوع الرحلة.
+ * +25 لنفس الوجهة أو +20 لوجهات متجاورة (≤ 4 كم بالطريق) أو +10 لنفس الاتجاه (≤ 6 كم بالطريق)، +10 لنفس نوع الرحلة.
  * المبنى لا يُحتسب: كل مباني المجمع متقاربة. times (اختياري): وقت الحاجة إلى السيارة لكل موعد
  * (neededAt في shared/trips.ts، من وقت الطلب)، وإلا وقت الموعدين. المواعيد في أيام مختلفة لا تُجمع.
  */
@@ -1292,9 +1297,9 @@ export function calculateTripGroupingScore(first: ClinicAppointment, second: Cli
   const sameDestination = firstHospital && secondHospital
     ? firstHospital.id === secondHospital.id
     : first.clinic.trim().toLowerCase() === second.clinic.trim().toLowerCase();
-  const destinationKm = firstHospital && secondHospital ? distanceKm(firstHospital, secondHospital) : null;
-  const nearbyDestination = !sameDestination && destinationKm !== null && destinationKm <= NEARBY_KM;
-  const sameDirection = !sameDestination && !nearbyDestination && destinationKm !== null && destinationKm <= SAME_DIRECTION_KM;
+  const destinationKm = firstHospital && secondHospital ? roadKm(firstHospital, secondHospital) : null;
+  const nearbyDestination = !sameDestination && destinationKm !== null && destinationKm <= ROAD_NEARBY_KM;
+  const sameDirection = !sameDestination && !nearbyDestination && destinationKm !== null && destinationKm <= ROAD_SAME_DIRECTION_KM;
   const compatibleVehicle = first.kind === second.kind;
   const timeScore = Math.max(0, 45 - timeGapMinutes);
   const destinationScore = sameDestination ? 25 : nearbyDestination ? 20 : sameDirection ? 10 : 0;
@@ -1322,8 +1327,8 @@ export function suggestTripGroups(appointments: ClinicAppointment[], hospitals: 
       if (!canShareVehicle(details, 45)) continue;
       const reasons = [
         details.sameDestination ? "نفس الوجهة" : null,
-        details.nearbyDestination ? `وجهات متجاورة${details.zone ? ` (${details.zone})` : ""} ${details.destinationKm!.toFixed(1)} كم` : null,
-        details.sameDirection ? `نفس الاتجاه ${details.destinationKm!.toFixed(1)} كم` : null,
+        details.nearbyDestination ? `وجهات متجاورة${details.zone ? ` (${details.zone})` : ""} ${details.destinationKm!.toFixed(1)} كم بالطريق` : null,
+        details.sameDirection ? `نفس الاتجاه ${details.destinationKm!.toFixed(1)} كم بالطريق` : null,
         `فارق ${details.timeGapMinutes} دقيقة`,
       ].filter(Boolean);
       suggestions.push({

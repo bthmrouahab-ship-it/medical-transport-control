@@ -45,6 +45,7 @@ import {
 } from "@shared/users";
 import { hasSharedState, loadState, saveState, saveStates, subscribeState } from "@/lib/appStore";
 import { useComplaints, useDrivers } from "@/lib/useShared";
+import { useRoadMatrix } from "@/lib/roads";
 import { isResolved } from "@shared/complaints";
 import { driverOfAccount, type Driver } from "@shared/drivers";
 import { DRIVERS_SEED } from "@shared/seedData";
@@ -75,6 +76,8 @@ export default function AdminPanel({ profile, onLogout, onChangePassword }: {
   onLogout: () => void;
   onChangePassword: () => void;
 }) {
+  // مسافات الطرق بين المستشفيات لجمع الرحلات: تُحسب من جديد عند إضافة مستشفى أو تغيير موقعه
+  useRoadMatrix(true);
   const [tab, setTab] = useState<Tab>("users");
   const [vehicles, setVehicles] = useState<Vehicle[]>(() => loadState("fox_fleet", DEFAULT_VEHICLES));
   const [requests, setRequests] = useState<VehicleRequest[]>(loadRequests);

@@ -711,6 +711,19 @@ function valid_schedule($schedule): bool
 }
 
 /** مستند الأوقات: لكل تخصيص (school وnonMedical) أوقات صالحة. */
+/** جدول مسافات الطرق: أرقام الأماكن، ومسافة كل زوج بأعشار الكيلومتر (أو -1)، وبصمة الأماكن ووقت الحساب */
+function valid_road_matrix($matrix): bool
+{
+    if (!is_array($matrix) || !only(array_keys($matrix), ['ids', 'km', 'key', 'at'])) return false;
+    $ids = $matrix['ids'] ?? null;
+    $km = $matrix['km'] ?? null;
+    if (!is_array($ids) || !array_is_list($ids) || count($ids) < 1 || count($ids) > 100) return false;
+    foreach ($ids as $id) if (!is_string($id) || !preg_match('/^[A-Za-z0-9._:-]{1,160}$/', $id)) return false;
+    if (!is_array($km) || !array_is_list($km) || count($km) !== count($ids) ** 2) return false;
+    foreach ($km as $value) if (!is_int($value) || $value < -1 || $value > 5000) return false;
+    return is_text($matrix['key'] ?? null, 40) && is_text($matrix['at'] ?? null, 40);
+}
+
 function valid_schedules($schedules): bool
 {
     if (!is_array($schedules) || !only(array_keys($schedules), SCHEDULED_ROLES)) return false;
@@ -1203,6 +1216,11 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
             if ($id === 'schedules') {
                 if (!has_role($user, ['admin', 'fleetSupervisor']) || $after === null) return $denied;
                 return only(array_keys($after), ['data']) && valid_schedules($after['data'] ?? null) ? null : 'الأوقات غير صالحة';
+            }
+            // مسافات الطرق بين المستشفيات (shared/roads.ts): يحسبها المدير أو مشرف السيارات من خدمة الطرق
+            if ($id === 'roads') {
+                if (!has_role($user, ['admin', 'fleetSupervisor']) || $after === null) return $denied;
+                return only(array_keys($after), ['data']) && valid_road_matrix($after['data'] ?? null) ? null : 'مسافات الطرق غير صالحة';
             }
             // ملخص الإحصائيات القديم (إجماليات فقط، بلا بيانات مرضى)
             if ($id === 'history') {
