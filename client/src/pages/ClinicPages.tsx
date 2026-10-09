@@ -577,6 +577,11 @@ export function ClinicForm({ t, lang, initial, defaultDate, returnOnly = false, 
   // الموعد لضيف من قائمة ضيوف المجمع ولمستشفى من الدليل فقط
   const guests = useGuests();
   const index = useMemo(() => guestIndex(guests), [guests]);
+  /** «غدًا» أو التاريخ بلغة الواجهة */
+  const dayName = (date: string) => {
+    const label = formatDay(date, new Date(), t.days);
+    return label === date ? longDate(date, lang) : label;
+  };
   const [form, setForm] = useState(() => {
     const guest = initial ? guestOfAppointment(index, initial) : undefined;
     const hospital = initial ? hospitals.find((item) => item.id === initial.hospitalId) ?? matchHospital(initial.clinic, hospitals) : null;
@@ -585,7 +590,8 @@ export function ClinicForm({ t, lang, initial, defaultDate, returnOnly = false, 
       hospitalId: hospital?.id ?? "",
       fromHospitalId: initial?.fromClinic ? hospitals.find((item) => item.id === initial.fromHospitalId)?.id ?? matchHospital(initial.fromClinic, hospitals)?.id ?? "" : "",
       mobile: initial?.mobile === "-" ? "" : initial?.mobile ?? "",
-      appointmentDate: initial?.appointmentDate ?? defaultDate,
+      // طلب العودة والنقل من مستشفى لضيف في المستشفى الآن: اليوم افتراضيًا (لا اليوم المختار في القائمة، مثل الغد لمسؤول العيادة)
+      appointmentDate: initial?.appointmentDate ?? (returnOnly || transfer ? localDateString() : defaultDate),
       appointmentAt: initial?.appointmentAt ?? "09:00",
       kind: initial?.kind ?? "عادي" as AppointmentKind,
       // الضيف أقل من 18 سنة: المرافق إلزامي إلا مع Nurse
@@ -661,6 +667,8 @@ export function ClinicForm({ t, lang, initial, defaultDate, returnOnly = false, 
       toast.error(t.errGender);
       return;
     }
+    // طلب العودة أو النقل ليوم غير اليوم: يُسأل أولًا (الطلب يصل إلى مشرف السيارات لذلك اليوم، لا سيارة اليوم)
+    if ((returnOnly || transfer) && form.appointmentDate !== localDateString() && !window.confirm(t.directNotTodayConfirm(dayName(form.appointmentDate)))) return;
     const secondHospital = hospitals.find((item) => item.id === second.hospitalId);
     if (second.enabled && !initial && !returnOnly && !transfer) {
       if (!secondHospital || !second.appointmentAt) {
@@ -748,7 +756,17 @@ export function ClinicForm({ t, lang, initial, defaultDate, returnOnly = false, 
               ))}
             </div>
           </fieldset>}
-          <div className="sm:col-span-2"><DateChooser label={returnOnly ? t.returnDate : t.date} value={form.appointmentDate} onChange={(value) => setForm({ ...form, appointmentDate: value })} labels={t.dateChoice} /></div>
+          <div className="sm:col-span-2">
+            <DateChooser label={returnOnly ? t.returnDate : t.date} value={form.appointmentDate} onChange={(value) => setForm({ ...form, appointmentDate: value })} labels={t.dateChoice} />
+            {/* طلب العودة والنقل يصلان مباشرة إلى مشرف السيارات: «اليوم»، وتنبيه إن اختير يوم آخر */}
+            {(returnOnly || transfer) && (form.appointmentDate === localDateString()
+              ? <p className="mt-2 text-xs leading-5 text-slate-500">{t.directTodayHint}</p>
+              : (
+                <p role="alert" className="mt-2 flex items-start gap-2 rounded-xl bg-amber-50 px-3.5 py-2.5 text-sm font-medium leading-6 text-amber-900 ring-1 ring-inset ring-amber-300">
+                  <AlertTriangle className="mt-1 h-4 w-4 shrink-0" /> {t.directNotToday(dayName(form.appointmentDate))}
+                </p>
+              ))}
+          </div>
           <Field label={returnOnly ? t.returnTime : t.time} value={form.appointmentAt} onChange={(value) => setForm({ ...form, appointmentAt: value })} type="time" />
           <AppointmentTypeField id="appointment-type" t={t} lang={lang} value={form.appointmentType} onChange={(appointmentType) => setForm((current) => ({ ...current, appointmentType }))} />
 

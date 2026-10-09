@@ -206,7 +206,13 @@ export function SupervisorHome({ uid, userName = "", lead = false, nurses = fals
   // آخر طلب للضيف في كل موعد (الذهاب، ثم العودة إن طُلبت)؛ عودة الـ Nurse فقط تُتابَع وحدها
   const latest = new Map<string, VehicleRequest>();
   const nurseTrip = new Map<string, VehicleRequest>();
-  for (const request of requests) (request.nurseOnly ? nurseTrip : latest).set(request.appointmentId, request);
+  // طلب العودة بعد الذهاب دائمًا: لا يُعتمد على ترتيب الطلبات المحفوظ (طلب يكتبه الخادم، كالعودة التلقائية، بلا ترتيب)
+  for (const request of requests) {
+    const map = request.nurseOnly ? nurseTrip : latest;
+    const current = map.get(request.appointmentId);
+    if (current && current.direction === "عودة" && request.direction !== "عودة") continue;
+    map.set(request.appointmentId, request);
+  }
   const phaseOf = (request: VehicleRequest) => tripPhase(request, now, Boolean(request.vehiclePlate && liveGps.has(request.vehiclePlate)));
 
   // مواعيد اليوم فقط، مع أي رحلة من يوم سابق لم يُستلم مريضها بعد (مثل عودة بعد منتصف الليل)
