@@ -325,10 +325,12 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
   const isTrip = (trip: Trip | null): trip is Trip => Boolean(trip);
   const onDate = (trip: Trip) => trip.appointment.appointmentDate === date;
 
-  const pending = requests.filter((request) => request.status === "بانتظار التوزيع").map(withAppointment).filter(isTrip).filter(onDate);
-  // حالات السرطان أولًا، ثم حسب وقت الموعد
+  // كل الطلبات بانتظار التوزيع مهما كان يوم الموعد (عودة ضيف ذهب في يوم سابق، أو حجز ليوم قادم): لا يُختار اليوم لتظهر
+  const pending = requests.filter((request) => request.status === "بانتظار التوزيع").map(withAppointment).filter(isTrip);
+  // حالات السرطان أولًا، ثم حسب وقت الحاجة إلى السيارة (اليوم والوقت)
   const pendingShown = [...pending].sort((a, b) => Number(isPriority(b.appointment)) - Number(isPriority(a.appointment))
-    || a.appointment.appointmentAt.localeCompare(b.appointment.appointmentAt));
+    || (a.at?.getTime() ?? 0) - (b.at?.getTime() ?? 0)
+    || `${a.appointment.appointmentDate} ${a.appointment.appointmentAt}`.localeCompare(`${b.appointment.appointmentDate} ${b.appointment.appointmentAt}`));
   const phases = new Map(requests.map((request) => [request.id, tripPhase(request, now, gpsLive(request.vehiclePlate))]));
   // الرحلات الجارية الآن (إلى الاستلام أو إلى الوجهة) مهما كان تاريخ الموعد
   const active = requests
@@ -748,6 +750,9 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
       || (phase.kind === "toDestination" && phase.late);
   });
   const latePending = pending.filter(pendingLate);
+  // التوزيع التلقائي لطلبات اليوم والأيام السابقة فقط (الحجز ليوم قادم يُرسل في يومه)
+  const pendingDue = pending.filter((trip) => trip.appointment.appointmentDate <= today);
+  const pendingLater = pending.length - pendingDue.length;
   const lateTrips = activeGroups.filter(tripLate);
   const jump = (id: string) => document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
   // تفاصيل السيارة المعروضة: رحلاتها في اليوم المختار (الرحلة المجمّعة رحلة واحدة)
@@ -817,7 +822,7 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
           items={[
             { key: "available", label: "سيارات متاحة", value: forAppointments.length, tone: "green", hint: `${vehicleCounts.inside} داخل المجمع · ${vehicleCounts.outside} خارجه${vehicleCounts.reserved ? ` · ${vehicleCounts.reserved} غير مخصصة للمواعيد` : ""}`, onClick: () => jump("fleet-vehicles") },
             { key: "active", label: "رحلات جارية", value: activeGroups.length, tone: "blue", hint: trackingCount ? `${trackingCount} بمتابعة GPS` : "من الإرسال حتى الوجهة", onClick: () => jump("fleet-active") },
-            { key: "pending", label: "بانتظار التوزيع", value: pending.length, tone: "amber", hint: date === today ? "طلبات اليوم" : "طلبات التاريخ المحدد", onClick: () => jump("fleet-pending") },
+            { key: "pending", label: "بانتظار التوزيع", value: pending.length, tone: "amber", hint: pendingLater ? `كل الأيام · ${pendingLater} ليوم قادم` : "كل الأيام", onClick: () => jump("fleet-pending") },
             { key: "late", label: "متأخرة", value: latePending.length + lateTrips.length + stopped.length, tone: "red", hint: `${latePending.length} تنتظر سيارة · ${lateTrips.length} في الطريق${stopped.length ? ` · ${stopped.length} متوقفة` : ""}`, onClick: () => jump(stopped.length ? "fleet-stopped" : latePending.length ? "fleet-pending" : "fleet-active") },
           ]}
         />
@@ -881,11 +886,11 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
             icon={BellRing}
             title="طلبات بانتظار التوزيع"
             count={pending.length}
-            description="اختر السيارة المناسبة ثم أرسلها، أو وزّع الكل تلقائيًا على السيارات المتاحة"
+            description="كل الطلبات مهما كان يوم الموعد · اختر السيارة المناسبة ثم أرسلها، أو وزّع طلبات اليوم تلقائيًا على السيارات المتاحة"
             actions={pending.length > 0 && (
               <button
-                disabled={!dispatchable.length}
-                onClick={() => setPlan(planDispatch(pending, dispatchable, load, hospitals, (unit, vehicle) => locationRank(unit.direction, unit.requestIds)(vehicle), rules))}
+                disabled={!dispatchable.length || !pendingDue.length}
+                onClick={() => setPlan(planDispatch(pendingDue, dispatchable, load, hospitals, (unit, vehicle) => locationRank(unit.direction, unit.requestIds)(vehicle), rules))}
                 title={dispatchable.length ? "توزيع الطلبات على السيارات المتاحة بالتساوي" : "لا توجد سيارة متاحة الآن"}
                 className={btn("primary", "sm")}
               >
