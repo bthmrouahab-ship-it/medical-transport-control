@@ -3,6 +3,7 @@ import { CalendarClock, CarFront, ChevronLeft, Eye, EyeOff, LoaderCircle, LockKe
 import BrandLogo from "@/components/BrandLogo";
 import { btn, cx } from "@/components/ui-kit";
 import { authErrorMessage, login } from "@/lib/auth";
+import { SERVER_DOWN_MESSAGE, serverUnavailable } from "@/lib/api";
 
 /**
  * حقل بعنوان عائم: العنوان داخل الحقل، ويصعد صغيرًا إلى أعلاه عند الكتابة أو التركيز.
@@ -80,8 +81,13 @@ export default function Login() {
     try {
       await login(username, password);
     } catch (loginError) {
-      setError(authErrorMessage(loginError, "تعذر تسجيل الدخول. حاول مرة أخرى."));
-      setPassword("");
+      // انقطاع الخادم ليس خطأ في كلمة المرور: رسالة واضحة، وتبقى كلمة المرور مكتوبة لإعادة المحاولة
+      if (serverUnavailable(loginError)) {
+        setError(SERVER_DOWN_MESSAGE);
+      } else {
+        setError(authErrorMessage(loginError, "تعذر تسجيل الدخول. حاول مرة أخرى."));
+        setPassword("");
+      }
     } finally {
       setBusy(false);
     }

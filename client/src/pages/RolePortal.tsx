@@ -46,6 +46,7 @@ import ChangePasswordForm from "@/components/ChangePasswordForm";
 import { SHARED_KEYS, clearSharedBackend, loadState, removeState, saveState, saveStates, setSharedBackend, subscribeState } from "@/lib/appStore";
 import { createApiBackend } from "@/lib/apiBackend";
 import { authErrorMessage, logout, watchSession } from "@/lib/auth";
+import { api, serverUnavailable } from "@/lib/api";
 
 // صفحات تُحمَّل حسب دور المستخدم فقط، حتى لا يحمّل كل مستخدم كود الأدوار الأخرى والخرائط والمخططات
 const AdminPanel = lazy(() => import("./AdminPanel"));
@@ -81,6 +82,35 @@ type Gate =
   | { status: "profile"; profile: UserProfile }
   | { status: "ready"; profile: UserProfile }
   | { status: "error"; message: string };
+
+/** كل كم ثانية تُسأل الخادم وهو لا يستجيب، فتعود الصفحة وحدها عند عودته */
+const RECONNECT_MS = 10000;
+
+/**
+ * تعذر الوصول إلى الخادم عند فتح الصفحة (انقطاع مؤقت في الاستضافة): الجلسة وكلمة المرور لم تتغيرا، فلا حاجة لتسجيل الخروج.
+ * تُسأل الخادم كل 10 ثوانٍ وتُعاد الصفحة تلقائيًا عند عودته.
+ */
+function ServerDown({ message, onLogout }: { message: string; onLogout: () => void }) {
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      api("session").then(() => window.location.reload(), () => {});
+    }, RECONNECT_MS);
+    return () => window.clearInterval(timer);
+  }, []);
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-page p-4" dir="rtl">
+      <div className="max-w-md rounded-2xl bg-white p-8 text-center shadow-card ring-1 ring-slate-200/80">
+        <Loader2 className="mx-auto mb-3 h-6 w-6 animate-spin text-slate-400" />
+        <p className="font-semibold text-slate-700">{message}</p>
+        <p className="mt-2 text-sm leading-6 text-slate-500">ستعود الصفحة وحدها عند عودة الخادم، ولا حاجة لتسجيل الخروج: حسابك وكلمة مرورك كما هما.</p>
+        <div className="mt-5 flex justify-center gap-3">
+          <button onClick={() => window.location.reload()} className={btn("primary")}>إعادة المحاولة الآن</button>
+          <button onClick={onLogout} className={btn("ghost")}>تسجيل الخروج</button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 /**
  * بوابة الدخول: لا تُحمَّل أي بيانات قبل تسجيل الدخول بحساب مفعّل،
@@ -133,7 +163,7 @@ export default function RolePortal() {
         : { status: "profile", profile });
     }, (error) => {
       console.error("[auth] session", error);
-      setGate({ status: "error", message: authErrorMessage(error, "تعذر الاتصال بالخادم. تحقق من الإنترنت ثم أعد تحميل الصفحة.") });
+      setGate({ status: "error", message: serverUnavailable(error) ? "الخادم لا يستجيب الآن." : authErrorMessage(error, "تعذر الاتصال بالخادم. تحقق من الإنترنت ثم أعد تحميل الصفحة.") });
     });
   }, [signOutNow]);
 
@@ -193,19 +223,7 @@ export default function RolePortal() {
     return <PageLoading />;
   }
   if (gate.status === "signedOut") return <Login />;
-  if (gate.status === "error") {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-page p-4" dir="rtl">
-        <div className="max-w-md rounded-2xl bg-white p-8 text-center shadow-card ring-1 ring-slate-200/80">
-          <p className="font-semibold text-slate-700">{gate.message}</p>
-          <div className="mt-5 flex justify-center gap-3">
-            <button onClick={() => window.location.reload()} className={btn("primary")}>إعادة المحاولة</button>
-            <button onClick={() => signOutNow()} className={btn("secondary")}>تسجيل الخروج</button>
-          </div>
-        </div>
-      </div>
-    );
-  }
+  if (gate.status === "error") return <ServerDown message={gate.message} onLogout={() => signOutNow()} />;
 
   const profile = gate.profile;
   if (profile.mustChangePassword || changingPassword) {
