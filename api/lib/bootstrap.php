@@ -61,7 +61,10 @@ function db(): PDO
     // المواقع المضبوطة قبل إضافة جداول أو خانات أو تغيير شكل البيانات تُرقّى هنا مرة واحدة (خارج أي معاملة)
     try {
         $version = (int)$pdo->query("SELECT v FROM settings WHERE k = 'schema'")->fetchColumn();
-    } catch (PDOException) {
+    } catch (PDOException $error) {
+        // جدول الإعدادات غير موجود (موقع قديم): يُرقّى. أي خطأ آخر (انقطاع مؤقت في قاعدة البيانات) يُرد كخطأ في الخادم،
+        // ولا يُعاد ترحيل البيانات بسببه
+        if ($error->getCode() !== '42S02') throw $error;
         $version = 0;
     }
     if ($version < SCHEMA_VERSION) upgrade_schema($pdo);

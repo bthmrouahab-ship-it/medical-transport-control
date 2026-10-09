@@ -11,6 +11,10 @@ export class ApiError extends Error {
   }
 }
 
+/** الخادم لا يستجيب (انقطاع الاتصال، أو خطأ مؤقت في الاستضافة أو قاعدة البيانات)، لا رفض للطلب نفسه */
+export const serverUnavailable = (error: unknown) => error instanceof ApiError && (error.status === 0 || error.status >= 500);
+export const SERVER_DOWN_MESSAGE = "الخادم لا يستجيب الآن (العطل في الخادم، لا في اسم المستخدم أو كلمة المرور). انتظر دقيقة ثم حاول مرة أخرى.";
+
 type SessionEndListener = (message: string) => void;
 const sessionEndListeners = new Set<SessionEndListener>();
 
