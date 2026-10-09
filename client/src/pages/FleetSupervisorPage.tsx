@@ -109,7 +109,7 @@ import {
 } from "@shared/transport";
 import type { Hospital } from "@shared/hospitals";
 import { assignDrivers, shortDriverName } from "@shared/drivers";
-import { LATE_MINUTES, arrivalsOn, incomingCars, minutesSince, neededAt, returningText, stoppedVehicles, suggestReturnPickups, suggestReturnRedirects, tripEndpoints, tripPhase, vehicleAvailability, vehicleLocationState, type IncomingCar, type StoppedVehicle, type TripPhase, type VehicleLocationState } from "@shared/trips";
+import { LATE_MINUTES, arrivalsOn, incomingCars, minutesSince, neededAt, returningText, stoppedMessage, stoppedVehicles, suggestReturnPickups, suggestReturnRedirects, tripEndpoints, tripPhase, vehicleAvailability, vehicleLocationState, type IncomingCar, type StoppedVehicle, type TripPhase, type VehicleLocationState } from "@shared/trips";
 import {
   Badge,
   DateChooser,
@@ -300,7 +300,7 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
   // أماكن انتظار السيارة وتنبيه التوقف: المستشفيات ووجهات الرحلات غير الطبية ذات الموقع
   const waitPlaces = useMemo<Hospital[]>(() => [
     ...hospitals,
-    ...NON_MEDICAL_DESTINATIONS.flatMap((destination) => (destination.place ? [{ ...destination.place, name: destination.ar } as Hospital] : [])),
+    ...NON_MEDICAL_DESTINATIONS.flatMap((destination) => (destination.place ? [{ ...destination.place, name: destination.ar, nameEn: destination.en } as Hospital] : [])),
   ], [hospitals]);
   const now = useNow(15000);
   const today = localDateString(now);
@@ -526,8 +526,6 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
     });
   }
   const guestOf = (appointmentId?: string) => (appointmentId ? appointments.find((item) => item.id === appointmentId)?.patientName : undefined);
-  /** رسالة الاستفسار عن سبب التوقف (واتساب السائق) */
-  const stopMessage = (item: StoppedVehicle) => `السلام عليكم ${item.driver || ""}، السيارة ${item.vehicle.plate} متوقفة منذ ${item.minutes} دقيقة${item.place ? ` قرب ${item.place.name}` : ""}. ما سبب التأخير؟`;
 
   async function toggleDeviceNotifications() {
     if (notifyDevice) {
@@ -849,7 +847,7 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
                       <div className="flex flex-wrap gap-2">
                         {!busy?.busy && <button type="button" onClick={() => setWaitingPlate(item.vehicle.plate)} className={btn("primary", "sm")}><Hourglass className="h-4 w-4" /> انتظار في المستشفى</button>}
                         {phone && <a href={`tel:${phone}`} className={btn("secondary", "sm")}><Phone className="h-4 w-4" /> اتصال بالسائق</a>}
-                        {phone && <a href={whatsappLink(phone, stopMessage(item))} target="_blank" rel="noreferrer" className={cx(btn("secondary", "sm"), "text-emerald-700")}><MessageCircle className="h-4 w-4" /> استفسار بواتساب</a>}
+                        {phone && <a href={whatsappLink(phone, stoppedMessage(item))} target="_blank" rel="noreferrer" className={cx(btn("secondary", "sm"), "text-emerald-700")}><MessageCircle className="h-4 w-4" /> استفسار بواتساب</a>}
                         <button type="button" onClick={() => setIgnoredStops((list) => [...list, stopKey(item)])} className={btn("ghost", "sm")}>تجاهل حتى تتحرك</button>
                       </div>
                     </div>

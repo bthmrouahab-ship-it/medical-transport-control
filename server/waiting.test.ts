@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { activeWaiting, vehicleRestriction, waitingText, type ClinicAppointment, type Vehicle, type VehicleRequest } from "../shared/transport";
-import { STOPPED_MINUTES, stoppedVehicles, vehicleLocationState, type StillLocation } from "../shared/trips";
+import { STOPPED_MINUTES, stoppedMessage, stoppedVehicles, vehicleLocationState, type StillLocation } from "../shared/trips";
 import { DEFAULT_HOSPITALS, ORIGIN } from "../shared/hospitals";
 import { ROUTE_SERVICE, fetchRoute } from "../shared/roads";
 
@@ -84,5 +84,15 @@ describe("road route on the map", () => {
     expect(route).toEqual({ path: [[25.2, 51.5], [25.21, 51.52], [25.25, 51.55]], km: 12.3, minutes: 21 });
     const failing = (async () => new Response(JSON.stringify({ code: "NoRoute" }))) as unknown as typeof fetch;
     await expect(fetchRoute([{ lat: 25.2, lng: 51.5 }, { lat: 25.25, lng: 51.55 }], failing)).rejects.toThrow();
+  });
+});
+
+describe("stopped car message to the driver", () => {
+  it("asks in Arabic, English and Urdu with the place", () => {
+    const message = stoppedMessage({ vehicle: car({ plate: "01" }), minutes: 25, place: wakra, driver: "سائق تجربة" });
+    expect(message).toContain("السيارة 01 متوقفة منذ 25 دقيقة قرب مستشفى الوكرة");
+    expect(message).toContain("car 01 has not moved for 25 minutes near Al Wakra Hospital");
+    expect(message).toContain("گاڑی 01 25 منٹ سے رکی ہوئی ہے");
+    expect(stoppedMessage({ vehicle: car(), minutes: 12, place: null, driver: "" })).not.toContain("near");
   });
 });
