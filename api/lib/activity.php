@@ -385,6 +385,19 @@ function describe_write(PDO $pdo, string $col, string $id, ?array $before, ?arra
                     ? "تسليم السيارة $plate للسائق $name" . ($old !== '' && $old !== $name ? " (بدل $old)" : '')
                     : "السيارة $plate بلا سائق" . ($old !== '' ? " (كان $old)" : ''), $details];
             }
+            // انتظار السيارة في المستشفى (بدل عودتها إلى المجمع)، وإنهاؤه
+            if (in_array('waiting', $changed, true)) {
+                $waiting = $after['waiting'] ?? null;
+                if (!is_array($waiting)) {
+                    $place = (string)(($before['waiting'] ?? [])['place'] ?? '');
+                    return ['vehicle', 'vehicle.waiting_end', "إنهاء انتظار السيارة $plate" . ($place !== '' ? " في $place" : ''), $details];
+                }
+                $guest = '';
+                if (is_string($waiting['appointmentId'] ?? null)) $guest = (string)(appointment_doc($pdo, $waiting['appointmentId'])['patientName'] ?? '');
+                $note = trim((string)($waiting['note'] ?? ''));
+                $details['place'] = (string)$waiting['place'];
+                return ['vehicle', 'vehicle.waiting', "انتظار السيارة $plate في {$waiting['place']}" . ($guest !== '' ? " لعودة $guest" : '') . ($note !== '' ? " · $note" : ''), $details];
+            }
             if ($changed === ['available']) {
                 return ['vehicle', 'vehicle.availability', !empty($after['available']) ? "إتاحة السيارة $plate للخدمة" : "إيقاف السيارة $plate عن الخدمة", $details];
             }
@@ -497,6 +510,9 @@ function describe_write(PDO $pdo, string $col, string $id, ?array $before, ?arra
 
         case 'vehicleLocations':
             return ['location', 'location.delete', "حذف آخر موقع للسيارة $id", ['plate' => $id]];
+
+        case 'vehicleTracks':
+            return ['location', 'location.track_delete', "حذف مسار رحلة السيارة $id", ['plate' => $id]];
 
         case 'meta':
             // سجل العمليات القديم (قبل هذا السجل) لا يُسجَّل

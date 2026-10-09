@@ -7,6 +7,18 @@ export type VehicleLocation = {
   driver?: string;
   sharing?: boolean;
   updatedAt: string;
+  /** منذ متى لم تتحرك السيارة من مكانها (يكتبه الخادم): تنبيه السيارة المتوقفة */
+  stillSince?: string;
+};
+
+/** مسار السيارة في رحلتها (يكتبه الخادم من مواقع السائق، ويُمحى عند بداية رحلتها التالية) */
+export type VehicleTrack = {
+  plate: string;
+  requestIds: string[];
+  startedAt: string;
+  /** [خط العرض، خط الطول، الوقت بالثواني] */
+  points: [number, number, number][];
+  updatedAt?: string;
 };
 
 type Point = { lat: number; lng: number };
@@ -19,7 +31,14 @@ export type MapTrip = {
   from: Point | null;
   to: Point | null;
   label: string;
+  /** مسار الطريق الفعلي من السيارة (أو نقطة البداية) إلى المحطة التالية، إن عُرف (OSRM) */
+  path?: [number, number][];
+  /** «12.4 كم بالطريق · 18 د» */
+  roadText?: string;
 };
+
+/** مسار رحلة سيارة على الخريطة (ما قطعته فعلًا) */
+export type MapTrack = { plate: string; path: [number, number][]; label: string };
 
 /** حالة إشارة GPS حسب عمر آخر تحديث. */
 export function locationFreshness(location: VehicleLocation, now = Date.now()) {
@@ -52,4 +71,4 @@ export function ageText(minutes: number) {
 }
 
 /** ألوان الخريطة (نفسها في مفتاح الخريطة بلوحة السيارات). */
-export const MAP_COLORS = { hospital: "#0e7490", origin: "#0b2545", toPickup: "#d97706", toDestination: "#2563eb" };
+export const MAP_COLORS = { hospital: "#0e7490", origin: "#0b2545", toPickup: "#d97706", toDestination: "#2563eb", track: "#7c3aed", waiting: "#0891b2", stopped: "#dc2626" };

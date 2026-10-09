@@ -1,5 +1,6 @@
 import { DEFAULT_HOSPITALS, distanceKm, matchHospital, type Hospital } from "./hospitals";
 import { FLEET_SEED } from "./seedData";
+import { roadKm } from "./roads";
 import { normalizeGender, normalizeMobile, readAliased, toText, toWesternDigits } from "./text";
 import { PRIVATE_CAR_MESSAGE, findGuestByName, guestIndex, guestOfAppointment, hasPrivateCar, isMinor, type Guest } from "./guests";
 
@@ -169,7 +170,41 @@ export type Vehicle = {
   busRole?: VehicleRole;
   /** للسيدان فقط: يشغّلها مشرف السيارات بطاقتها الكاملة (4 أشخاص بدل 3) */
   fullCapacity?: boolean;
+  /** السيارة تنتظر في المستشفى (يختاره مشرف السيارات): لا تُرسل في رحلة أخرى، وتبقى لعودة ضيفها */
+  waiting?: VehicleWaiting;
 };
+
+/**
+ * انتظار السيارة في المستشفى (أو أي مكان خارج المجمع) بدل عودتها إلى المجمع: يختاره مشرف السيارات (من تنبيه
+ * السيارة المتوقفة أو من قائمة السيارات)، ومعه الضيف الذي تنتظره اختياريًا. since وby يكتبهما الخادم.
+ * ينتهي بـ «إنهاء الانتظار»، أو بإرسال السيارة في رحلة (يمحوه الخادم)، أو بانتهاء يومه.
+ */
+export type VehicleWaiting = {
+  place: string;
+  hospitalId?: string;
+  lat: number;
+  lng: number;
+  /** الموعد الذي تنتظر ضيفها (لعودته) */
+  appointmentId?: string;
+  note?: string;
+  since?: string;
+  by?: string;
+};
+
+/** انتظار السيارة الآن (في يومه فقط)، أو null */
+export function activeWaiting(vehicle: Pick<Vehicle, "waiting">, now = new Date()): VehicleWaiting | null {
+  const waiting = vehicle.waiting;
+  if (!waiting || typeof waiting !== "object") return null;
+  if (waiting.since && localDateString(new Date(waiting.since)) !== localDateString(now)) return null;
+  return waiting;
+}
+
+/** «تنتظر في مستشفى الوكرة منذ 10:20» */
+export function waitingText(waiting: VehicleWaiting, guest?: string) {
+  const since = waiting.since ? new Date(waiting.since) : null;
+  const clock = since ? ` منذ ${String(since.getHours()).padStart(2, "0")}:${String(since.getMinutes()).padStart(2, "0")}` : "";
+  return `تنتظر في ${waiting.place}${clock}${guest ? ` · لعودة ${guest}` : ""}`;
+}
 
 /**
  * تخصيص الباص يختاره مشرف السيارات: shuttle «باص المجمع» يلف داخل المجمع (ويمكن إرساله إلى مستشفى الثمامة
@@ -1064,6 +1099,7 @@ export function regularForSpecialWarning(vehicle: Pick<Vehicle, "kind">, appoint
  * - باص المجمع يلف داخل المجمع، ويُرسل فقط إلى مستشفى الثمامة (ذهابًا أو عودة) وقت الذروة.
  * - سيارة المدارس وباص الجامعة لا يُرسلان في أي رحلة (طبية أو غير طبية) في أوقاتهما المحجوزة (reservedRun:
  *   أوقات المدارس الأحد إلى الخميس 11:00–14:00 و17:30–19:00، وباص الجامعة طوال اليوم، ما لم يغيّرها مشرف السيارات).
+ * - السيارة التي تنتظر في المستشفى (activeWaiting) لعودة ضيفها فقط، وبلا ضيف محدد لا تُرسل حتى ينتهي الانتظار.
  */
 export function vehicleRestriction(vehicle: Vehicle, trip: TripLoad, rules: VehicleRules = {}): string | null {
   const now = rules.now ?? new Date();
@@ -1073,6 +1109,11 @@ export function vehicleRestriction(vehicle: Vehicle, trip: TripLoad, rules: Vehi
   if (role === "clinic") return "في خدمة العيادة";
   const reserved = reservedRun(vehicle, now, rules.schedules);
   if (reserved) return reservedText(reserved);
+  // تنتظر في المستشفى: لعودة ضيفها فقط (وبلا ضيف محدد لا تُرسل حتى ينتهي الانتظار)
+  const waiting = activeWaiting(vehicle, now);
+  if (waiting && !(waiting.appointmentId && trip.appointments.some((appointment) => appointment.id === waiting.appointmentId))) {
+    return `تنتظر في ${waiting.place} · أنهِ الانتظار أولًا`;
+  }
   if (!rules.regularForSpecial && needsAccessibleVehicle(trip.appointments) && vehicle.kind !== "احتياجات خاصة") return "تحتاج سيارة احتياجات خاصة";
   if (specialCount(trip.appointments) > MAX_SPECIAL_PER_VEHICLE) return "ضيف احتياجات خاصة واحد فقط في السيارة";
   const seats = vehicleSeats(vehicle);
@@ -1255,10 +1296,14 @@ export function planDispatch(
   return plan;
 }
 
-/** المسافة التي تُعتبر فيها الوجهتان متجاورتين (مثل مباني مدينة حمد الطبية). */
+/** المسافة المستقيمة التي يُعتبر فيها مكانان متجاورين (السيارة الذاهبة إلى مكان العودة: incomingCars). */
 export const NEARBY_KM = 3;
-/** وجهتان في نفس الاتجاه يمكن توصيلهما في رحلة واحدة. */
-export const SAME_DIRECTION_KM = 8;
+/**
+ * الجمع بمسافة الطريق الفعلي بين الوجهتين (roadKm في shared/roads.ts، لا الخط المستقيم): متجاورتان حتى 4 كم بالطريق
+ * (مثل مباني مدينة حمد الطبية)، وفي نفس الاتجاه حتى 6 كم بالطريق. فلا تُجمع حمد العام مع سدرة، ولا الثمامة مع روضة الخيل.
+ */
+export const ROAD_NEARBY_KM = 4;
+export const ROAD_SAME_DIRECTION_KM = 6;
 
 function hospitalFor(appointment: ClinicAppointment, hospitals: Hospital[]) {
   if (isNonMedical(appointment)) return nonMedicalPlace(appointment);
@@ -1278,7 +1323,7 @@ export function matchHospitalZone(appointment: ClinicAppointment, hospitals: Hos
 
 /**
  * نقاط الجمع (لترتيب الاقتراحات): 45 للقرب الزمني ناقص فرق الدقائق،
- * +25 لنفس الوجهة أو +20 لوجهات متجاورة (≤ 3 كم) أو +10 لنفس الاتجاه (≤ 8 كم)، +10 لنفس نوع الرحلة.
+ * +25 لنفس الوجهة أو +20 لوجهات متجاورة (≤ 4 كم بالطريق) أو +10 لنفس الاتجاه (≤ 6 كم بالطريق)، +10 لنفس نوع الرحلة.
  * المبنى لا يُحتسب: كل مباني المجمع متقاربة. times (اختياري): وقت الحاجة إلى السيارة لكل موعد
  * (neededAt في shared/trips.ts، من وقت الطلب)، وإلا وقت الموعدين. المواعيد في أيام مختلفة لا تُجمع.
  */
@@ -1292,9 +1337,9 @@ export function calculateTripGroupingScore(first: ClinicAppointment, second: Cli
   const sameDestination = firstHospital && secondHospital
     ? firstHospital.id === secondHospital.id
     : first.clinic.trim().toLowerCase() === second.clinic.trim().toLowerCase();
-  const destinationKm = firstHospital && secondHospital ? distanceKm(firstHospital, secondHospital) : null;
-  const nearbyDestination = !sameDestination && destinationKm !== null && destinationKm <= NEARBY_KM;
-  const sameDirection = !sameDestination && !nearbyDestination && destinationKm !== null && destinationKm <= SAME_DIRECTION_KM;
+  const destinationKm = firstHospital && secondHospital ? roadKm(firstHospital, secondHospital) : null;
+  const nearbyDestination = !sameDestination && destinationKm !== null && destinationKm <= ROAD_NEARBY_KM;
+  const sameDirection = !sameDestination && !nearbyDestination && destinationKm !== null && destinationKm <= ROAD_SAME_DIRECTION_KM;
   const compatibleVehicle = first.kind === second.kind;
   const timeScore = Math.max(0, 45 - timeGapMinutes);
   const destinationScore = sameDestination ? 25 : nearbyDestination ? 20 : sameDirection ? 10 : 0;
@@ -1322,8 +1367,8 @@ export function suggestTripGroups(appointments: ClinicAppointment[], hospitals: 
       if (!canShareVehicle(details, 45)) continue;
       const reasons = [
         details.sameDestination ? "نفس الوجهة" : null,
-        details.nearbyDestination ? `وجهات متجاورة${details.zone ? ` (${details.zone})` : ""} ${details.destinationKm!.toFixed(1)} كم` : null,
-        details.sameDirection ? `نفس الاتجاه ${details.destinationKm!.toFixed(1)} كم` : null,
+        details.nearbyDestination ? `وجهات متجاورة${details.zone ? ` (${details.zone})` : ""} ${details.destinationKm!.toFixed(1)} كم بالطريق` : null,
+        details.sameDirection ? `نفس الاتجاه ${details.destinationKm!.toFixed(1)} كم بالطريق` : null,
         `فارق ${details.timeGapMinutes} دقيقة`,
       ].filter(Boolean);
       suggestions.push({

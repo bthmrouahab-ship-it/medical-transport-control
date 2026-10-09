@@ -20,6 +20,7 @@ const COLLECTIONS: Partial<Record<SharedKey, { col: string; idField: string; sor
   fox_hospitals: { col: "hospitals", idField: "id" },
   // مواقع GPS يرسلها السائقون من صفحتهم؛ هنا للقراءة والمتابعة فقط
   fox_locations: { col: "vehicleLocations", idField: "plate" },
+  fox_tracks: { col: "vehicleTracks", idField: "plate" },
   // قائمة ضيوف المجمع (للمدير والعيادة فقط، وبلا العمر والرقم الصحي)
   fox_guests: { col: "guests", idField: "id", sort: (a, b) => String(a.name ?? "").localeCompare(String(b.name ?? ""), "ar") },
   // قائمة السائقين (للمدير ومشرف السيارات): مستقلة عن السيارات، ومشرف السيارات يخصصهم للسيارات
@@ -38,6 +39,8 @@ const COLLECTIONS: Partial<Record<SharedKey, { col: string; idField: string; sor
 const SINGLE_DOCS: Partial<Record<SharedKey, { col: string; id: string; field: string }>> = {
   fox_history: { col: "meta", id: "history", field: "data" },
   fox_schedules: { col: "meta", id: "schedules", field: "data" },
+  // مسافات الطرق بين المستشفيات (shared/roads.ts) لجمع الرحلات
+  fox_roads: { col: "meta", id: "roads", field: "data" },
 };
 
 /** كل كم ثانية يسأل الموقع عن تغييرات المستخدمين الآخرين (أبطأ عندما تكون الصفحة في الخلفية). */

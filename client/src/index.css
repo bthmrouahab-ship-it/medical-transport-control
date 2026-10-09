@@ -92,6 +92,11 @@ input::placeholder { color: #94a3b8; }
   box-shadow: 0 0 0 1px rgba(15, 31, 53, .3), 0 2px 4px rgba(15, 31, 53, .3);
 }
 .vehicle-pin__body.is-offline { opacity: .65; }
+/* تنتظر في المستشفى (سماوي)، ومتوقفة خارج المجمع 10 دقائق أو أكثر (أحمر) */
+.vehicle-pin__body.is-waiting .vehicle-pin__label { box-shadow: inset 0 0 0 2px #0891b2, 0 6px 14px -4px rgba(15, 31, 53, .3); }
+.vehicle-pin__body.is-waiting .vehicle-pin__label span { color: #0e7490; font-weight: 600; }
+.vehicle-pin__body.is-stopped .vehicle-pin__label { box-shadow: inset 0 0 0 2px #dc2626, 0 6px 14px -4px rgba(15, 31, 53, .3); }
+.vehicle-pin__body.is-stopped .vehicle-pin__label span { color: #b91c1c; font-weight: 600; }
 .leaflet-container { font-family: var(--font-sans); background: #e5ebf1; }
 .leaflet-tooltip { font-family: var(--font-sans); border-radius: 8px; }
 .leaflet-tooltip.map-label { border: 0; background: #0b2545; color: #fff; font-weight: 600; box-shadow: 0 4px 12px -4px rgba(11, 37, 69, .5); }

@@ -47,6 +47,7 @@ import { SHARED_KEYS, clearSharedBackend, loadState, removeState, saveState, sav
 import { createApiBackend } from "@/lib/apiBackend";
 import { authErrorMessage, logout, watchSession } from "@/lib/auth";
 import { api, serverUnavailable } from "@/lib/api";
+import { useRoadMatrix } from "@/lib/roads";
 
 // صفحات تُحمَّل حسب دور المستخدم فقط، حتى لا يحمّل كل مستخدم كود الأدوار الأخرى والخرائط والمخططات
 const AdminPanel = lazy(() => import("./AdminPanel"));
@@ -287,6 +288,8 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
   onManager: () => void;
   onChangePassword: () => void;
 }) {
+  // جمع الرحلات بمسافة الطريق الفعلي (مشرف السيارات يحسب الجدول إن لم يُحسب أو تغيّرت المستشفيات)
+  useRoadMatrix(session.role === "fleetSupervisor");
   const [appointments, setAppointments] = useState<ClinicAppointment[]>(loadAppointments);
   const [requests, setRequests] = useState<VehicleRequest[]>(loadRequests);
   const [fleetVehicles, setFleetVehicles] = useState<Vehicle[]>(() => loadState("fox_fleet", DEFAULT_VEHICLES));

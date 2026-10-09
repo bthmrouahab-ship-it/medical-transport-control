@@ -3,17 +3,23 @@ import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { DOHA_CENTER, ORIGIN, QATAR_BOUNDS, type Hospital } from "@shared/hospitals";
 import { shortDriverName } from "@shared/drivers";
-import { MAP_COLORS, ageText, hiddenOnMap, locationFreshness, type MapTrip, type VehicleLocation } from "@/lib/vehicleLocation";
+import { MAP_COLORS, ageText, hiddenOnMap, locationFreshness, type MapTrack, type MapTrip, type VehicleLocation } from "@/lib/vehicleLocation";
 
 const escapeHtml = (value: string) => value.replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]!);
 
 /** الخريطة محصورة في قطر: لا يمكن تحريكها خارج هذه الحدود ولا الابتعاد أكثر من عرض قطر كاملة. */
 const QATAR = L.latLngBounds([QATAR_BOUNDS.south, QATAR_BOUNDS.west], [QATAR_BOUNDS.north, QATAR_BOUNDS.east]);
 
-export default function LiveMap({ hospitals, locations, trips = [], tripCounts, selectedHospitalId, onPick, onSelectHospital, focus, height = 520 }: {
+/** حالة السيارة على بطاقتها: تنتظر في المستشفى، أو متوقفة خارج المجمع */
+export type VehicleBadge = { text: string; tone: "waiting" | "stopped" };
+
+export default function LiveMap({ hospitals, locations, trips = [], tracks = [], badges, tripCounts, selectedHospitalId, onPick, onSelectHospital, focus, height = 520 }: {
   hospitals: Hospital[];
   locations: VehicleLocation[];
   trips?: MapTrip[];
+  /** ما قطعته السيارات في رحلاتها (مسار الرحلة) */
+  tracks?: MapTrack[];
+  badges?: Map<string, VehicleBadge>;
   /** عدد الرحلات التاريخية لكل مستشفى لتحديد حجم الدائرة */
   tripCounts?: Record<string, number>;
   selectedHospitalId?: string | null;
@@ -26,7 +32,7 @@ export default function LiveMap({ hospitals, locations, trips = [], tripCounts, 
 }) {
   const container = useRef<HTMLDivElement>(null);
   const map = useRef<L.Map | null>(null);
-  const layers = useRef<{ hospitals: L.LayerGroup; vehicles: L.LayerGroup; trips: L.LayerGroup } | null>(null);
+  const layers = useRef<{ hospitals: L.LayerGroup; vehicles: L.LayerGroup; trips: L.LayerGroup; tracks: L.LayerGroup } | null>(null);
   const pickRef = useRef(onPick);
   pickRef.current = onPick;
   const selectRef = useRef(onSelectHospital);
@@ -58,7 +64,7 @@ export default function LiveMap({ hospitals, locations, trips = [], tripCounts, 
     L.circleMarker([ORIGIN.lat, ORIGIN.lng], { radius: 10, color: "#ffffff", weight: 3, fillColor: MAP_COLORS.origin, fillOpacity: 1 })
       .bindTooltip(ORIGIN.name, { permanent: true, direction: "top", offset: [0, -10], className: "map-label", pane: "labels" })
       .addTo(instance);
-    layers.current = { trips: L.layerGroup().addTo(instance), hospitals: L.layerGroup().addTo(instance), vehicles: L.layerGroup().addTo(instance) };
+    layers.current = { tracks: L.layerGroup().addTo(instance), trips: L.layerGroup().addTo(instance), hospitals: L.layerGroup().addTo(instance), vehicles: L.layerGroup().addTo(instance) };
     instance.on("click", (event: L.LeafletMouseEvent) => {
       if (!QATAR.contains(event.latlng)) return;
       pickRef.current?.({ lat: Number(event.latlng.lat.toFixed(6)), lng: Number(event.latlng.lng.toFixed(6)) });
@@ -123,20 +129,46 @@ export default function LiveMap({ hospitals, locations, trips = [], tripCounts, 
       const car = trip.plate ? positions.get(trip.plate) : undefined;
       const from = trip.from && L.latLng(trip.from.lat, trip.from.lng);
       const to = trip.to && L.latLng(trip.to.lat, trip.to.lng);
-      const line = trip.phase === "toDestination"
+      const straight = trip.phase === "toDestination"
         ? (car ?? from) && to ? [car ?? from!, to] : null
         : car && from ? [car, from] : from && to ? [from, to] : null;
+      // مسار الطريق الفعلي إن عُرف (من موقع السيارة الآن إلى المحطة التالية)، وإلا خط مستقيم
+      const line = trip.path && trip.path.length > 1 ? trip.path.map(([lat, lng]) => L.latLng(lat, lng)) : straight;
       if (!line) continue;
-      const key = `${trip.plate}|${trip.phase}|${line.map((point) => point.toString()).join("|")}`;
+      const key = `${trip.plate}|${trip.phase}|${(straight ?? line).map((point) => point.toString()).join("|")}`;
       if (drawn.has(key)) continue;
       drawn.add(key);
+      const road = Boolean(trip.path && trip.path.length > 1);
+      const label = escapeHtml(trip.label) + (trip.roadText ? `<br>${escapeHtml(trip.roadText)}` : "");
+      const color = trip.phase === "toDestination" ? MAP_COLORS.toDestination : MAP_COLORS.toPickup;
+      // حد أبيض تحت خط الطريق حتى يظهر فوق طرق الخريطة
+      if (road) L.polyline(line, { color: "#ffffff", weight: 7, opacity: 0.85, interactive: false }).addTo(group);
       L.polyline(line, trip.phase === "toDestination"
-        ? { color: MAP_COLORS.toDestination, weight: 3, opacity: 0.85 }
-        : { color: MAP_COLORS.toPickup, weight: 3, opacity: 0.9, dashArray: "6 7" })
-        .bindTooltip(escapeHtml(trip.label))
-        .addTo(group);
+        ? { color, weight: road ? 4 : 3, opacity: 0.9, ...(road ? {} : { dashArray: "2 8" }) }
+        : { color, weight: road ? 4 : 3, opacity: 0.9, dashArray: road ? "8 6" : "2 8" })
+        .bindTooltip(label)
+        .addTo(group)
+        .getElement()?.setAttribute("data-route", road ? "road" : "straight");
     }
   }, [trips, locations]);
+
+  // مسار كل سيارة في رحلتها: المواقع التي مرت بها من إرسالها (يُمحى عند بداية رحلتها التالية)
+  useEffect(() => {
+    const group = layers.current?.tracks;
+    if (!group) return;
+    group.clearLayers();
+    for (const track of tracks) {
+      if (track.path.length < 2) continue;
+      L.polyline(track.path, { color: MAP_COLORS.track, weight: 3, opacity: 0.7, lineJoin: "round" })
+        .bindTooltip(escapeHtml(track.label))
+        .addTo(group)
+        .getElement()?.setAttribute("data-track", track.plate);
+      const [lat, lng] = track.path[0];
+      L.circleMarker([lat, lng], { radius: 4, color: "#ffffff", weight: 2, fillColor: MAP_COLORS.track, fillOpacity: 1 })
+        .bindTooltip(escapeHtml(`بداية الرحلة · ${track.label}`))
+        .addTo(group);
+    }
+  }, [tracks]);
 
   // السيارات: بطاقة بأول كلمة من اسم السائق الذي يقودها فقط (بلا رقم اللوحة)، ولون النقطة حسب إشارة GPS، والاسم
   // الكامل ورقم اللوحة عند المرور عليها. آخر موقع قديم (يظهر بالبحث عنه فقط) يذكر منذ متى وصل.
@@ -151,21 +183,23 @@ export default function LiveMap({ hospitals, locations, trips = [], tripCounts, 
       const old = hiddenOnMap(location) ? ageText(fresh.ageMinutes) : "";
       const gps = fresh.state === "offline" ? `غير متصل · آخر موقع ${ageText(fresh.ageMinutes)}` : fresh.label;
       const trip = trips.find((item) => item.plate === location.plate);
+      const badge = badges?.get(location.plate);
+      const note = old || (badge ? badge.text : "");
       const icon = L.divIcon({
         className: "vehicle-pin",
         iconSize: [0, 0],
-        html: `<div class="vehicle-pin__body${fresh.state === "offline" ? " is-offline" : ""}" data-plate="${escapeHtml(location.plate)}">`
-          + `<div class="vehicle-pin__label"><b>${escapeHtml(short)}</b>${old ? `<span>${old}</span>` : ""}</div>`
+        html: `<div class="vehicle-pin__body${fresh.state === "offline" ? " is-offline" : ""}${badge ? ` is-${badge.tone}` : ""}" data-plate="${escapeHtml(location.plate)}">`
+          + `<div class="vehicle-pin__label"><b>${escapeHtml(short)}</b>${note ? `<span>${escapeHtml(note)}</span>` : ""}</div>`
           + `<span class="vehicle-pin__dot" style="background:${fresh.color}"></span></div>`,
       });
       L.marker([location.lat, location.lng], { icon, zIndexOffset: fresh.state === "offline" ? 500 : 1000, keyboard: false })
         .bindTooltip(
-          `<b>${escapeHtml(name)}</b> · <span dir="ltr">${escapeHtml(location.plate)}</span><br>GPS: ${gps}${location.speed ? ` · ${location.speed} كم/س` : ""}${trip ? `<br>${escapeHtml(trip.label)}` : ""}`,
+          `<b>${escapeHtml(name)}</b> · <span dir="ltr">${escapeHtml(location.plate)}</span><br>GPS: ${gps}${location.speed ? ` · ${location.speed} كم/س` : ""}${trip ? `<br>${escapeHtml(trip.label)}` : ""}${badge ? `<br>${escapeHtml(badge.text)}` : ""}`,
           { direction: "top", offset: [0, -34] },
         )
         .addTo(group);
     }
-  }, [locations, trips]);
+  }, [locations, trips, badges]);
 
   const viewButton = "h-8 rounded-lg px-3 text-xs font-semibold text-slate-700 transition hover:bg-slate-100";
   return (

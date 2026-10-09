@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import { toast } from "sonner";
 import type { Hospital } from "@shared/hospitals";
 import type { ClinicAppointment, VehicleRequest } from "@shared/transport";
-import { tripEndpoints, type Arrival, type ReturnRedirect } from "@shared/trips";
+import { STOPPED_MINUTES, tripEndpoints, type Arrival, type ReturnRedirect, type StoppedVehicle } from "@shared/trips";
 import { deviceNotify, goTo, reveal } from "./notify";
 
 /** فتح مكان الإشعار: الصفحة تمرر طريقتها (مثل الرجوع من الخريطة إلى التوزيع أولًا)، وإلا ينقل إليه في الصفحة نفسها */
@@ -251,10 +251,68 @@ export function useRedirectAlerts({ redirects, driverOf, onDispatch, enabled = t
     for (const item of fresh) {
       const driver = latest.current.driverOf(item.vehicle.plate, item.vehicle.driver);
       const title = `وجّه السيارة ${item.vehicle.plate} إلى ${item.appointment.patientName}`;
-      const body = `${driver ? `السائق ${driver} · ` : ""}عائدة من ${item.from || "الوجهة"} ولم تقطع نصف الطريق، والضيف ينتظر العودة من ${item.pickup} على بعد ${item.distanceKm} كم`;
+      // السيارة التي تنتظر في المستشفى بأمر المشرف ليست عائدة إلى المجمع
+      const where = item.vehicle.waiting ? `تنتظر في ${item.vehicle.waiting.place}` : `عائدة من ${item.from || "الوجهة"} ولم تقطع نصف الطريق`;
+      const body = `${driver ? `السائق ${driver} · ` : ""}${where}، والضيف ينتظر العودة من ${item.pickup} على بعد ${item.distanceKm} كم`;
       const open = () => latest.current.onOpen(`redirect:${item.request.id}`);
       toast.info(title, { description: body, duration: 30000, ...goTo(open, false), action: { label: "توجيه", onClick: () => latest.current.onDispatch(item) } });
       notifyDevice(title, body, `redirect-${item.request.id}`, open);
+    }
+  }, [signature, enabled]); // eslint-disable-line react-hooks/exhaustive-deps
+}
+
+/** السيارات المتوقفة التي ظهر تنبيهها في هذه الجلسة (السيارة ووقت بداية وقوفها). */
+const SEEN_STOPPED_KEY = "fox_seen_stopped";
+
+/** «متوقفة منذ 12 دقيقة قرب مستشفى الوكرة» */
+export const stoppedText = (item: Pick<StoppedVehicle, "minutes" | "place">) =>
+  `متوقفة منذ ${item.minutes} دقيقة ${item.place ? `قرب ${item.place.name}` : "خارج المجمع"}`;
+
+/**
+ * تنبيه لمشرف السيارات عندما لا تتحرك سيارة من مكانها خارج المجمع STOPPED_MINUTES دقائق أو أكثر: في الصفحة مع زر
+ * «انتظار في المستشفى» (إن مُرر onWait)، وعلى الجهاز إن فعّله. الضغط عليه ينقل إلى «سيارات متوقفة خارج المجمع»
+ * (الاتصال بالسائق وواتساب للاستفسار عن سبب التأخير). كل وقوف يُنبَّه له مرة واحدة حتى تتحرك السيارة.
+ */
+export function useStoppedAlerts({ stopped, onWait, enabled = true, onOpen = reveal }: {
+  stopped: StoppedVehicle[];
+  onWait?: (item: StoppedVehicle) => void;
+  enabled?: boolean;
+  onOpen?: Open;
+}) {
+  const latest = useRef({ onWait, onOpen, stopped });
+  latest.current = { onWait, onOpen, stopped };
+  const key = (item: StoppedVehicle) => `${item.vehicle.plate}:${item.since.toISOString()}`;
+  const signature = stopped.map(key).join("|");
+
+  useEffect(() => {
+    if (!enabled || !stopped.length) return;
+    let seen: Set<string>;
+    try {
+      seen = new Set(JSON.parse(sessionStorage.getItem(SEEN_STOPPED_KEY) ?? "[]") as string[]);
+    } catch {
+      seen = new Set();
+    }
+    const fresh = stopped.filter((item) => !seen.has(key(item)));
+    if (!fresh.length) return;
+    fresh.forEach((item) => seen.add(key(item)));
+    try {
+      sessionStorage.setItem(SEEN_STOPPED_KEY, JSON.stringify(Array.from(seen).slice(-300)));
+    } catch {
+      /* التخزين غير متاح */
+    }
+    for (const item of fresh) {
+      const plate = item.vehicle.plate;
+      const title = `السيارة ${plate} لم تتحرك منذ ${item.minutes >= STOPPED_MINUTES ? item.minutes : STOPPED_MINUTES} دقيقة خارج المجمع`;
+      const body = `${item.driver ? `السائق ${item.driver} · ` : ""}${item.place ? `قرب ${item.place.name}` : "خارج المجمع"} · اجعلها تنتظر في المستشفى، أو استفسر من السائق عن سبب التأخير`;
+      const open = () => latest.current.onOpen(`stopped:${plate}`);
+      const wait = latest.current.onWait;
+      toast.warning(title, {
+        description: body,
+        duration: 30000,
+        ...goTo(open, wait ? false : "عرض"),
+        ...(wait ? { action: { label: "انتظار في المستشفى", onClick: () => { const current = latest.current.stopped.find((entry) => entry.vehicle.plate === plate) ?? item; latest.current.onWait?.(current); } } } : {}),
+      });
+      notifyDevice(title, body, `stopped-${plate}`, open);
     }
   }, [signature, enabled]); // eslint-disable-line react-hooks/exhaustive-deps
 }
