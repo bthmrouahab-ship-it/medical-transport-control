@@ -362,6 +362,20 @@ export function stoppedVehicles(vehicles: Vehicle[], locations: StillLocation[],
   }).sort((a, b) => b.minutes - a.minutes);
 }
 
+/**
+ * رسالة واتساب للسائق عن سبب توقف سيارته: بالعربية ثم الإنجليزية ثم الأردية (لغات صفحة السائق)، ومعها المكان المعروف القريب.
+ */
+export function stoppedMessage(item: Pick<StoppedVehicle, "vehicle" | "minutes" | "place" | "driver">) {
+  const driver = item.driver?.trim();
+  const plate = item.vehicle.plate;
+  const placeEn = item.place ? item.place.nameEn || item.place.name : "";
+  return [
+    `السلام عليكم${driver ? ` ${driver}` : ""}، السيارة ${plate} متوقفة منذ ${item.minutes} دقيقة${item.place ? ` قرب ${item.place.name}` : ""}. ما سبب التأخير؟`,
+    `Hello${driver ? ` ${driver}` : ""}, car ${plate} has not moved for ${item.minutes} minutes${placeEn ? ` near ${placeEn}` : ""}. What is the reason for the delay?`,
+    `السلام علیکم${driver ? ` ${driver}` : ""}، گاڑی ${plate} ${item.minutes} منٹ سے رکی ہوئی ہے${placeEn ? ` (${placeEn} کے قریب)` : ""}۔ تاخیر کی وجہ کیا ہے؟`,
+  ].join("\n\n");
+}
+
 export type ReturnRedirect = {
   request: VehicleRequest;
   appointment: ClinicAppointment;
