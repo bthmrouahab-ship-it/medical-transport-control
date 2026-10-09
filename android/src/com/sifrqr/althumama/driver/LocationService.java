@@ -56,7 +56,9 @@ public class LocationService extends Service implements LocationListener {
     private static final int NOTIFY_ARRIVED = 3;
     private static final int NOTIFY_STOPPED = 4;
     private static final String CHANNEL_SHARING = "sharing";
-    private static final String CHANNEL_TRIPS = "trips";
+    /** قناة التنبيهات بلا صوت النظام: الصوت القوي من Alarm (قناة المنبّه). "trips" القناة القديمة تُحذف */
+    private static final String CHANNEL_TRIPS = "trip_alerts";
+    private static final String OLD_CHANNEL_TRIPS = "trips";
     /** مثل صفحة السائق: كل 20 ثانية، أو أسرع إذا تحركت السيارة 50 م، وبين إرسالين 5 ثوانٍ على الأقل */
     private static final long SEND_EVERY_MS = 20000;
     private static final long MIN_GAP_MS = 5000;
@@ -347,9 +349,11 @@ public class LocationService extends Service implements LocationListener {
         sharing.setShowBadge(false);
         manager.createNotificationChannel(sharing);
         NotificationChannel trips = new NotificationChannel(CHANNEL_TRIPS, Texts.tripsChannel(lang), NotificationManager.IMPORTANCE_HIGH);
-        trips.enableVibration(true);
-        trips.setVibrationPattern(new long[] { 0, 400, 150, 400, 150, 400 });
+        // الصوت والاهتزاز من Alarm بأعلى مستوى، فلا يتكرر صوت الإشعار الضعيف معه
+        trips.setSound(null, null);
+        trips.enableVibration(false);
         manager.createNotificationChannel(trips);
+        manager.deleteNotificationChannel(OLD_CHANNEL_TRIPS);
     }
 
     private Notification.Builder builder(String channel) {
@@ -381,9 +385,10 @@ public class LocationService extends Service implements LocationListener {
             .setAutoCancel(true)
             .setContentIntent(openApp(trip, id + 10));
         if (Build.VERSION.SDK_INT < 26) {
-            builder.setPriority(Notification.PRIORITY_HIGH).setDefaults(Notification.DEFAULT_ALL);
+            builder.setPriority(Notification.PRIORITY_HIGH).setDefaults(Notification.DEFAULT_LIGHTS);
         }
         getSystemService(NotificationManager.class).notify(id, builder.build());
+        if (CHANNEL_TRIPS.equals(channel)) Alarm.play(this);
     }
 
     // ————— الاتصال بالخادم بجلسة الصفحة —————

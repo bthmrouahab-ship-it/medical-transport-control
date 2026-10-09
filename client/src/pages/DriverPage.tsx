@@ -53,6 +53,12 @@ async function diagnoseDenied(): Promise<LocationError> {
 }
 
 const alertDevice = () => {
+  // تطبيق شاشة السيارة: صوت قوي على قناة المنبّه (لا يضعف بخفض صوت الإشعارات أو الوسائط)
+  const app = driverApp();
+  if (app?.alarm) {
+    app.alarm();
+    return;
+  }
   beep(3);
   try {
     navigator.vibrate?.([400, 150, 400, 150, 400]);

@@ -367,6 +367,12 @@ public class MainActivity extends Activity {
             });
         }
 
+        /** تنبيه الرحلة بصوت قوي (قناة المنبّه) واهتزاز، والصفحة ظاهرة */
+        @JavascriptInterface
+        public void alarm() {
+            Alarm.play(MainActivity.this);
+        }
+
         @JavascriptInterface
         public String version() {
             return versionName();

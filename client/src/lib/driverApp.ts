@@ -14,6 +14,8 @@ type DriverAppBridge = {
   locationEnabled?(): boolean;
   /** فتح إعدادات الموقع ليشغّل السائق GPS (من النسخة 1.1) */
   openLocationSettings?(): void;
+  /** تنبيه الرحلة بصوت قوي على قناة المنبّه مع اهتزاز (من النسخة 1.2) */
+  alarm?(): void;
 };
 
 /** أحداث من التطبيق إلى الصفحة */
