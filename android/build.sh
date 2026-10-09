@@ -8,8 +8,8 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-VERSION_CODE=1
-VERSION_NAME=1.0
+VERSION_CODE=2
+VERSION_NAME=1.1
 MIN_SDK=24
 TARGET_SDK=34
 JAR_URL=https://raw.githubusercontent.com/Sable/android-platforms/master/android-34/android.jar

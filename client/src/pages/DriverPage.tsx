@@ -24,7 +24,7 @@ import { api, ApiError } from "@/lib/api";
 import { beep } from "@/lib/beep";
 import { DRIVER_LANGS, DRIVER_TEXT, useDriverLang, type DriverLang, type DriverText } from "@/lib/driverI18n";
 import { disablePush, enablePush, pushState, refreshPush, type PushState } from "@/lib/push";
-import { APP_OPEN_EVENT, APP_SHARING_EVENT, driverApp, inDriverApp } from "@/lib/driverApp";
+import { APP_OPEN_EVENT, APP_RESUME_EVENT, APP_SHARING_EVENT, driverApp, inDriverApp } from "@/lib/driverApp";
 import { DRIVER_THEMES, useDriverTheme } from "@/lib/driverTheme";
 import { useNow } from "@/lib/useShared";
 
@@ -41,7 +41,7 @@ type TripsResponse = { plate: string; requests: unknown[]; appointments: unknown
 /** nurseBack: طلبات عودة ضيوف عادت الـ Nurse قبلهم (لا تُحسب في عدد الأشخاص) */
 type Trips = { requests: VehicleRequest[]; appointments: ClinicAppointment[]; hospitals: Hospital[]; nurseBack: Set<string>; namesEn: Record<string, string> };
 /** سبب توقف الموقع، ويُعرض بلغة السائق الحالية */
-type LocationError = { key: "noGeolocation" | "timeout" | "unavailable" | "policyBlocked" | "permissionBlocked" | "notAllowed"; state?: string };
+type LocationError = { key: "noGeolocation" | "gpsOff" | "timeout" | "unavailable" | "policyBlocked" | "permissionBlocked" | "notAllowed"; state?: string };
 
 /** يحدد سبب رفض الموقع بدقة حتى يعرف السائق ما يجب تغييره. */
 async function diagnoseDenied(): Promise<LocationError> {
@@ -103,6 +103,8 @@ export default function DriverPage({ profile, onLogout, onChangePassword }: {
   const lastSent = useRef<{ lat: number; lng: number; at: number } | null>(null);
   const lastPosition = useRef<Position | null>(null);
   const wakeLock = useRef<WakeLockSentinel | null>(null);
+  /** فُتحت إعدادات الموقع لتشغيل GPS: تبدأ المشاركة عند الرجوع إلى التطبيق */
+  const waitingGps = useRef(false);
 
   const [trips, setTrips] = useState<Trips | null>(null);
   const [loadError, setLoadError] = useState<unknown>(null);
@@ -139,6 +141,18 @@ export default function DriverPage({ profile, onLogout, onChangePassword }: {
       setError({ key: "noGeolocation" });
       return;
     }
+    // تطبيق شاشة السيارة والـ GPS مقفل: تُفتح إعدادات الموقع، وعند الرجوع إلى التطبيق تبدأ المشاركة وحدها
+    const app = driverApp();
+    if (app?.locationEnabled && !app.locationEnabled()) {
+      setStatus("error");
+      setError({ key: "gpsOff" });
+      waitingGps.current = true;
+      app.openLocationSettings?.();
+      return;
+    }
+    waitingGps.current = false;
+    // محاولة سابقة فشلت (مثل GPS مقفل): لا تبقى تراقب الموقع مع المحاولة الجديدة
+    if (watchId.current !== null) navigator.geolocation.clearWatch(watchId.current);
     setStatus("starting");
     setError(null);
     keepScreenOn();
@@ -265,9 +279,17 @@ export default function DriverPage({ profile, onLogout, onChangePassword }: {
     const onAppSharing = (event: Event) => {
       if ((event as CustomEvent<unknown>).detail === false && watchId.current !== null) stop();
     };
+    // الرجوع من إعدادات الموقع وقد شُغّل GPS: تبدأ المشاركة التي طلبها السائق
+    const onAppResume = (event: Event) => {
+      if (waitingGps.current && (event as CustomEvent<unknown>).detail === true) start();
+    };
     window.addEventListener(APP_SHARING_EVENT, onAppSharing);
+    window.addEventListener(APP_RESUME_EVENT, onAppResume);
     if (plate && driverApp()?.isSharing() && watchId.current === null) start();
-    return () => window.removeEventListener(APP_SHARING_EVENT, onAppSharing);
+    return () => {
+      window.removeEventListener(APP_SHARING_EVENT, onAppSharing);
+      window.removeEventListener(APP_RESUME_EVENT, onAppResume);
+    };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // لغة إشعارات التطبيق مع لغة الصفحة
@@ -412,6 +434,9 @@ export default function DriverPage({ profile, onLogout, onChangePassword }: {
             {error && (
               <p role="alert" className="animate-rise rounded-2xl bg-red-50 p-3.5 text-start text-sm leading-6 text-red-700 ring-1 ring-inset ring-red-200 dark:bg-red-500/10 dark:text-red-200 dark:ring-red-500/30">
                 {t[error.key]}{error.state ? ` (${error.state})` : ""}
+                {error.key === "gpsOff" && driverApp()?.openLocationSettings && (
+                  <button type="button" onClick={start} className={cx(btn("primary", "sm"), "mt-2 flex")}><MapPin className="h-4 w-4" /> {t.openGps}</button>
+                )}
               </p>
             )}
             {sharing ? (
