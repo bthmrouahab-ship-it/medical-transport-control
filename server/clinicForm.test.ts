@@ -62,6 +62,8 @@ describe("guest under 18: an escort is required unless a nurse goes with them", 
 describe("appointment type (optional)", () => {
   it("keeps the preset types in Arabic and other types as written", () => {
     expect(normalizeAppointmentType("Dental")).toBe("أسنان");
+    expect(normalizeAppointmentType("Emergency referral")).toBe("تحويلة طارئة");
+    expect(appointmentTypeText("تحويلة طارئة", "en")).toBe("Emergency referral");
     expect(normalizeAppointmentType(" مراجعة ")).toBe("مراجعة");
     expect(normalizeAppointmentType("فحص نظر")).toBe("فحص نظر");
     expect(normalizeAppointmentType("N/A")).toBe("");

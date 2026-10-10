@@ -17,6 +17,8 @@ import {
   type VehicleRequest,
   transferSource,
   isHospitalTransfer,
+  EMERGENCY_PICKUP_BUILDING,
+  isEmergencyReferral,
 } from "@shared/transport";
 import { pickupDetails, tripEndpoints, tripPhase } from "@shared/trips";
 import { countdownText, driverCheck, type CheckKind } from "@shared/driverChecks";
@@ -602,7 +604,9 @@ function TripCard({ t, lang, request, appointment, name, from, hospitals, group,
   const endpoints = tripEndpoints(appointment, request.direction, hospitals, from);
   const home = `${t.complex} · ${t.home(appointment.buildingNumber, appointment.apartmentNumber)}`;
   const place = placeName(appointment, hospitals, lang);
-  const pickupLabel = from ? placeName(from, hospitals, lang) : returning ? place : home;
+  // التحويلة الطارئة: الذهاب من مبنى 03 لا من مبنى الضيف
+  const pickupHome = isEmergencyReferral(appointment) ? `${t.complex} · ${t.referralPickup(EMERGENCY_PICKUP_BUILDING)}` : home;
+  const pickupLabel = from ? placeName(from, hospitals, lang) : returning ? place : pickupHome;
   const dropLabel = returning ? home : place;
   const beforePickup = request.status === "تم إرسال السيارة" || request.status === "وصلت السيارة";
   const target = beforePickup ? { point: endpoints.from, label: pickupLabel } : { point: endpoints.to, label: dropLabel };

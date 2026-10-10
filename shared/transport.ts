@@ -123,6 +123,7 @@ export const APPOINTMENT_TYPES: { ar: string; en: string }[] = [
   { ar: "أسنان", en: "Dental" },
   { ar: "عملية أو إجراء", en: "Surgery or procedure" },
   { ar: "تطعيم", en: "Vaccination" },
+  { ar: "تحويلة طارئة", en: "Emergency referral" },
 ];
 export const APPOINTMENT_TYPE_MAX = 60;
 
@@ -149,8 +150,12 @@ export const HOSPITAL_TRANSFER_LABEL = "نقل من مستشفى إلى مستش
 /** فئة الموعد في الجداول والإحصائيات: غير طبية، أو عودة فقط من المستشفى، أو نقل من مستشفى، أو طبية */
 export const appointmentCategory = (appointment: Pick<ClinicAppointment, "category" | "returnOnly" | "fromClinic">) =>
   (appointment.category === "غير طبية" ? "غير طبية" : isReturnOnly(appointment) ? RETURN_ONLY_LABEL : isHospitalTransfer(appointment) ? HOSPITAL_TRANSFER_LABEL : "طبية");
-/** يضيفه طلب العيادة مباشرة إلى مشرف السيارات بلا موافقة: طلب العودة فقط والنقل من مستشفى */
-export const isDirectRequest = (appointment: Pick<ClinicAppointment, "returnOnly" | "fromClinic">) => isReturnOnly(appointment) || isHospitalTransfer(appointment);
+/**
+ * يضيفه طلب العيادة مباشرة إلى مشرف السيارات بلا موافقة ولا طلب مشرف المبنى: طلب العودة فقط، والنقل من مستشفى،
+ * والتحويلة الطارئة.
+ */
+export const isDirectRequest = (appointment: Pick<ClinicAppointment, "returnOnly" | "fromClinic" | "appointmentType">) =>
+  isReturnOnly(appointment) || isHospitalTransfer(appointment) || isEmergencyReferral(appointment);
 /** حالته مع طلب سيارته: «طلب عودة» لطلب العودة، و«تم طلب السيارة» للنقل من مستشفى */
 export const directStatus = (appointment: Pick<ClinicAppointment, "returnOnly">): AppointmentStatus => (isReturnOnly(appointment) ? "طلب عودة" : "تم طلب السيارة");
 
@@ -167,7 +172,22 @@ export const GENDERS: Gender[] = ["ذكر", "أنثى"];
  * أولوية في إرسال السيارة (حالات السرطان، والحالة المستعجلة في شفت الليل): تظهر أولًا لمشرف السيارات وتأخذ السيارة
  * قبل غيرها في التوزيع.
  */
-export const isPriority = (appointment: Pick<ClinicAppointment, "cancer" | "urgent">) => Boolean(appointment.cancer || appointment.urgent);
+export const isPriority = (appointment: Pick<ClinicAppointment, "cancer" | "urgent" | "appointmentType">) =>
+  Boolean(appointment.cancer || appointment.urgent || isEmergencyReferral(appointment));
+
+/**
+ * «تحويلة طارئة» (نوع موعد): أولوية في إرسال السيارة، وسيارة الذهاب تستلم الضيف من مبنى 03 لا من مبناه وشقته؛ العودة إلى
+ * مبناه كالمعتاد.
+ */
+export const EMERGENCY_REFERRAL = "تحويلة طارئة";
+export const EMERGENCY_PICKUP_BUILDING = "03";
+export const isEmergencyReferral = (appointment: Pick<ClinicAppointment, "appointmentType">) => appointment.appointmentType === EMERGENCY_REFERRAL;
+/** مكان استلام الضيف في رحلة الذهاب من المجمع بالعربية والإنجليزية */
+export function pickupLabels(appointment: Pick<ClinicAppointment, "buildingNumber" | "apartmentNumber" | "appointmentType">) {
+  return isEmergencyReferral(appointment)
+    ? { ar: `مبنى ${EMERGENCY_PICKUP_BUILDING} (تحويلة طارئة)`, en: `Building ${EMERGENCY_PICKUP_BUILDING} (emergency referral)` }
+    : { ar: `مبنى ${appointment.buildingNumber}، شقة ${appointment.apartmentNumber}`, en: `Building ${appointment.buildingNumber}, Apt ${appointment.apartmentNumber}` };
+}
 
 export type Vehicle = {
   plate: string;
@@ -432,8 +452,8 @@ export function requestWindow(appointment: Pick<ClinicAppointment, "appointmentD
   return { open: minutesLeft >= 0, deadline, minutesLeft };
 }
 
-export function appointmentPickupLabel(appointment: Pick<ClinicAppointment, "buildingNumber" | "apartmentNumber">) {
-  return `مبنى ${appointment.buildingNumber}، شقة ${appointment.apartmentNumber}`;
+export function appointmentPickupLabel(appointment: Pick<ClinicAppointment, "buildingNumber" | "apartmentNumber" | "appointmentType">) {
+  return pickupLabels(appointment).ar;
 }
 
 /** مكان الاستلام ← الوجهة كما يظهر في القوائم؛ في النقل بين موعدين من مستشفى الموعد الأول. */
@@ -1857,15 +1877,18 @@ export function buildDriverMessage(
     const source = from ?? (!returning && isHospitalTransfer(appointment) ? hospitalTransferSource(appointment) : null);
     const firstPlace = source ? destinationLabels(source, hospitals) : null;
     const after = from && !isHospitalTransfer(appointment);
-    const pickupAr = firstPlace ? `${firstPlace.ar}${after ? ` (بعد موعده ${from.appointmentAt})` : ""}` : `مبنى ${appointment.buildingNumber}، شقة ${appointment.apartmentNumber}`;
-    const pickupEn = firstPlace ? `${firstPlace.en}${after ? ` (after appointment ${from.appointmentAt})` : ""}` : `Building ${appointment.buildingNumber}, Apt ${appointment.apartmentNumber}`;
+    // التحويلة الطارئة تُستلم من مبنى 03، والعودة إلى مبنى الضيف وشقته
+    const pickupAr = firstPlace ? `${firstPlace.ar}${after ? ` (بعد موعده ${from.appointmentAt})` : ""}` : pickupLabels(appointment).ar;
+    const pickupEn = firstPlace ? `${firstPlace.en}${after ? ` (after appointment ${from.appointmentAt})` : ""}` : pickupLabels(appointment).en;
+    const homeAr = firstPlace ? pickupAr : `مبنى ${appointment.buildingNumber}، شقة ${appointment.apartmentNumber}`;
+    const homeEn = firstPlace ? pickupEn : `Building ${appointment.buildingNumber}, Apt ${appointment.apartmentNumber}`;
     ar.push(
       "",
       nurse
         ? `${prefix}الراكب: الـ Nurse مرافقة الضيف ${appointment.patientName} (عودة الـ Nurse فقط)`
         : `${prefix}${rider.ar}: ${appointment.patientName}${appointment.gender ? ` (${appointment.gender})` : ""}${isNonMedical(appointment) ? " (رحلة غير طبية)" : ""}`,
       returning ? `من: ${destination.ar}` : `من: ${pickupAr}`,
-      returning ? `إلى: ${pickupAr}` : `إلى: ${destination.ar}`,
+      returning ? `إلى: ${homeAr}` : `إلى: ${destination.ar}`,
       `${isNonMedical(appointment) ? "الوقت" : "الموعد"}: ${appointment.appointmentDate} ${appointment.appointmentAt}`,
       `جوال ${rider.ar}: ${appointment.mobile}`,
       `نوع الرحلة: ${appointment.kind}${needsAr ? ` · ${needsAr}` : ""}`,
@@ -1877,7 +1900,7 @@ export function buildDriverMessage(
         ? `${prefix}Passenger: Nurse escorting guest ${englishName(appointment)} (nurse return only)`
         : `${prefix}${rider.en}: ${englishName(appointment)}${appointment.gender ? ` (${appointment.gender === "أنثى" ? "female" : "male"})` : ""}${isNonMedical(appointment) ? " (non-medical trip)" : ""}`,
       returning ? `From: ${destination.en}` : `From: ${pickupEn}`,
-      returning ? `To: ${pickupEn}` : `To: ${destination.en}`,
+      returning ? `To: ${homeEn}` : `To: ${destination.en}`,
       `${isNonMedical(appointment) ? "Time" : "Appointment"}: ${appointment.appointmentDate} ${appointment.appointmentAt}`,
       `${rider.en} mobile: ${appointment.mobile}`,
       `Trip type: ${KIND_EN[appointment.kind]}${needsEn ? ` · ${needsEn}` : ""}`,

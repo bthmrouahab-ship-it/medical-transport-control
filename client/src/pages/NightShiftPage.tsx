@@ -18,6 +18,7 @@ import {
   type UrgentOutcome,
   type Vehicle,
   type VehicleRequest,
+  appointmentPickupLabel,
 } from "@shared/transport";
 import { minutesSince, tripPhase, vehicleAvailability, vehicleLocationState, type TripPhase } from "@shared/trips";
 import {
@@ -83,15 +84,16 @@ export function NightShiftPage({ vehicles, appointments, requests, onDispatch, o
   const byNeed = (a: Trip, b: Trip) => Number(isPriority(b.appointment)) - Number(isPriority(a.appointment))
     || appointmentDateTime(a.appointment).getTime() - appointmentDateTime(b.appointment).getTime();
 
+  // الطلبات تظهر في وقت شفت الليل فقط (من 10 مساءً إلى 6 صباحًا)؛ في النهار يتابعها مشرف السيارات
   // ينتظر سيارة: الحالات المستعجلة ورحلاتها أولًا، ثم أي طلب آخر لليوم أو أمس (الشفت يمتد بعد منتصف الليل)
-  const pending = requests
+  const pending = !night ? [] : requests
     .filter((request) => request.status === "بانتظار التوزيع")
     .map(tripOf)
     .filter(isTrip)
     .filter((trip) => isUrgent(trip.appointment) || trip.appointment.appointmentDate === today || trip.appointment.appointmentDate === yesterday)
     .sort(byNeed);
   // الرحلات الجارية الآن (إلى الاستلام أو إلى الوجهة)
-  const active = requests
+  const active = !night ? [] : requests
     .filter((request) => ["toPickup", "toDestination"].includes(phaseOf(request).kind))
     .map(tripOf)
     .filter(isTrip)
@@ -172,7 +174,9 @@ export function NightShiftPage({ vehicles, appointments, requests, onDispatch, o
                 <PendingRow key={trip.request.id} trip={trip} now={now} options={optionsFor(trip)} driverOf={(vehicle) => driverOf(vehicle.plate, vehicle.driver)} placeText={placeText} onDispatch={onDispatch} />
               ))}
             </div>
-          ) : <EmptyState icon={CheckCircle2} title="لا توجد طلبات بانتظار سيارة" hint={night ? "يظهر هنا طلب مشرف المبنى للحالة المستعجلة فور تسجيله" : `يطلب مشرف المبنى الحالة المستعجلة ${NIGHT_SHIFT_TEXT}`} />}
+          ) : night
+            ? <EmptyState icon={CheckCircle2} title="لا توجد طلبات بانتظار سيارة" hint="يظهر هنا طلب مشرف المبنى للحالة المستعجلة فور تسجيله" />
+            : <EmptyState icon={Moon} title="تظهر الطلبات بعد 10 مساءً" hint={`طلبات السيارات تظهر في هذه الصفحة ${NIGHT_SHIFT_TEXT} فقط، وفي النهار يتابعها مشرف السيارات`} />}
         </Panel>
 
         <Panel id="night-active" tone="blue" icon={Truck} title="رحلات جارية" count={active.length} description="من إرسال السيارة حتى وصولها إلى الوجهة (بالـ GPS أو بتأكيدك أو بانتهاء الوقت المتوقع)">
@@ -182,7 +186,7 @@ export function NightShiftPage({ vehicles, appointments, requests, onDispatch, o
                 <ActiveRow key={trip.request.id} trip={trip} phase={phaseOf(trip.request)} now={now} driver={driverOf(trip.request.vehiclePlate, trip.request.driver)} phone={phoneOf(trip.request.vehiclePlate)} onArrived={onArrived} onEndTrip={onEndTrip} />
               ))}
             </div>
-          ) : <EmptyState icon={Truck} title="لا توجد رحلات جارية" />}
+          ) : <EmptyState icon={Truck} title="لا توجد رحلات جارية" hint={night ? undefined : `تظهر الرحلات ${NIGHT_SHIFT_TEXT} فقط`} />}
         </Panel>
 
         <Panel id="night-cases" tone="red" icon={Siren} title="الحالات المستعجلة" count={cases.length} description={`منذ بداية الشفت ${timeLabel(shiftStart)}، ومعها أي حالة ما زالت مفتوحة · النتيجة في العيادة يسجّلها مشرف المبنى أو أنت`}>
@@ -246,7 +250,7 @@ export function NightShiftPage({ vehicles, appointments, requests, onDispatch, o
 function routeText({ request, appointment, from }: Trip) {
   const home = `مبنى ${appointment.buildingNumber}، شقة ${appointment.apartmentNumber}`;
   if (from) return `${from.clinic} ← ${appointment.clinic}`;
-  return request.direction === "عودة" ? `${appointment.clinic} ← ${home}` : `${home} ← ${appointment.clinic}`;
+  return request.direction === "عودة" ? `${appointment.clinic} ← ${home}` : `${appointmentPickupLabel(appointment)} ← ${appointment.clinic}`;
 }
 
 function TripSummary({ trip, status }: { trip: Trip; status?: ReactNode }) {
