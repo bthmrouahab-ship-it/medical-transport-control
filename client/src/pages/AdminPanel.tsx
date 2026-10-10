@@ -55,7 +55,7 @@ import { dayRange } from "@/lib/activity";
 import { Badge, EmptyState, Panel, PageHeader, Segmented, addDays, btn, cx, inputClass, labelClass } from "@/components/ui-kit";
 import { HISTORY_SEED } from "@shared/historySeed";
 import { syncHospitals, type Hospital } from "@shared/hospitals";
-import { authErrorMessage, createUser, resetUserPassword, updateUser, watchUsers } from "@/lib/auth";
+import { authErrorMessage, createUser, deleteUser, resetUserPassword, updateUser, watchUsers } from "@/lib/auth";
 
 // الخريطة والإحصائيات تُحمَّل عند فتح تبويبها فقط
 const FleetDashboard = lazy(() => import("@/components/FleetDashboard"));
@@ -299,6 +299,12 @@ function UsersTab({ profile }: { profile: UserProfile }) {
                     if (user.active && !window.confirm(`إيقاف حساب ${user.username}؟ سيُمنع من الدخول فورًا.`)) return;
                     run(user.uid, () => updateUser(user.uid, { active: !user.active }), user.active ? "تم إيقاف الحساب" : "تم تفعيل الحساب");
                   }} className={btn(user.active ? "danger" : "success", "sm")}><Power className="h-3.5 w-3.5" /> {user.active ? "إيقاف" : "تفعيل"}</button>
+                  <button disabled={isSelf || busy} onClick={() => {
+                    const typed = window.prompt(`حذف حساب ${user.displayName} (${user.username}) نهائيًا؟\nلا يمكن التراجع، ويخرج من كل أجهزته. طلباته وسجل عملياته تبقى باسمه.\n\nللتأكيد اكتب اسم المستخدم: ${user.username}`);
+                    if (typed === null) return;
+                    if (typed.trim().toLowerCase() !== user.username.toLowerCase()) { toast.error("اسم المستخدم غير مطابق، لم يُحذف الحساب"); return; }
+                    run(user.uid, () => deleteUser(user.uid), "تم حذف الحساب");
+                  }} className={btn("danger", "sm")}><Trash2 className="h-3.5 w-3.5" /> حذف</button>
                 </div>
               </div>
             );
