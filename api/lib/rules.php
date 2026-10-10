@@ -644,9 +644,16 @@ function follows_request(array $user, ?array $request): bool
 /** «تحويلة طارئة» (نوع موعد، shared/transport.ts): سيارة الذهاب تستلم الضيف من مبنى 03 لا من مبناه */
 const EMERGENCY_REFERRAL = 'تحويلة طارئة';
 const EMERGENCY_PICKUP_BUILDING = '03';
+const EMERGENCY_TODAY_MESSAGE = 'التحويلة الطارئة تُسجَّل بتاريخ اليوم فقط';
 function emergency_referral(?array $appointment): bool
 {
     return ($appointment['appointmentType'] ?? null) === EMERGENCY_REFERRAL;
+}
+
+/** التحويلة الطارئة بتاريخ اليوم بتوقيت قطر */
+function emergency_today(array $appointment): bool
+{
+    return ($appointment['appointmentDate'] ?? null) === (new DateTimeImmutable('now', new DateTimeZone('Asia/Qatar')))->format('Y-m-d');
 }
 
 /**
@@ -1026,6 +1033,10 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
                     return !array_intersect(array_keys($after), APPROVAL_FIELDS) && ($after['status'] ?? null) === 'طلب عودة' ? null : $denied;
                 }
                 // والتحويلة الطارئة: مباشرة إلى مشرف السيارات بلا موافقة ولا طلب مشرف المبنى، ومعها طلب سيارة الذهاب
+                if (has_role($user, CLINIC_ROLES) && emergency_referral($after)) {
+                    if (hospital_transfer($after) || ($after['returnOnly'] ?? null) === true) return $denied;
+                    if (!emergency_today($after)) return EMERGENCY_TODAY_MESSAGE;
+                }
                 if (has_role($user, CLINIC_ROLES) && (hospital_transfer($after) || emergency_referral($after))) {
                     return !array_intersect(array_keys($after), APPROVAL_FIELDS) && ($after['status'] ?? null) === 'تم طلب السيارة' ? null : $denied;
                 }
@@ -1064,6 +1075,7 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
                 if (hospital_transfer($before) !== hospital_transfer($after)) return $denied;
                 // ولا يصير الموعد تحويلة طارئة ولا العكس بالتعديل (لها طلب سيارة يُضاف معها)
                 if ($role !== 'admin' && emergency_referral($before) !== emergency_referral($after)) return 'لا يمكن تغيير نوع الموعد إلى «تحويلة طارئة» أو منها بعد إضافته';
+                if ($role !== 'admin' && emergency_referral($after) && in_array('appointmentDate', $changed, true) && !emergency_today($after)) return EMERGENCY_TODAY_MESSAGE;
                 if (hospital_transfer($after) && !valid_appointment($after, $id)) return 'بيانات الموعد غير صالحة';
                 if ($role === 'admin') return null;
                 // تغيير الضيف أو الوجهة: من قائمة المجمع ودليل المستشفيات
