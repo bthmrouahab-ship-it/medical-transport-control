@@ -18,6 +18,22 @@ export type Hospital = {
 /** مجمع الثمامة: نقطة انطلاق الرحلات (Plus Code: 6HH9+FG الدوحة). */
 export const ORIGIN = { name: "مجمع الثمامة", lat: 25.228688, lng: 51.568813 };
 
+/**
+ * عيادة المجمع (داخل مجمع الثمامة): وجهة الحالة المستعجلة في شفت الليل (shared/urgent.ts). ليست في دليل المستشفيات،
+ * وموقعها موقع المجمع، فالوصول المتوقع هامش الطريق الأدنى ووقت التسليم، ويُكتشف الوصول بالـ GPS كأي وجهة. نفس القيم في
+ * api/lib/rules.php.
+ */
+export const COMPLEX_CLINIC: Hospital = {
+  id: "complex-clinic",
+  name: "عيادة المجمع",
+  nameEn: "Complex Clinic",
+  zone: "داخل المجمع",
+  lat: ORIGIN.lat,
+  lng: ORIGIN.lng,
+  aliases: [],
+  verified: true,
+};
+
 /** مركز خريطة الدوحة وما حولها. */
 export const DOHA_CENTER = { lat: 25.27, lng: 51.5, zoom: 11 };
 

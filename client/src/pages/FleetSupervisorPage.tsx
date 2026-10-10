@@ -140,6 +140,7 @@ import { RecentActivity } from "@/components/ActivityLog";
 import { AppointmentsOverview } from "@/components/AppointmentsOverview";
 import { KindIcon, KindLabel, VehiclePicker } from "@/components/VehiclePicker";
 import DriverAssignment from "@/components/DriverAssignment";
+import { UrgentBadge } from "@/components/Urgent";
 import RoleSchedulesDialog from "@/components/RoleSchedulesDialog";
 import AddVehicleDialog from "@/components/AddVehicleDialog";
 import WaitingDialog, { type WaitCandidate } from "@/components/WaitingDialog";
@@ -922,7 +923,7 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
                             {isNonMedical(trip.appointment) && <Badge tone="violet">غير طبية</Badge>}
                             {trip.appointment.seriesId && <Badge tone="blue" icon={Repeat}>متكررة</Badge>}
                             {trip.appointment.nurse && <Badge tone="violet" icon={BriefcaseMedical}>ممرضة</Badge>}
-                            {isPriority(trip.appointment) && <PriorityBadge />}
+                            {trip.appointment.urgent ? <UrgentBadge /> : isPriority(trip.appointment) && <PriorityBadge />}
                             {pendingLate(trip) && <Badge tone="red" icon={AlertTriangle}>متأخر</Badge>}
                             {groupedIds.has(trip.appointment.id) && <Badge tone="violet" icon={Sparkles}>قابلة للجمع</Badge>}
                             {redirect && <Badge tone="cyan" icon={Navigation}>سيارة قريبة {redirect.vehicle.plate} · {redirect.distanceKm} كم</Badge>}
