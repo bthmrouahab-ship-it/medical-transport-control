@@ -10,7 +10,6 @@ import {
   isUrgentClinicCase,
   nightShiftEnd,
   nightShiftStart,
-  shiftCases,
   urgentDraftError,
   withUrgentOutcome,
 } from "../shared/urgent";
@@ -97,17 +96,12 @@ describe("night shift: urgent cases from the building to the complex clinic", ()
     expect(hospitalTripOf(clinicCase, [clinicCase, transfer.appointment])?.id).toBe(transfer.appointment.id);
   });
 
-  it("keeps the urgent fields when loading, and lists the shift's cases (and any open one)", () => {
+  it("keeps the urgent fields when loading", () => {
     const clinicCase = withUrgentOutcome({ ...buildUrgentCase(draft, "7", at("2026-10-07", "23:05")).appointment, status: "تم استلام المريض" }, "ambulance", "مشرف");
     const loaded = migrateAppointment(JSON.parse(JSON.stringify(clinicCase)))!;
     expect(loaded).toMatchObject({ urgent: true, hospitalId: COMPLEX_CLINIC.id, urgentOutcome: "ambulance", urgentOutcomeBy: "مشرف" });
     expect(migrateAppointment({ ...clinicCase, urgent: false, urgentOutcome: "ambulance" })).not.toHaveProperty("urgentOutcome");
 
-    const older = { ...buildUrgentCase(draft, "7", at("2026-10-06", "23:00")).appointment, id: "OLD", status: "مكتملة" as const };
-    const stillOpen = { ...buildUrgentCase(draft, "7", at("2026-10-06", "23:30")).appointment, id: "OPEN" };
-    const regular = { ...clinicCase, id: "REG", urgent: undefined, hospitalId: "hgh" } as ClinicAppointment;
-    const list = shiftCases([older, stillOpen, clinicCase, regular], at("2026-10-08", "01:00"));
-    expect(list.map((item) => item.id)).toEqual([clinicCase.id, "OPEN"]);
   });
 
   it("tells the driver it is urgent, with the clinic in both languages", () => {

@@ -13,11 +13,11 @@ import {
 
 /**
  * شفت الليل (من 10 مساءً إلى 6 صباحًا) بلا مشرف سيارات: مشرف المبنى يطلب سيارة لحالة مستعجلة من المبنى إلى عيادة المجمع
- * (زر يعمل في هذه الساعات فقط)، ومشرف السيارات بالنيابة (nightFleet) يرسل السائق من صفحة شفت الليل ويتابع الرحلة كما في
+ * (زر يعمل في هذه الساعات فقط)، ومشرف السيارات يرسل السائق من صفحته ويتابع الرحلة كما في
  * النهار (تطبيق السائق والإشعار والـ GPS). بعد وصول الضيف إلى العيادة تنتهي الحالة بإحدى النتائج:
  * - عاد إلى المبنى (عولج في العيادة فقط)، أو ذهب بسيارة الإسعاف: الحالة «مكتملة» وينتهي التتبع.
  * - إلى المستشفى بسيارة المجمع: رحلة من العيادة إلى مستشفى من الدليل (موعد مستعجل جديد urgentFrom وطلب نقل
- *   fromAppointmentId)، يرسل لها مشرف السيارات بالنيابة السائق بنفس نظام النهار، ثم تُطلب العودة من المستشفى كالمعتاد.
+ *   fromAppointmentId)، يرسل لها مشرف السيارات السائق بنفس نظام النهار، ثم تُطلب العودة من المستشفى كالمعتاد.
  * نفس القيم في api/lib/rules.php.
  */
 export const NIGHT_START_HOUR = 22;
@@ -137,8 +137,8 @@ export function withUrgentOutcome(clinicCase: ClinicAppointment, outcome: Urgent
 
 /**
  * الذهاب من العيادة إلى المستشفى بسيارة المجمع: موعد مستعجل للمستشفى (نفس الضيف، urgentFrom = الحالة في العيادة) وطلب نقل
- * يبدأ من العيادة (fromAppointmentId)، فيرسل له مشرف السيارات بالنيابة السائق بنفس نظام النهار. requestedBy: مشرف المبنى
- * الذي سجّل النتيجة (بلا مالك من صفحة شفت الليل فيتابعه كل مشرفي المباني).
+ * يبدأ من العيادة (fromAppointmentId)، فيرسل له مشرف السيارات السائق بنفس نظام النهار. requestedBy: مشرف المبنى
+ * الذي سجّل النتيجة.
  */
 export function hospitalTransfer(clinicCase: ClinicAppointment, hospital: Hospital, now = new Date(), requestedBy?: string) {
   const appointment: ClinicAppointment = {
@@ -159,14 +159,6 @@ export function hospitalTransfer(clinicCase: ClinicAppointment, hospital: Hospit
     urgentFrom: clinicCase.id,
   };
   return { appointment, request: urgentRequest(appointment, now, requestedBy, clinicCase.id) };
-}
-
-/** حالات الشفت: الحالات المستعجلة في العيادة منذ بداية شفت الليل، ومعها أي حالة ما زالت مفتوحة (الأحدث أولًا) */
-export function shiftCases(appointments: ClinicAppointment[], now = new Date()) {
-  const start = nightShiftStart(now).getTime();
-  return appointments
-    .filter((appointment) => isUrgentClinicCase(appointment) && (appointmentDateTime(appointment).getTime() >= start || isOpenCase(appointment)))
-    .sort((a, b) => appointmentDateTime(b).getTime() - appointmentDateTime(a).getTime());
 }
 
 /** رحلة المستشفى بعد الحالة في العيادة (آخرها إن تكررت) */

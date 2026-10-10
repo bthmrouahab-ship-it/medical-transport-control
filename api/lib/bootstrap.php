@@ -6,11 +6,10 @@ declare(strict_types=1);
  * لا يُطبع أي شيء عند طلب هذا الملف مباشرة.
  */
 
-/** nightFleet: مشرف السيارات بالنيابة في شفت الليل (الحالات المستعجلة: urgent_* في rules.php) */
-const ROLES = ['admin', 'clinic', 'clinicLead', 'buildingSupervisor', 'buildingLead', 'fleetSupervisor', 'nightFleet', 'driver'];
-const OFFICE_ROLES = ['admin', 'clinic', 'clinicLead', 'buildingSupervisor', 'buildingLead', 'fleetSupervisor', 'nightFleet'];
+const ROLES = ['admin', 'clinic', 'clinicLead', 'buildingSupervisor', 'buildingLead', 'fleetSupervisor', 'driver'];
+const OFFICE_ROLES = ['admin', 'clinic', 'clinicLead', 'buildingSupervisor', 'buildingLead', 'fleetSupervisor'];
 /** من يرسل السيارات ويتابع الرحلات (التوزيع وتأكيد الوصول وإنهاء الرحلة وتغيير السيارة): مشرف السيارات، ومن ينوب عنه ليلًا */
-const DISPATCH_ROLES = ['fleetSupervisor', 'nightFleet'];
+const DISPATCH_ROLES = ['fleetSupervisor'];
 /** العيادة ومسؤولها (يوافق على المواعيد قبل ظهورها لمشرف المبنى) */
 const CLINIC_ROLES = ['clinic', 'clinicLead'];
 /** مشرف المبنى، ومسؤول مشرفي المباني (نفس الصلاحيات، ويتابع كل الطلبات لا طلباته فقط) */
@@ -21,7 +20,7 @@ const IDLE_SECONDS = 3600;
  * نسخة قاعدة البيانات (settings.schema): 2 = فصل السائقين عن السيارات (migrate_drivers في drivers.php)،
  * 3 = سجل السيارات في الخدمة ووقت تسجيل المواعيد للإحصائيات (migrate_tracking في tracking.php)
  */
-const SCHEMA_VERSION = 4;
+const SCHEMA_VERSION = 5;
 /** أقصى حجم لطلب واحد (رفع ملف إحصائيات كبير يُقسَّم على عدة طلبات) */
 const MAX_BODY_BYTES = 8 * 1024 * 1024;
 
@@ -83,6 +82,8 @@ function upgrade_schema(PDO $pdo): void
         $version = (int)$pdo->query("SELECT v FROM settings WHERE k = 'schema'")->fetchColumn();
         if ($version < 2) migrate_drivers($pdo);
         if ($version < 3) migrate_tracking($pdo);
+        // أُزيل دور مشرف السيارات بالنيابة (شفت الليل): حساباته تصبح «مشرف السيارات» موقوفة، يفعّلها المدير أو يحذفها
+        if ($version < 5) $pdo->exec("UPDATE users SET role = 'fleetSupervisor', active = 0, session_version = session_version + 1 WHERE role = 'nightFleet'");
         $pdo->prepare("INSERT INTO settings (k, v) VALUES ('schema', ?) ON DUPLICATE KEY UPDATE v = VALUES(v)")->execute([(string)SCHEMA_VERSION]);
     } finally {
         $pdo->query("SELECT RELEASE_LOCK('althumama_schema')")->fetchColumn();

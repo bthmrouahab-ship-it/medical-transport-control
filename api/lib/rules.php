@@ -14,7 +14,7 @@ const APPOINTMENT_FIELDS = ['id', 'guestId', 'patientName', 'clinic', 'buildingN
     'urgent', 'urgentOutcome', 'urgentOutcomeBy', 'urgentOutcomeAt', 'urgentFrom', '_o'];
 /**
  * الحالة المستعجلة في شفت الليل (shared/urgent.ts): مشرف المبنى يطلب سيارة من المبنى إلى عيادة المجمع من 10 مساءً إلى
- * 6 صباحًا فقط (موعد urgent مع طلب سيارته في حفظ واحد)، ومشرف السيارات بالنيابة (nightFleet) يرسل السائق. نتيجتها في
+ * 6 صباحًا فقط (موعد urgent مع طلب سيارته في حفظ واحد)، ومشرف السيارات يرسل السائق. نتيجتها في
  * العيادة (urgentOutcome): عاد إلى المبنى أو ذهب بسيارة الإسعاف («مكتملة»)، أو إلى المستشفى بسيارة المجمع (رحلة جديدة
  * urgentFrom وطلب نقل منها، بنفس نظام النهار).
  */
@@ -71,7 +71,7 @@ const VEHICLE_DRIVER_FIELDS = ['driverId', 'driver', 'phone', 'driverSince'];
 /** قائمة السائقين (المدير): uid حساب تطبيق السائق المرتبط به، يربطه المدير من «المستخدمين» فقط */
 const DRIVER_FIELDS = ['id', 'name', 'phone', 'uid', '_o'];
 /** من يرى قائمة السائقين: المدير ومشرف السيارات (يخصصهم للسيارات) */
-const DRIVER_LIST_ROLES = ['admin', 'fleetSupervisor', 'nightFleet'];
+const DRIVER_LIST_ROLES = ['admin', 'fleetSupervisor'];
 const VEHICLE_KINDS = ['سيدان', 'احتياجات خاصة', 'باص'];
 /**
  * تخصيص السيارة (نفس القيم في shared/transport.ts): للباص باص المجمع أو باص الجامعة (الرحلات غير الطبية) أو باص العيادة،
@@ -1018,10 +1018,10 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
                 if (!valid_appointment($after, $id)) return 'بيانات الموعد غير صالحة';
                 if ($role === 'admin') return null;
                 // الحالة المستعجلة في شفت الليل: مشرف المبنى يطلبها إلى عيادة المجمع، ورحلة المستشفى بعدها
-                // (منه أو من مشرف السيارات بالنيابة)
+                // (منه)
                 if (($after['urgent'] ?? null) === true) {
                     if (array_key_exists('urgentFrom', $after)) {
-                        return has_role($user, [...BUILDING_ROLES, 'nightFleet']) && $docOf ? urgent_transfer_error($after, $docOf) : $denied;
+                        return has_role($user, BUILDING_ROLES) && $docOf ? urgent_transfer_error($after, $docOf) : $denied;
                     }
                     return has_role($user, BUILDING_ROLES) ? urgent_case_error($after) : $denied;
                 }
@@ -1056,9 +1056,9 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
             // الحالة المستعجلة لا تُنشأ ولا تُغيَّر وجهتها بالتعديل (المدير فقط)، ولا تعدّلها العيادة
             if (($before['urgent'] ?? null) === true || ($after['urgent'] ?? null) === true) {
                 if ($role !== 'admin' && (array_intersect($changed, ['urgent', 'urgentFrom']) || has_role($user, CLINIC_ROLES))) return $denied;
-                // نتيجتها في العيادة: مشرف المبنى ومسؤولهم، ومشرف السيارات بالنيابة
+                // نتيجتها في العيادة: مشرف المبنى ومسؤولهم
                 if (array_intersect($changed, URGENT_OUTCOME_FIELDS)) {
-                    return has_role($user, ['admin', ...BUILDING_ROLES, 'nightFleet']) ? urgent_outcome_error($user, $before, $after, $changed) : $denied;
+                    return has_role($user, ['admin', ...BUILDING_ROLES]) ? urgent_outcome_error($user, $before, $after, $changed) : $denied;
                 }
             }
             // مسؤول العيادة يتابع رحلات الممرضات كمشرف المبنى: حالة الموعد وإلغاؤه وعودتها بنفسها
@@ -1123,14 +1123,6 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
                 return only($changed, ['status'])
                     && ((TRIP_END_APPOINTMENT_STATUS[$move[0] ?? ''] ?? null) === $move[1] || in_array($move, TRIP_UNDO_APPOINTMENT_STATUS, true)) ? null : $denied;
             }
-            // مشرف السيارات بالنيابة (شفت الليل): حالة الموعد كما عند مشرف السيارات (إنهاء رحلة، أو تأكيد وصولها)، وطلب عودة
-            // ضيف الحالة المستعجلة من المستشفى
-            if ($role === 'nightFleet') {
-                $move = [$before['status'] ?? null, $after['status'] ?? null];
-                $tripMove = (TRIP_END_APPOINTMENT_STATUS[$move[0] ?? ''] ?? null) === $move[1] || in_array($move, TRIP_UNDO_APPOINTMENT_STATUS, true);
-                $urgentReturn = ($before['urgent'] ?? null) === true && $move === ['تم استلام المريض', 'طلب عودة'];
-                return only($changed, ['status']) && ($tripMove || $urgentReturn) ? null : $denied;
-            }
             // مشرف المبنى (ومسؤولهم): حالة الموعد، وإلغاؤه بسبب، وعودة الضيف بنفسه، وتصحيح رقم هاتفه قبل طلب السيارة
             if (has_role($user, BUILDING_ROLES)) return building_appointment_error($user, $before, $after, $changed);
             return $denied;
@@ -1157,12 +1149,6 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
             if ($before === null) {
                 // الطلب الجديد يبدأ دائمًا بانتظار التوزيع، والسيارة يحددها مشرف السيارات لاحقًا
                 if (!has_role($user, ['admin', ...BUILDING_ROLES, ...DISPATCH_ROLES, ...CLINIC_ROLES])) return $denied;
-                // مشرف السيارات بالنيابة: طلبات الحالة المستعجلة فقط (الذهاب من العيادة إلى المستشفى، والعودة منه)، بلا مالك
-                // فيتابعها كل مشرفي المباني
-                if ($role === 'nightFleet') {
-                    $linked = $docOf ? $docOf('appointments', (string)($after['appointmentId'] ?? '')) : null;
-                    if ($linked === null || ($linked['urgent'] ?? null) !== true || array_key_exists('requestedBy', $after)) return $denied;
-                }
                 // مسؤول العيادة يطلب سيارة الممرضة باسمه كمشرف المبنى (طلب فيه requestedBy)
                 $nurseLead = $docOf && array_key_exists('requestedBy', $after)
                     && nurse_lead($user, $docOf('appointments', (string)($after['appointmentId'] ?? '')));
@@ -1220,7 +1206,7 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
                 return only($changed, REQUEST_FIELDS) && !array_intersect($changed, ['id', 'appointmentId', 'fromAppointmentId', 'nurseOnly'])
                     && in_array($after['status'] ?? null, REQUEST_STATUSES, true) ? null : $denied;
             }
-            // مشرف السيارات (ومن ينوب عنه في شفت الليل): إرسال السيارة وجمع الرحلات، وتأكيد وصولها إلى الوجهة (يدويًا أو
+            // مشرف السيارات: إرسال السيارة وجمع الرحلات، وتأكيد وصولها إلى الوجهة (يدويًا أو
             // بانتهاء المدة التقديرية)، وإنهاء رحلة عالقة قبل تسجيل الاستلام (يدويًا فقط) حتى تتفرغ السيارة
             if (has_role($user, DISPATCH_ROLES)) {
                 // تعديل تاريخ رحلة غير طبية قبل إرسال سيارتها: يوم الحجز (حجز ليوم قادم)
@@ -1326,10 +1312,6 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
                 return only($changed, ['available', 'busRole', 'fullCapacity', 'waiting', ...VEHICLE_DRIVER_FIELDS]) && is_bool($after['available'] ?? null)
                     && valid_bus_role($after) && valid_full_capacity($after) && valid_waiting($after)
                     && (!array_intersect($changed, VEHICLE_DRIVER_FIELDS) || valid_vehicle_driver($after, $docOf)) ? null : $denied;
-            }
-            // مشرف السيارات بالنيابة: السائق الذي يقود السيارة في شفت الليل فقط
-            if ($role === 'nightFleet' && $before !== null) {
-                return only($changed, VEHICLE_DRIVER_FIELDS) && valid_vehicle_driver($after, $docOf) ? null : $denied;
             }
             return $denied;
 

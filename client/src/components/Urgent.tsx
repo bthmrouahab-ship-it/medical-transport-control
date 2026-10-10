@@ -41,7 +41,7 @@ const NEEDS: { need: AssistanceNeed; label: string }[] = [
 
 /**
  * نموذج الحالة المستعجلة: الضيف (يُكتب أو يُختار من ضيوف مواعيد اليوم والأيام السابقة فيملأ المبنى والشقة والهاتف)،
- * وجنسه واحتياجاته. الحفظ يطلب السيارة فورًا من المبنى إلى عيادة المجمع ويصل إلى مشرف السيارات بالنيابة.
+ * وجنسه واحتياجاته. الحفظ يطلب السيارة فورًا من المبنى إلى عيادة المجمع ويصل إلى مشرف السيارات.
  */
 export function UrgentCaseForm({ guests, onSave, onClose }: {
   guests: ComplaintGuest[];
@@ -78,7 +78,7 @@ export function UrgentCaseForm({ guests, onSave, onClose }: {
       tone="red"
       icon={Siren}
       title="طلب سيارة لحالة مستعجلة"
-      description={`من المبنى إلى ${COMPLEX_CLINIC.name} · يصل الطلب فورًا إلى مشرف السيارات بالنيابة (شفت الليل) ليرسل السائق، وتتابعه من «طلبات جارية»`}
+      description={`من المبنى إلى ${COMPLEX_CLINIC.name} · يصل الطلب فورًا إلى مشرف السيارات ليرسل السائق، وتتابعه من «طلبات جارية»`}
       onClose={onClose}
       footer={(
         <>
