@@ -67,6 +67,7 @@ import {
   type VehicleRequest,
   EMERGENCY_REFERRAL,
   EMERGENCY_PICKUP_BUILDING,
+  isEmergencyReferral,
 } from "@shared/transport";
 import { matchHospital, normalizePlaceName, type Hospital } from "@shared/hospitals";
 import { guestIndex, guestOfAppointment, hasPrivateCar, hasSpecialNeeds, isMinor, isNurse, searchGuests, type Guest } from "@shared/guests";
@@ -770,7 +771,15 @@ export function ClinicForm({ t, lang, initial, defaultDate, returnOnly = false, 
               ))}
           </div>
           <Field label={returnOnly ? t.returnTime : t.time} value={form.appointmentAt} onChange={(value) => setForm({ ...form, appointmentAt: value })} type="time" />
-          <AppointmentTypeField id="appointment-type" t={t} lang={lang} value={form.appointmentType} onChange={(appointmentType) => setForm((current) => ({ ...current, appointmentType }))} />
+          <AppointmentTypeField
+            id="appointment-type"
+            t={t}
+            lang={lang}
+            value={form.appointmentType}
+            // التحويلة الطارئة تُضاف مع طلب سيارتها، فلا يصير الموعد تحويلة طارئة ولا العكس بالتعديل، ولا تكون طلب عودة أو نقلًا
+            emergency={returnOnly || transfer ? "hidden" : initial ? (isEmergencyReferral(initial) ? "locked" : "hidden") : "allow"}
+            onChange={(appointmentType) => setForm((current) => ({ ...current, appointmentType }))}
+          />
 
           <fieldset className="sm:col-span-2">
             <legend className={labelClass}>{t.tripType}</legend>
@@ -834,8 +843,10 @@ const TYPE_OTHER = "__other";
  * نوع الموعد (اختياري): من القائمة الجاهزة، أو «أخرى» ويُكتب. القيمة نوع القائمة بالعربية أو النص المكتوب،
  * وفارغة بلا تحديد.
  */
-function AppointmentTypeField({ id, t, lang, label, value, onChange, className }: {
+function AppointmentTypeField({ id, t, lang, label, value, onChange, className, emergency = "allow" }: {
   id: string;
+  /** «تحويلة طارئة»: متاحة، أو مقفلة (تعديل تحويلة طارئة)، أو مخفية (تعديل موعد آخر، وطلب العودة والنقل) */
+  emergency?: "allow" | "locked" | "hidden";
   t: ClinicText;
   lang: Lang;
   label?: string;
@@ -859,9 +870,11 @@ function AppointmentTypeField({ id, t, lang, label, value, onChange, className }
           onChange(next === TYPE_OTHER ? "" : next);
         }}
         className={inputClass}
+        disabled={emergency === "locked"}
       >
         <option value="">{t.appointmentTypeNone}</option>
-        {APPOINTMENT_TYPES.map((type) => <option key={type.ar} value={type.ar}>{lang === "en" ? type.en : type.ar}</option>)}
+        {APPOINTMENT_TYPES.filter((type) => emergency !== "hidden" || type.ar !== EMERGENCY_REFERRAL)
+          .map((type) => <option key={type.ar} value={type.ar}>{lang === "en" ? type.en : type.ar}</option>)}
         <option value={TYPE_OTHER}>{t.appointmentTypeOther}</option>
       </select>
       {other && (

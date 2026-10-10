@@ -649,6 +649,15 @@ function emergency_referral(?array $appointment): bool
     return ($appointment['appointmentType'] ?? null) === EMERGENCY_REFERRAL;
 }
 
+/**
+ * يصل مباشرة إلى مشرف السيارات بلا موافقة مسؤول العيادة ولا طلب مشرف المبنى، ومعه طلب سيارته بلا مالك: طلب العودة من
+ * المستشفى، والنقل من مستشفى إلى مستشفى، والتحويلة الطارئة.
+ */
+function direct_request(?array $appointment): bool
+{
+    return ($appointment['returnOnly'] ?? null) === true || hospital_transfer($appointment) || emergency_referral($appointment);
+}
+
 function hospital_transfer(?array $appointment): bool
 {
     return is_string($appointment['fromClinic'] ?? null) && $appointment['fromClinic'] !== '';
@@ -1016,7 +1025,8 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
                 if (has_role($user, CLINIC_ROLES) && ($after['returnOnly'] ?? null) === true) {
                     return !array_intersect(array_keys($after), APPROVAL_FIELDS) && ($after['status'] ?? null) === 'طلب عودة' ? null : $denied;
                 }
-                if (has_role($user, CLINIC_ROLES) && hospital_transfer($after)) {
+                // والتحويلة الطارئة: مباشرة إلى مشرف السيارات بلا موافقة ولا طلب مشرف المبنى، ومعها طلب سيارة الذهاب
+                if (has_role($user, CLINIC_ROLES) && (hospital_transfer($after) || emergency_referral($after))) {
                     return !array_intersect(array_keys($after), APPROVAL_FIELDS) && ($after['status'] ?? null) === 'تم طلب السيارة' ? null : $denied;
                 }
                 // النقل من مستشفى تضيفه العيادة (أو المدير) فقط
@@ -1052,6 +1062,8 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
                 if (!$valid) return $denied;
                 // مستشفى الاستلام في النقل: نص من الدليل، ولا يصير الموعد نقلًا ولا العكس
                 if (hospital_transfer($before) !== hospital_transfer($after)) return $denied;
+                // ولا يصير الموعد تحويلة طارئة ولا العكس بالتعديل (لها طلب سيارة يُضاف معها)
+                if ($role !== 'admin' && emergency_referral($before) !== emergency_referral($after)) return 'لا يمكن تغيير نوع الموعد إلى «تحويلة طارئة» أو منها بعد إضافته';
                 if (hospital_transfer($after) && !valid_appointment($after, $id)) return 'بيانات الموعد غير صالحة';
                 if ($role === 'admin') return null;
                 // تغيير الضيف أو الوجهة: من قائمة المجمع ودليل المستشفيات
@@ -1059,7 +1071,7 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
                 $approvalChanged = (bool)array_intersect($changed, APPROVAL_FIELDS);
                 // الموعد لا يصير طلب عودة ولا العكس، وطلب العودة بلا موافقة: تُعدَّل بياناته فقط
                 if (in_array('returnOnly', $changed, true)) return $denied;
-                if (($before['returnOnly'] ?? null) === true || hospital_transfer($before)) {
+                if (direct_request($before)) {
                     return !array_intersect(array_keys($after), APPROVAL_FIELDS) && !in_array('status', $changed, true) ? null : $denied;
                 }
                 if ($role === 'clinic') {
@@ -1119,7 +1131,7 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
                 if (has_role($user, CLINIC_ROLES)) {
                     $linked = $docOf ? $docOf('appointments', (string)($before['appointmentId'] ?? '')) : null;
                     if (nurse_lead($user, $linked)) return null;
-                    return $linked !== null && (($linked['returnOnly'] ?? null) === true || hospital_transfer($linked))
+                    return $linked !== null && direct_request($linked)
                         && ($before['status'] ?? null) === 'بانتظار التوزيع' ? null : $denied;
                 }
                 // مشرف السيارات يحذف طلب رحلة غير طبية ما دامت سيارتها لم تُرسل (يحذف الرحلة أو يوقف رحلات متكررة)
@@ -1147,7 +1159,7 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
                 if (has_role($user, CLINIC_ROLES) && !$nurseLead) {
                     $linked = $docOf ? $docOf('appointments', (string)($after['appointmentId'] ?? '')) : null;
                     // والنقل من مستشفى إلى مستشفى: سيارة الذهاب من مستشفى الاستلام
-                    $direct = $linked === null ? null : (($linked['returnOnly'] ?? null) === true ? 'عودة' : (hospital_transfer($linked) ? 'ذهاب' : null));
+                    $direct = $linked === null || !direct_request($linked) ? null : (($linked['returnOnly'] ?? null) === true ? 'عودة' : 'ذهاب');
                     if ($direct === null || ($after['direction'] ?? null) !== $direct
                         || array_intersect(array_keys($after), ['requestedBy', 'nurseOnly', 'fromAppointmentId'])) return $denied;
                 }

@@ -528,10 +528,11 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
     const [appointment] = stamped;
     const returnOnly = isReturnOnly(appointment);
     const transfer = isHospitalTransfer(appointment);
-    if ((returnOnly || transfer) && !editingAppointment) {
-      // طلب العودة والنقل من مستشفى يصلان مباشرة إلى مشرف السيارات مع طلب سيارتهما، في حفظ واحد
-      const added = stamped.map((item) => ({ ...item, status: directStatus(item) }));
-      updateBoth([...appointments, ...added].sort(byAppointmentTime), [...requests, ...added.map((item, index) => returnCarRequest(item, index))]);
+    if (stamped.some(isDirectRequest) && !editingAppointment) {
+      // طلب العودة والنقل من مستشفى والتحويلة الطارئة تصل مباشرة إلى مشرف السيارات مع طلب سيارتها، في حفظ واحد
+      // (والموعد الثاني العادي معها ينتظر الموافقة كالمعتاد)
+      const added = stamped.map((item) => (isDirectRequest(item) ? { ...item, status: directStatus(item) } : item));
+      updateBoth([...appointments, ...added].sort(byAppointmentTime), [...requests, ...added.filter(isDirectRequest).map((item, index) => returnCarRequest(item, index))]);
     } else {
       const next = editingAppointment
         ? appointments.map((item) => item.id === appointment.id ? appointment : item)
@@ -544,7 +545,7 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
     const reset = Boolean(before) && approvalOf(before!) === "approved" && approvalOf(appointment) === "pending";
     toast.success(editingAppointment ? (returnOnly ? t.updatedReturn : transfer ? t.updatedTransfer : t.updated)
       : saved.length > 1 ? t.savedTwo : returnOnly ? t.savedReturn : transfer ? t.savedTransfer : t.saved, {
-      description: reset ? t.resetApproval : (returnOnly || transfer) && !editingAppointment ? t.sentToFleet : undefined,
+      description: reset ? t.resetApproval : stamped.some(isDirectRequest) && !editingAppointment ? t.sentToFleet : undefined,
     });
   }
 

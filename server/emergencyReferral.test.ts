@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   appointmentPickupLabel,
   buildDriverMessage,
+  directStatus,
+  isDirectRequest,
   isPriority,
   normalizeAppointmentType,
   pickupLabels,
@@ -24,6 +26,12 @@ describe("emergency referral: priority, and the car picks the guest up from buil
     expect(normalizeAppointmentType("Emergency referral")).toBe("تحويلة طارئة");
     expect(isPriority(appointment)).toBe(true);
     expect(isPriority({ ...appointment, appointmentType: "مراجعة" })).toBe(false);
+  });
+
+  it("goes straight to the fleet supervisor, like the return and transfer requests", () => {
+    expect(isDirectRequest(appointment)).toBe(true);
+    expect(directStatus(appointment)).toBe("تم طلب السيارة");
+    expect(isDirectRequest({ ...appointment, appointmentType: "مراجعة" })).toBe(false);
   });
 
   it("the pickup is building 03, not the guest's building", () => {

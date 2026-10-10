@@ -150,8 +150,12 @@ export const HOSPITAL_TRANSFER_LABEL = "نقل من مستشفى إلى مستش
 /** فئة الموعد في الجداول والإحصائيات: غير طبية، أو عودة فقط من المستشفى، أو نقل من مستشفى، أو طبية */
 export const appointmentCategory = (appointment: Pick<ClinicAppointment, "category" | "returnOnly" | "fromClinic">) =>
   (appointment.category === "غير طبية" ? "غير طبية" : isReturnOnly(appointment) ? RETURN_ONLY_LABEL : isHospitalTransfer(appointment) ? HOSPITAL_TRANSFER_LABEL : "طبية");
-/** يضيفه طلب العيادة مباشرة إلى مشرف السيارات بلا موافقة: طلب العودة فقط والنقل من مستشفى */
-export const isDirectRequest = (appointment: Pick<ClinicAppointment, "returnOnly" | "fromClinic">) => isReturnOnly(appointment) || isHospitalTransfer(appointment);
+/**
+ * يضيفه طلب العيادة مباشرة إلى مشرف السيارات بلا موافقة ولا طلب مشرف المبنى: طلب العودة فقط، والنقل من مستشفى،
+ * والتحويلة الطارئة.
+ */
+export const isDirectRequest = (appointment: Pick<ClinicAppointment, "returnOnly" | "fromClinic" | "appointmentType">) =>
+  isReturnOnly(appointment) || isHospitalTransfer(appointment) || isEmergencyReferral(appointment);
 /** حالته مع طلب سيارته: «طلب عودة» لطلب العودة، و«تم طلب السيارة» للنقل من مستشفى */
 export const directStatus = (appointment: Pick<ClinicAppointment, "returnOnly">): AppointmentStatus => (isReturnOnly(appointment) ? "طلب عودة" : "تم طلب السيارة");
 
