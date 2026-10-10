@@ -129,19 +129,19 @@ function push_queue(?array $item = null, bool $reset = false): array
 /** نصوص الإشعارات بلغات تطبيق السائق (نفس اللغات في client/src/lib/driverI18n.ts). */
 const PUSH_TEXT = [
     'ar' => [
-        'dir' => 'rtl', 'new' => 'رحلة جديدة', 'group' => 'رحلة مجمّعة جديدة · %d ضيوف', 'cancel' => 'أُلغيت رحلة',
+        'dir' => 'rtl', 'new' => 'رحلة جديدة', 'urgent' => '🚨 حالة مستعجلة', 'group' => 'رحلة مجمّعة جديدة · %d ضيوف', 'cancel' => 'أُلغيت رحلة',
         'deniedArrival' => 'لم يؤكد مشرف المبنى وصولك', 'deniedArrivalBody' => 'رحلة %s: تأكد من مكان الاستلام وتواصل مع مشرف السيارات',
         'deniedPickup' => 'لم يؤكد مشرف المبنى استلام الضيف', 'deniedPickupBody' => 'رحلة %s: تواصل مع مشرف السيارات',
         'home' => 'مبنى %s، شقة %s',
     ],
     'en' => [
-        'dir' => 'ltr', 'new' => 'New trip', 'group' => 'New grouped trip · %d guests', 'cancel' => 'Trip cancelled',
+        'dir' => 'ltr', 'new' => 'New trip', 'urgent' => '🚨 Urgent case', 'group' => 'New grouped trip · %d guests', 'cancel' => 'Trip cancelled',
         'deniedArrival' => 'The building supervisor did not confirm your arrival', 'deniedArrivalBody' => 'Trip of %s: check the pickup place and contact the fleet supervisor',
         'deniedPickup' => 'The building supervisor did not confirm the pickup', 'deniedPickupBody' => 'Trip of %s: contact the fleet supervisor',
         'home' => 'Building %s, Apt %s',
     ],
     'ur' => [
-        'dir' => 'rtl', 'new' => 'نیا ٹرپ', 'group' => 'نیا مشترکہ ٹرپ · %d مہمان', 'cancel' => 'ٹرپ منسوخ ہو گیا',
+        'dir' => 'rtl', 'new' => 'نیا ٹرپ', 'urgent' => '🚨 ہنگامی کیس', 'group' => 'نیا مشترکہ ٹرپ · %d مہمان', 'cancel' => 'ٹرپ منسوخ ہو گیا',
         'deniedArrival' => 'بلڈنگ سپروائزر نے آپ کی آمد کی تصدیق نہیں کی', 'deniedArrivalBody' => '%s کا ٹرپ: پک اپ کی جگہ چیک کریں اور گاڑیوں کے سپروائزر سے رابطہ کریں',
         'deniedPickup' => 'بلڈنگ سپروائزر نے مہمان کو لینے کی تصدیق نہیں کی', 'deniedPickupBody' => '%s کا ٹرپ: گاڑیوں کے سپروائزر سے رابطہ کریں',
         'home' => 'بلڈنگ %s، فلیٹ %s',
@@ -161,6 +161,8 @@ function place_name(PDO $pdo, array $appointment, string $lang): string
     $clinic = (string)($appointment['clinic'] ?? '');
     if ($lang === 'ar') return $clinic;
     if (isset(NON_MEDICAL_EN[trim($clinic)])) return NON_MEDICAL_EN[trim($clinic)];
+    // الحالة المستعجلة إلى عيادة المجمع (ليست في الدليل)
+    if (($appointment['hospitalId'] ?? null) === COMPLEX_CLINIC_ID) return 'Complex Clinic';
     static $names = null;
     if ($names === null) {
         $names = [];
@@ -212,7 +214,7 @@ function push_trip_parts(PDO $pdo, array $trip, string $lang): array
     // عودة الـ Nurse فقط: الراكب الـ Nurse مرافقة الضيف
     $name = guest_name($pdo, $appointment, $lang);
     if (!empty($trip['nurse'])) $name = "Nurse · $name";
-    return ['name' => $name, 'time' => (string)($appointment['appointmentAt'] ?? ''), 'route' => $route];
+    return ['name' => $name, 'time' => (string)($appointment['appointmentAt'] ?? ''), 'route' => $route, 'urgent' => ($appointment['urgent'] ?? null) === true];
 }
 
 /** إشعارات السائق الناتجة عن عملية كتابة واحدة على طلب (تُرسل بعد الحفظ). */
@@ -269,7 +271,7 @@ function push_messages(PDO $pdo, array $items, string $lang): array
         $trips = array_map(fn($item) => push_trip_parts($pdo, $item['trip'], $lang), $new);
         $messages[] = count($trips) > 1
             ? ['title' => sprintf($text['group'], count($trips)), 'body' => $join(...array_map(fn($trip) => "{$trip['time']} {$trip['name']}", $trips)), 'tag' => 'trip-new']
-            : ['title' => $join($text['new'], $trips[0]['time']), 'body' => $join($trips[0]['name'], $trips[0]['route']), 'tag' => 'trip-new'];
+            : ['title' => $join($trips[0]['urgent'] ? $text['urgent'] : $text['new'], $trips[0]['time']), 'body' => $join($trips[0]['name'], $trips[0]['route']), 'tag' => 'trip-new'];
         // الضغط على الإشعار يفتح التطبيق على الرحلة
         $messages[count($messages) - 1]['url'] = trip_url($new[0]['trip']);
     }

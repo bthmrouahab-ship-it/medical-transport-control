@@ -1,6 +1,7 @@
 /** buildingLead: مسؤول مشرفي المباني (صفحة مشرف المبنى، ويتابع كل الطلبات لا طلباته فقط) */
 /** clinicLead: مسؤول العيادة (صفحة العيادة، ويوافق على المواعيد أو يستبعدها قبل ظهورها لمشرف المبنى) */
-export type UserRole = "admin" | "clinic" | "clinicLead" | "buildingSupervisor" | "buildingLead" | "fleetSupervisor" | "driver";
+/** nightFleet: مشرف السيارات بالنيابة في شفت الليل (صفحة شفت الليل: يرسل السائقين للحالات المستعجلة ويتابعها، shared/urgent.ts) */
+export type UserRole = "admin" | "clinic" | "clinicLead" | "buildingSupervisor" | "buildingLead" | "fleetSupervisor" | "nightFleet" | "driver";
 
 export type UserProfile = {
   uid: string;
@@ -16,7 +17,7 @@ export type UserProfile = {
   createdBy: string;
 };
 
-export const USER_ROLES: UserRole[] = ["admin", "clinic", "clinicLead", "buildingSupervisor", "buildingLead", "fleetSupervisor", "driver"];
+export const USER_ROLES: UserRole[] = ["admin", "clinic", "clinicLead", "buildingSupervisor", "buildingLead", "fleetSupervisor", "nightFleet", "driver"];
 
 export const ROLE_LABELS: Record<UserRole, string> = {
   admin: "مدير النظام",
@@ -25,6 +26,7 @@ export const ROLE_LABELS: Record<UserRole, string> = {
   buildingSupervisor: "مشرف المبنى",
   buildingLead: "مسؤول مشرفي المباني",
   fleetSupervisor: "مشرف السيارات",
+  nightFleet: "مشرف السيارات بالنيابة (شفت الليل)",
   driver: "سائق",
 };
 

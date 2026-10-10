@@ -6,8 +6,11 @@ declare(strict_types=1);
  * لا يُطبع أي شيء عند طلب هذا الملف مباشرة.
  */
 
-const ROLES = ['admin', 'clinic', 'clinicLead', 'buildingSupervisor', 'buildingLead', 'fleetSupervisor', 'driver'];
-const OFFICE_ROLES = ['admin', 'clinic', 'clinicLead', 'buildingSupervisor', 'buildingLead', 'fleetSupervisor'];
+/** nightFleet: مشرف السيارات بالنيابة في شفت الليل (الحالات المستعجلة: urgent_* في rules.php) */
+const ROLES = ['admin', 'clinic', 'clinicLead', 'buildingSupervisor', 'buildingLead', 'fleetSupervisor', 'nightFleet', 'driver'];
+const OFFICE_ROLES = ['admin', 'clinic', 'clinicLead', 'buildingSupervisor', 'buildingLead', 'fleetSupervisor', 'nightFleet'];
+/** من يرسل السيارات ويتابع الرحلات (التوزيع وتأكيد الوصول وإنهاء الرحلة وتغيير السيارة): مشرف السيارات، ومن ينوب عنه ليلًا */
+const DISPATCH_ROLES = ['fleetSupervisor', 'nightFleet'];
 /** العيادة ومسؤولها (يوافق على المواعيد قبل ظهورها لمشرف المبنى) */
 const CLINIC_ROLES = ['clinic', 'clinicLead'];
 /** مشرف المبنى، ومسؤول مشرفي المباني (نفس الصلاحيات، ويتابع كل الطلبات لا طلباته فقط) */
