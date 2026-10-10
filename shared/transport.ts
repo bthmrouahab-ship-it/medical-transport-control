@@ -123,6 +123,7 @@ export const APPOINTMENT_TYPES: { ar: string; en: string }[] = [
   { ar: "أسنان", en: "Dental" },
   { ar: "عملية أو إجراء", en: "Surgery or procedure" },
   { ar: "تطعيم", en: "Vaccination" },
+  { ar: "تحويلة طارئة", en: "Emergency referral" },
 ];
 export const APPOINTMENT_TYPE_MAX = 60;
 
