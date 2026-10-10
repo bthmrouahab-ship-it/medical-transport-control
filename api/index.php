@@ -4,7 +4,7 @@ declare(strict_types=1);
 /**
  * واجهة الخادم لموقع سيارات مجمع الثمامة: /api/index.php?r=<route>
  * GET  session | users | sync&since=N | stats-days | activity | driver-trips | push-key | guests-stats
- * POST login | logout | change-password | users.create | users.update | users.reset-password | write | location | stats-days.save
+ * POST login | logout | change-password | users.create | users.update | users.reset-password | users.delete | write | location | stats-days.save
  *      driver-action | push-subscribe | push-unsubscribe | guests.import
  */
 
@@ -42,6 +42,7 @@ try {
         'POST users.create' => 'route_users_create',
         'POST users.update' => 'route_users_update',
         'POST users.reset-password' => 'route_users_reset_password',
+        'POST users.delete' => 'route_users_delete',
         'GET sync' => 'route_sync',
         'POST write' => 'route_write',
         'POST location' => 'route_location',
@@ -303,6 +304,51 @@ function route_users_reset_password(PDO $pdo, array $body): array
         ->execute([password_hash($password, PASSWORD_DEFAULT), $row['id']]);
     log_activity($pdo, $admin, 'user', 'user.reset_password', "إصدار كلمة مرور مؤقتة لحساب {$row['username']}", $row['username']);
     return ['user' => profile(user_row($pdo, (int)$row['id']))];
+}
+
+/**
+ * حذف حساب نهائيًا (المدير، لا حسابه هو): يخرج من كل أجهزته، ويُلغى ربطه بالسائق وتسجيل هواتفه.
+ * طلبات السيارات التي طلبها تبقى باسمه (requestedByName)، والجارية منها تصبح بلا مالك فيتابعها كل مشرفي المباني.
+ * سجل العمليات يبقى كما هو باسمه.
+ */
+function route_users_delete(PDO $pdo, array $body): array
+{
+    $admin = current_user($pdo);
+    require_role($admin, ['admin']);
+    $row = target_user($pdo, $body);
+    if ((int)$row['id'] === (int)$admin['id']) throw new ApiException(403, 'لا يمكنك حذف حسابك', 'permission_denied');
+    $uid = (string)$row['id'];
+    $pdo->beginTransaction();
+    try {
+        $rev = next_revision($pdo);
+        $link = $row['role'] === 'driver' ? link_driver_account($pdo, $uid, null, $rev) : ['from' => null];
+        $released = 0;
+        $owned = $pdo->prepare("SELECT id, data FROM docs WHERE col = 'requests' AND data IS NOT NULL AND data LIKE ? FOR UPDATE");
+        $owned->execute(['%"requestedBy":"' . $uid . '"%']);
+        foreach ($owned->fetchAll() as $doc) {
+            $id = $doc['id'];
+            $request = decode_doc($doc['data']);
+            if ($request === null || (string)($request['requestedBy'] ?? '') !== $uid) continue;
+            $next = $request;
+            if (empty($next['requestedByName'])) $next['requestedByName'] = $row['display_name'];
+            if (($request['status'] ?? null) !== 'وصلت الوجهة') {
+                unset($next['requestedBy']);
+                $released++;
+            }
+            if ($next !== $request) save_doc($pdo, 'requests', (string)$id, $next, $rev);
+        }
+        $pdo->prepare('DELETE FROM push_subscriptions WHERE user_id = ?')->execute([$row['id']]);
+        $pdo->prepare('DELETE FROM users WHERE id = ?')->execute([$row['id']]);
+        $notes = [];
+        if ($link['from']) $notes[] = "أُلغي ربطه بالسائق {$link['from']}";
+        if ($released) $notes[] = "$released طلب جارٍ صار لكل مشرفي المباني";
+        log_activity($pdo, $admin, 'user', 'user.delete', "حذف حساب {$row['username']} ({$row['display_name']}) بدور " . (ACTIVITY_ROLE_LABELS[$row['role']] ?? $row['role']) . ($notes ? ' · ' . implode('، ', $notes) : ''), $row['username']);
+        $pdo->commit();
+    } catch (Throwable $error) {
+        $pdo->rollBack();
+        throw $error;
+    }
+    return ['ok' => true];
 }
 
 // ————— البيانات المشتركة —————

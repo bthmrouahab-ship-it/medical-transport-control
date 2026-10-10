@@ -123,6 +123,12 @@ export async function updateUser(uid: string, changes: Partial<Pick<UserProfile,
   reloadUsers();
 }
 
+/** حذف الحساب نهائيًا: طلباته تبقى باسمه، والجارية منها يتابعها كل مشرفي المباني. */
+export async function deleteUser(uid: string) {
+  await api("users.delete", { uid });
+  reloadUsers();
+}
+
 /** كلمة مرور مؤقتة جديدة: تتوقف القديمة فورًا ويخرج المستخدم من كل أجهزته. */
 export async function resetUserPassword(user: UserProfile, temporaryPassword: string) {
   const passwordError = validatePassword(temporaryPassword);
