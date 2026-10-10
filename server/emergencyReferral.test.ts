@@ -3,6 +3,8 @@ import {
   appointmentPickupLabel,
   buildDriverMessage,
   directStatus,
+  EMERGENCY_TODAY_MESSAGE,
+  parseImportedAppointments,
   isDirectRequest,
   isPriority,
   normalizeAppointmentType,
@@ -48,5 +50,20 @@ describe("emergency referral: priority, and the car picks the guest up from buil
     const back = buildDriverMessage([{ appointment, request: { ...go, direction: "عودة" } }], { plate: "111", driver: "علي" }, DEFAULT_HOSPITALS);
     expect(back).toContain("إلى: مبنى 17، شقة 104");
     expect(back).not.toContain("مبنى 03");
+  });
+});
+
+describe("emergency referral: today only", () => {
+  const guests = [{ id: "G-1", name: "ضيف تجريبي", buildingNumber: "17", apartmentNumber: "104", mobile: "55500001", gender: "ذكر" as const }];
+  const row = (date: string, extra: Record<string, unknown> = {}) => ({
+    "اسم الضيف أو الرقم": "ضيف تجريبي", "اسم العيادة أو المستشفى": "مستشفى حمد العام", "رقم الموبايل": "55500001", "تاريخ الموعد": date,
+    "وقت الموعد": "23:00", "نوع الرحلة": "عادي", "نوع الموعد": "تحويلة طارئة", ...extra,
+  });
+  it("Excel accepts it for today and refuses another day", () => {
+    const today = parseImportedAppointments([row("2026-10-10")], [], 1, "2026-10-10", DEFAULT_HOSPITALS, guests);
+    expect(today.appointments).toHaveLength(1);
+    const tomorrow = parseImportedAppointments([row("2026-10-11")], [], 1, "2026-10-10", DEFAULT_HOSPITALS, guests);
+    expect(tomorrow.appointments).toHaveLength(0);
+    expect(tomorrow.errors[0]).toContain(EMERGENCY_TODAY_MESSAGE);
   });
 });

@@ -182,6 +182,8 @@ export const isPriority = (appointment: Pick<ClinicAppointment, "cancer" | "urge
 export const EMERGENCY_REFERRAL = "تحويلة طارئة";
 export const EMERGENCY_PICKUP_BUILDING = "03";
 export const isEmergencyReferral = (appointment: Pick<ClinicAppointment, "appointmentType">) => appointment.appointmentType === EMERGENCY_REFERRAL;
+/** التحويلة الطارئة تُسجَّل بتاريخ اليوم فقط (نفس النص في rules.php) */
+export const EMERGENCY_TODAY_MESSAGE = "التحويلة الطارئة تُسجَّل بتاريخ اليوم فقط";
 /** مكان استلام الضيف في رحلة الذهاب من المجمع بالعربية والإنجليزية */
 export function pickupLabels(appointment: Pick<ClinicAppointment, "buildingNumber" | "apartmentNumber" | "appointmentType">) {
   return isEmergencyReferral(appointment)
@@ -610,6 +612,15 @@ export function parseImportedAppointments(
     }
     if (fromHospital && hospital && fromHospital.id === hospital.id) {
       errors.push(`الصف ${excelRow}: مستشفى الاستلام هو نفس مستشفى الموعد`);
+      return;
+    }
+    // التحويلة الطارئة لليوم فقط، ولا تكون طلب عودة ولا نقلًا
+    if (appointmentType === EMERGENCY_REFERRAL && (returnOnly || fromHospital)) {
+      errors.push(`الصف ${excelRow}: «تحويلة طارئة» لا تكون طلب عودة ولا نقلًا من مستشفى`);
+      return;
+    }
+    if (appointmentType === EMERGENCY_REFERRAL && appointmentDate && appointmentDate !== today) {
+      errors.push(`الصف ${excelRow}: ${EMERGENCY_TODAY_MESSAGE}`);
       return;
     }
 

@@ -670,6 +670,12 @@ export function ClinicForm({ t, lang, initial, defaultDate, returnOnly = false, 
       toast.error(t.errGender);
       return;
     }
+    // التحويلة الطارئة بتاريخ اليوم فقط (والتحويلة القديمة تُعدَّل بلا تغيير تاريخها)
+    const emergency = form.appointmentType === EMERGENCY_REFERRAL || (second.enabled && !initial && second.appointmentType === EMERGENCY_REFERRAL);
+    if (emergency && form.appointmentDate !== localDateString() && form.appointmentDate !== initial?.appointmentDate) {
+      toast.error(t.emergencyTodayOnly);
+      return;
+    }
     // طلب العودة أو النقل ليوم غير اليوم: يُسأل أولًا (الطلب يصل إلى مشرف السيارات لذلك اليوم، لا سيارة اليوم)
     if ((returnOnly || transfer) && form.appointmentDate !== localDateString() && !window.confirm(t.directNotTodayConfirm(dayName(form.appointmentDate)))) return;
     const secondHospital = hospitals.find((item) => item.id === second.hospitalId);
@@ -761,6 +767,14 @@ export function ClinicForm({ t, lang, initial, defaultDate, returnOnly = false, 
           </fieldset>}
           <div className="sm:col-span-2">
             <DateChooser label={returnOnly ? t.returnDate : t.date} value={form.appointmentDate} onChange={(value) => setForm({ ...form, appointmentDate: value })} labels={t.dateChoice} />
+            {/* التحويلة الطارئة بتاريخ اليوم فقط */}
+            {form.appointmentType === EMERGENCY_REFERRAL && (form.appointmentDate === localDateString() || form.appointmentDate === initial?.appointmentDate
+              ? <p className="mt-2 text-xs leading-5 text-slate-500">{t.emergencyTodayOnly}</p>
+              : (
+                <p role="alert" className="mt-2 flex items-start gap-2 rounded-xl bg-red-50 px-3.5 py-2.5 text-sm font-medium leading-6 text-red-800 ring-1 ring-inset ring-red-200">
+                  <AlertTriangle className="mt-1 h-4 w-4 shrink-0" /> {t.emergencyTodayOnly}
+                </p>
+              ))}
             {/* طلب العودة والنقل يصلان مباشرة إلى مشرف السيارات: «اليوم»، وتنبيه إن اختير يوم آخر */}
             {(returnOnly || transfer) && (form.appointmentDate === localDateString()
               ? <p className="mt-2 text-xs leading-5 text-slate-500">{t.directTodayHint}</p>
@@ -778,7 +792,9 @@ export function ClinicForm({ t, lang, initial, defaultDate, returnOnly = false, 
             value={form.appointmentType}
             // التحويلة الطارئة تُضاف مع طلب سيارتها، فلا يصير الموعد تحويلة طارئة ولا العكس بالتعديل، ولا تكون طلب عودة أو نقلًا
             emergency={returnOnly || transfer ? "hidden" : initial ? (isEmergencyReferral(initial) ? "locked" : "hidden") : "allow"}
-            onChange={(appointmentType) => setForm((current) => ({ ...current, appointmentType }))}
+            // اختيار التحويلة الطارئة يجعل التاريخ «اليوم»
+            onChange={(appointmentType) => setForm((current) => ({ ...current, appointmentType,
+              ...(appointmentType === EMERGENCY_REFERRAL && !initial ? { appointmentDate: localDateString() } : {}) }))}
           />
 
           <fieldset className="sm:col-span-2">
