@@ -33,6 +33,9 @@ import {
   transferSource,
   transferLabels,
   isHospitalTransfer,
+  pickupLabels,
+  isEmergencyReferral,
+  EMERGENCY_PICKUP_BUILDING,
 } from "@shared/transport";
 import { LATE_MINUTES, minutesSince, tripEndpoints, tripPhase, type TripPhase } from "@shared/trips";
 import { distanceKm } from "@shared/hospitals";
@@ -100,7 +103,7 @@ const useText = () => useContext(TextContext);
 
 const requestStatusText = (status: string, en: boolean) => CLINIC_TEXT[en ? "en" : "ar"].requestStatus(status);
 const personsLabel = (count: number, en: boolean) => (en ? `${count} ${count === 1 ? "person" : "people"}` : personsText(count));
-const pickupLabel = (appointment: ClinicAppointment, en: boolean) => (en ? `Building ${appointment.buildingNumber}, Apt ${appointment.apartmentNumber}` : appointmentPickupLabel(appointment));
+const pickupLabel = (appointment: ClinicAppointment, en: boolean) => (en ? pickupLabels(appointment).en : appointmentPickupLabel(appointment));
 const directionLabel = (direction: VehicleRequest["direction"], en: boolean) => (en ? (direction === "عودة" ? "Return" : "Outbound") : direction);
 const dayLabel = (date: string, now: Date, en: boolean) => formatDay(date, now, en ? { today: "Today", tomorrow: "Tomorrow", yesterday: "Yesterday" } : undefined);
 const checkWhat = (kind: CheckKind, en: boolean) => (en ? (kind === "arrival" ? "car arrival" : "guest pickup") : checkLabel(kind));
@@ -319,7 +322,9 @@ export function SupervisorHome({ uid, userName = "", lead = false, nurses = fals
   }
   const buildingNumbers = Array.from(new Set([...Array.from(buildingCounts.keys()), ...buildings]))
     .sort((first, second) => first.localeCompare(second, "ar", { numeric: true }));
-  const inFilter = (appointment: ClinicAppointment) => nurses || !buildings.length || buildings.includes(appointment.buildingNumber);
+  // التحويلة الطارئة تظهر لمبنى الضيف ولمبنى 03 الذي تستلمه منه السيارة
+  const inFilter = (appointment: ClinicAppointment) => nurses || !buildings.length || buildings.includes(appointment.buildingNumber)
+    || (isEmergencyReferral(appointment) && buildings.includes(EMERGENCY_PICKUP_BUILDING));
   function chooseBuildings(next: string[]) {
     setBuildings(next);
     try { localStorage.setItem(BUILDINGS_KEY, JSON.stringify(next)); } catch { /* التخزين غير متاح */ }
@@ -956,6 +961,7 @@ function GuestSummary({ appointment, request, from, day, timeTone, status }: {
           {appointment.kind === "احتياجات خاصة" && <Badge icon={Accessibility}>{t("احتياجات خاصة", "Special needs")}</Badge>}
           {/* «أولوية» فقط بلا سببها (حالة سرطان لا تظهر لمشرف المبنى) */}
           {appointment.cancer && <Badge tone="red" icon={Flag}>{t("أولوية", "Priority")}</Badge>}
+          {isEmergencyReferral(appointment) && <Badge tone="red" icon={Siren}>{t(`تحويلة طارئة · الاستلام من مبنى ${EMERGENCY_PICKUP_BUILDING}`, `Emergency referral · pickup from building ${EMERGENCY_PICKUP_BUILDING}`)}</Badge>}
         </span>
         <span className="mt-1 flex items-start gap-1.5 text-sm text-slate-600">
           <MapPin className="mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-400" />

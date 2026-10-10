@@ -63,7 +63,10 @@ function route_driver_trips(PDO $pdo): array
     $pick = function (array $appointment) use ($pdo, &$namesEn): array {
         $english = guest_name($pdo, $appointment, 'en');
         if ($english !== trim((string)($appointment['patientName'] ?? ''))) $namesEn[(string)$appointment['id']] = $english;
-        return array_intersect_key($appointment, array_flip(DRIVER_APPOINTMENT_FIELDS));
+        $shown = array_intersect_key($appointment, array_flip(DRIVER_APPOINTMENT_FIELDS));
+        // نوع الموعد لا يصل إلى السائق، إلا «تحويلة طارئة» لأن السيارة تستلم الضيف من مبنى 03
+        if (emergency_referral($appointment)) $shown['appointmentType'] = EMERGENCY_REFERRAL;
+        return $shown;
     };
     foreach (plate_requests($pdo, $plate) as $request) {
         $appointment = appointment_doc($pdo, (string)($request['appointmentId'] ?? ''));

@@ -641,6 +641,14 @@ function follows_request(array $user, ?array $request): bool
 }
 
 /** نقل من مستشفى إلى مستشفى: الذهاب من مستشفى الاستلام (fromClinic) لا من المجمع */
+/** «تحويلة طارئة» (نوع موعد، shared/transport.ts): سيارة الذهاب تستلم الضيف من مبنى 03 لا من مبناه */
+const EMERGENCY_REFERRAL = 'تحويلة طارئة';
+const EMERGENCY_PICKUP_BUILDING = '03';
+function emergency_referral(?array $appointment): bool
+{
+    return ($appointment['appointmentType'] ?? null) === EMERGENCY_REFERRAL;
+}
+
 function hospital_transfer(?array $appointment): bool
 {
     return is_string($appointment['fromClinic'] ?? null) && $appointment['fromClinic'] !== '';

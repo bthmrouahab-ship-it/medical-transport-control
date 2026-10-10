@@ -65,6 +65,8 @@ import {
   type ClinicAppointment,
   type Gender,
   type VehicleRequest,
+  EMERGENCY_REFERRAL,
+  EMERGENCY_PICKUP_BUILDING,
 } from "@shared/transport";
 import { matchHospital, normalizePlaceName, type Hospital } from "@shared/hospitals";
 import { guestIndex, guestOfAppointment, hasPrivateCar, hasSpecialNeeds, isMinor, isNurse, searchGuests, type Guest } from "@shared/guests";
@@ -873,6 +875,7 @@ function AppointmentTypeField({ id, t, lang, label, value, onChange, className }
           className={cx(inputClass, "mt-2")}
         />
       )}
+      {value === EMERGENCY_REFERRAL && <p role="note" className="mt-1.5 text-xs font-medium text-red-700">{t.emergencyReferralHint(EMERGENCY_PICKUP_BUILDING)}</p>}
     </div>
   );
 }

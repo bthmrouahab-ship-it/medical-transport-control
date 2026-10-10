@@ -132,19 +132,19 @@ const PUSH_TEXT = [
         'dir' => 'rtl', 'new' => 'رحلة جديدة', 'urgent' => '🚨 حالة مستعجلة', 'group' => 'رحلة مجمّعة جديدة · %d ضيوف', 'cancel' => 'أُلغيت رحلة',
         'deniedArrival' => 'لم يؤكد مشرف المبنى وصولك', 'deniedArrivalBody' => 'رحلة %s: تأكد من مكان الاستلام وتواصل مع مشرف السيارات',
         'deniedPickup' => 'لم يؤكد مشرف المبنى استلام الضيف', 'deniedPickupBody' => 'رحلة %s: تواصل مع مشرف السيارات',
-        'home' => 'مبنى %s، شقة %s',
+        'home' => 'مبنى %s، شقة %s', 'referral' => 'مبنى %s (تحويلة طارئة)',
     ],
     'en' => [
         'dir' => 'ltr', 'new' => 'New trip', 'urgent' => '🚨 Urgent case', 'group' => 'New grouped trip · %d guests', 'cancel' => 'Trip cancelled',
         'deniedArrival' => 'The building supervisor did not confirm your arrival', 'deniedArrivalBody' => 'Trip of %s: check the pickup place and contact the fleet supervisor',
         'deniedPickup' => 'The building supervisor did not confirm the pickup', 'deniedPickupBody' => 'Trip of %s: contact the fleet supervisor',
-        'home' => 'Building %s, Apt %s',
+        'home' => 'Building %s, Apt %s', 'referral' => 'Building %s (emergency referral)',
     ],
     'ur' => [
         'dir' => 'rtl', 'new' => 'نیا ٹرپ', 'urgent' => '🚨 ہنگامی کیس', 'group' => 'نیا مشترکہ ٹرپ · %d مہمان', 'cancel' => 'ٹرپ منسوخ ہو گیا',
         'deniedArrival' => 'بلڈنگ سپروائزر نے آپ کی آمد کی تصدیق نہیں کی', 'deniedArrivalBody' => '%s کا ٹرپ: پک اپ کی جگہ چیک کریں اور گاڑیوں کے سپروائزر سے رابطہ کریں',
         'deniedPickup' => 'بلڈنگ سپروائزر نے مہمان کو لینے کی تصدیق نہیں کی', 'deniedPickupBody' => '%s کا ٹرپ: گاڑیوں کے سپروائزر سے رابطہ کریں',
-        'home' => 'بلڈنگ %s، فلیٹ %s',
+        'home' => 'بلڈنگ %s، فلیٹ %s', 'referral' => 'بلڈنگ %s (ایمرجنسی ریفرل)',
     ],
 ];
 /** وجهات الرحلات غير الطبية بالإنجليزية (نفس NON_MEDICAL_DESTINATIONS في shared/transport.ts) */
@@ -208,8 +208,10 @@ function push_trip_parts(PDO $pdo, array $trip, string $lang): array
 {
     $appointment = $trip['appointment'];
     $home = sprintf(PUSH_TEXT[$lang]['home'], $appointment['buildingNumber'] ?? '', $appointment['apartmentNumber'] ?? '');
+    // التحويلة الطارئة: الذهاب من مبنى 03 لا من مبنى الضيف
+    $pickup = emergency_referral($appointment) ? sprintf(PUSH_TEXT[$lang]['referral'], EMERGENCY_PICKUP_BUILDING) : $home;
     $place = place_name($pdo, $appointment, $lang);
-    $route = $trip['from'] ? place_name($pdo, $trip['from'], $lang) . " ← $place" : ($trip['returning'] ? "$place ← $home" : "$home ← $place");
+    $route = $trip['from'] ? place_name($pdo, $trip['from'], $lang) . " ← $place" : ($trip['returning'] ? "$place ← $home" : "$pickup ← $place");
     if ($lang === 'en') $route = str_replace('←', '→', $route);
     // عودة الـ Nurse فقط: الراكب الـ Nurse مرافقة الضيف
     $name = guest_name($pdo, $appointment, $lang);

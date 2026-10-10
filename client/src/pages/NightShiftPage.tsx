@@ -18,6 +18,7 @@ import {
   type UrgentOutcome,
   type Vehicle,
   type VehicleRequest,
+  appointmentPickupLabel,
 } from "@shared/transport";
 import { minutesSince, tripPhase, vehicleAvailability, vehicleLocationState, type TripPhase } from "@shared/trips";
 import {
@@ -249,7 +250,7 @@ export function NightShiftPage({ vehicles, appointments, requests, onDispatch, o
 function routeText({ request, appointment, from }: Trip) {
   const home = `مبنى ${appointment.buildingNumber}، شقة ${appointment.apartmentNumber}`;
   if (from) return `${from.clinic} ← ${appointment.clinic}`;
-  return request.direction === "عودة" ? `${appointment.clinic} ← ${home}` : `${home} ← ${appointment.clinic}`;
+  return request.direction === "عودة" ? `${appointment.clinic} ← ${home}` : `${appointmentPickupLabel(appointment)} ← ${appointment.clinic}`;
 }
 
 function TripSummary({ trip, status }: { trip: Trip; status?: ReactNode }) {
