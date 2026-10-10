@@ -41,7 +41,6 @@ import { ClinicForm, ClinicHome, useAppointmentNames } from "./ClinicPages";
 import { SupervisorHome, type RequestHandlers } from "./SupervisorPage";
 import { FleetSupervisorPage } from "./FleetSupervisorPage";
 import { ReferredComplaints } from "@/components/ComplaintReferrals";
-import { NightShiftPage } from "./NightShiftPage";
 import { buildUrgentCase, hospitalTransfer, isUrgent, withUrgentOutcome, type UrgentDraft } from "@shared/urgent";
 import type { Hospital } from "@shared/hospitals";
 import type { UrgentOutcome } from "@shared/transport";
@@ -62,7 +61,7 @@ function PageLoading() {
   return <div className="flex min-h-screen items-center justify-center bg-page text-slate-400" dir="rtl"><Loader2 className="h-6 w-6 animate-spin" /><span className="sr-only">جارٍ التحميل</span></div>;
 }
 
-type Role = "clinic" | "clinicLead" | "buildingSupervisor" | "buildingLead" | "fleetSupervisor" | "nightFleet";
+type Role = "clinic" | "clinicLead" | "buildingSupervisor" | "buildingLead" | "fleetSupervisor";
 type Session = { role: Role; name: string; uid: string };
 type ClinicView = "home" | "form";
 
@@ -284,7 +283,6 @@ const ROLE_TITLES: Record<Role, string> = {
   buildingSupervisor: "مشرف المبنى",
   buildingLead: "مسؤول مشرفي المباني",
   fleetSupervisor: "مشرف السيارات",
-  nightFleet: "مشرف السيارات بالنيابة",
 };
 
 function RoleShell({ session, onLogout, onManager, onChangePassword }: {
@@ -792,46 +790,32 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
 
   /**
    * شفت الليل: مشرف المبنى يطلب سيارة لحالة مستعجلة من المبنى إلى عيادة المجمع (الحالة وطلب سيارتها في حفظ واحد، الحالة
-   * أولًا)، فتصل إلى مشرف السيارات بالنيابة.
+   * أولًا)، فتصل إلى مشرف السيارات.
    */
   function addUrgentCase(draft: UrgentDraft) {
     const { appointment, request } = buildUrgentCase(draft, session.uid);
     updateBoth([...appointments, appointment], [...requests, request]);
     toast.success(`طُلبت سيارة لحالة مستعجلة: ${appointment.patientName}`, {
-      description: `مبنى ${appointment.buildingNumber}، شقة ${appointment.apartmentNumber} ← ${appointment.clinic} · وصل الطلب إلى مشرف السيارات بالنيابة، وتتابعه من «طلبات جارية»`,
+      description: `مبنى ${appointment.buildingNumber}، شقة ${appointment.apartmentNumber} ← ${appointment.clinic} · وصل الطلب إلى مشرف السيارات، وتتابعه من «طلبات جارية»`,
     });
   }
 
   /**
    * نتيجة الحالة في العيادة باسم من سجّلها: تنتهي الحالة، أو تُطلب سيارة من العيادة إلى المستشفى (رحلة مستعجلة جديدة وطلب
-   * نقل منها في حفظ واحد) باسم مشرف المبنى الذي سجّلها، أو بلا مالك من صفحة شفت الليل فيتابعها كل مشرفي المباني.
+   * نقل منها في حفظ واحد) باسم مشرف المبنى الذي سجّلها.
    */
   function recordUrgentOutcome(appointment: ClinicAppointment, outcome: UrgentOutcome, hospital?: Hospital) {
     const next = appointments.map((item) => (item.id === appointment.id ? withUrgentOutcome(item, outcome, session.name) : item));
     if (outcome === "hospital" && hospital) {
-      const transfer = hospitalTransfer(appointment, hospital, new Date(), session.role === "nightFleet" ? undefined : session.uid);
+      const transfer = hospitalTransfer(appointment, hospital, new Date(), session.uid);
       updateBoth([...next, transfer.appointment], [...requests, transfer.request]);
       toast.success(`طُلبت سيارة لنقل ${appointment.patientName} إلى ${hospital.name}`, {
-        description: session.role === "nightFleet" ? "اختر السيارة من «بانتظار إرسال سيارة»" : "وصل الطلب إلى مشرف السيارات بالنيابة، وتتابعه من «طلبات جارية»",
+        description: "وصل الطلب إلى مشرف السيارات، وتتابعه من «طلبات جارية»",
       });
       return;
     }
     updateAppointments(next);
     toast.success(`${appointment.patientName}: ${outcome === "returned" ? "عاد إلى المبنى" : "ذهب بسيارة الإسعاف"}`, { description: "انتهى تتبع الحالة المستعجلة" });
-  }
-
-  /** صفحة شفت الليل: عودة ضيف الحالة المستعجلة من المستشفى (بلا مالك فيتابعها كل مشرفي المباني) */
-  function requestUrgentReturn(appointment: ClinicAppointment) {
-    const returnRequest: VehicleRequest = {
-      id: `REQ-${Date.now()}`,
-      appointmentId: appointment.id,
-      direction: "عودة",
-      status: "بانتظار التوزيع",
-      notificationMethod: "whatsapp",
-      createdAt: timeLabel(new Date()),
-    };
-    updateBoth(appointments.map((item) => (item.id === appointment.id ? { ...item, status: "طلب عودة" as const } : item)), [...requests, returnRequest]);
-    toast.success(`طُلبت عودة ${appointment.patientName} من ${appointment.clinic}`, { description: "اختر السيارة من «بانتظار إرسال سيارة»" });
   }
 
   function dispatch(requestIds: string[], vehicle: Vehicle, joinRequestIds: string[] = []) {
@@ -948,22 +932,6 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
             {...supervisorHandlers}
             onUrgent={addUrgentCase}
             onUrgentOutcome={recordUrgentOutcome}
-          />
-        )}
-        {session.role === "nightFleet" && (
-          <NightShiftPage
-            vehicles={fleetVehicles}
-            appointments={appointments}
-            requests={requests}
-            onDispatch={dispatch}
-            onArrived={markArrived}
-            onEndTrip={endTrips}
-            onUrgentOutcome={recordUrgentOutcome}
-            onReturn={requestUrgentReturn}
-            onAssignDrivers={(next) => {
-              updateFleet(next);
-              toast.success("تم حفظ السائقين في السيارات");
-            }}
           />
         )}
         {session.role === "fleetSupervisor" && (
