@@ -1680,6 +1680,9 @@ function StopSeriesDialog({ appointment, trips, onConfirm, onClose }: { appointm
 
 function RemoveFromTripDialog({ trip, alone, onConfirm, onClose }: { trip: Trip; alone: boolean; onConfirm: (reason: string) => void; onClose: () => void }) {
   const pickedUp = trip.request.status === "تم استلام المريض";
+  // سجّل السائق الاستلام من تطبيقه (بموقع هاتفه)، لا مشرف المبنى
+  const byDriver = pickedUp && Boolean(trip.request.pickupGps || trip.request.pickupCheck);
+  const pickedAt = trip.request.pickedUpAt ? new Date(trip.request.pickedUpAt) : null;
   const [reason, setReason] = useState<string>(pickedUp ? "لم يركب السيارة" : "الضيف غير جاهز");
   const [other, setOther] = useState("");
   const text = reason === "أخرى" ? other.trim() : reason;
@@ -1697,6 +1700,16 @@ function RemoveFromTripDialog({ trip, alone, onConfirm, onClose }: { trip: Trip;
         </>
       )}
     >
+      {/* الضيف مسجّل أنه في السيارة: تنبيه قبل الإزالة */}
+      {pickedUp && (
+        <div role="alert" className="mb-3 flex gap-2.5 rounded-xl bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-900 ring-1 ring-inset ring-amber-300">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+          <div>
+            <p className="font-semibold">{byDriver ? "سجّل السائق استلام هذا الضيف" : "مسجّل أن هذا الضيف استُلم"}{pickedAt && !Number.isNaN(pickedAt.getTime()) ? ` الساعة ${timeLabel(pickedAt)}` : ""}</p>
+            <p>تأكد من السائق أن الضيف لم يركب السيارة فعلًا قبل إزالته. بعد الإزالة يُعتبر لم يُستلم، ويحتاج سيارة أخرى.</p>
+          </div>
+        </div>
+      )}
       <ul className="space-y-1.5 rounded-xl bg-slate-50 px-4 py-3 text-sm leading-6 text-slate-700 ring-1 ring-inset ring-slate-200/70">
         <li>يعود طلبه إلى «بانتظار التوزيع» لترسل له سيارة أخرى، وتُلغى عند السائق.</li>
         {pickedUp && <li>سُجّل استلامه، فتعود حالة موعده إلى ما قبل الاستلام.</li>}

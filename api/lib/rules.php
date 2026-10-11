@@ -60,6 +60,11 @@ const REQUEST_FIELDS = ['id', 'appointmentId', 'vehiclePlate', 'driver', 'direct
     'fromAppointmentId', 'nurseOnly', 'driverArrivedAt', 'arrivalGps', 'pickupGps', ...CHECK_FIELDS, ...VEHICLE_CHANGE_FIELDS, ...TRIP_REMOVAL_FIELDS,
     // يكتبها الخادم وحده للإحصائيات (stamp_tracking في tracking.php)، واسم من طلب السيارة (stamp_requester)
     'pickupArrivedAt', 'nearPickupAt', '_o'];
+/**
+ * خانات الطلب التي يكتبها الخادم وحده بعد فحص الصلاحيات (stamp_tracking وstamp_requester): لا تُحسب فيما غيّره المستخدم،
+ * فإزالة ضيف من رحلة بعد «وصلت السيارة» (تمحو وقت الوصول) لا تُرفض بسببها.
+ */
+const REQUEST_SERVER_FIELDS = ['pickupArrivedAt', 'nearPickupAt', 'requestedByName'];
 /** خانات مرحلة الطريق إلى الوجهة (تُكتب عند استلام المريض وعند الوصول) */
 const TRIP_FIELDS = ['pickedUpAt', 'etaAt', 'destLat', 'destLng', 'arrivedAt', 'arrivalSource'];
 /** driver وphone: اسم السائق المخصص للسيارة ورقمه، منسوخان من قائمة السائقين (driverId) ويحدّثهما الخادم */
@@ -1000,6 +1005,7 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
     $role = $user['role'];
     if ($after !== null && count($after) > 40 && $col !== 'meta') return 'بيانات غير صالحة';
     $changed = ($before !== null && $after !== null) ? changed_keys($before, $after) : [];
+    if ($col === 'requests') $changed = array_values(array_diff($changed, REQUEST_SERVER_FIELDS));
 
     switch ($col) {
         case 'appointments':
