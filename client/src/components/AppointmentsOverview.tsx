@@ -1,3 +1,4 @@
+import { beforeLoaded, useHistory } from "@/lib/history";
 import { useMemo, useState } from "react";
 import { Accessibility, ArrowLeftRight, Ban, BriefcaseMedical, CalendarDays, Clock3, Eye, EyeOff, Filter, Footprints, House, Pencil, Repeat, Flag, Stethoscope, Trash2, Truck, UsersRound, X } from "lucide-react";
 import {
@@ -53,6 +54,8 @@ export function AppointmentsOverview({ appointments, requests, date, now, onStop
   onDeleteTrip?: (appointment: ClinicAppointment) => void;
 }) {
   const [scope, setScope] = useState<"day" | "all">("day");
+  // «كل الأيام» أو يوم قبل أول يوم محمّل: تُحمَّل المواعيد الأقدم مرة واحدة
+  const loadingOld = useHistory(scope === "all" || beforeLoaded(date));
   const dayAppointments = useMemo(() => appointments.filter((appointment) => appointment.appointmentDate === date), [appointments, date]);
   const rows = useMemo(
     () => (scope === "all" ? [...appointments] : [...dayAppointments]).sort((a, b) => `${a.appointmentDate} ${a.appointmentAt}`.localeCompare(`${b.appointmentDate} ${b.appointmentAt}`)),
@@ -222,7 +225,7 @@ export function AppointmentsOverview({ appointments, requests, date, now, onStop
         count={table.shown.length}
         description={(
           <span className="inline-flex flex-wrap items-center gap-1">
-            <Eye className="h-3.5 w-3.5" /> {scope === "all" ? "كل الأيام" : longDate(date)} · {filtering ? `${table.shown.length} نتيجة · ${table.active} ${table.active === 1 ? "فلتر" : "فلاتر"}` : "اضغط ▾ في عنوان أي عمود للفرز والفلترة كما في Excel"}
+            <Eye className="h-3.5 w-3.5" /> {scope === "all" ? "كل الأيام" : longDate(date)}{loadingOld ? " · جارٍ تحميل المواعيد الأقدم…" : ""} · {filtering ? `${table.shown.length} نتيجة · ${table.active} ${table.active === 1 ? "فلتر" : "فلاتر"}` : "اضغط ▾ في عنوان أي عمود للفرز والفلترة كما في Excel"}
           </span>
         )}
         actions={(

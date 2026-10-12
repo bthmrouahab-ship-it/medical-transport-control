@@ -29,6 +29,8 @@ const ARRIVAL_RADIUS_M = 300;
 const ARRIVAL_MAX_ACCURACY_M = 200;
 /** طلب العودة التلقائي للرحلة غير الطبية يُنشأ قبل وقت العودة بهذه الدقائق (حتى تصل السيارة في وقتها) */
 const AUTO_RETURN_LEAD_MINUTES = 30;
+/** أول تحميل يرسل المواعيد وطلبات السيارات لآخر هذه الأيام (والقادمة والمفتوحة)، والأقدم عند الحاجة من history */
+const RECENT_SYNC_DAYS = 30;
 
 try {
     $route = (string)($_GET['r'] ?? '');
@@ -44,6 +46,7 @@ try {
         'POST users.reset-password' => 'route_users_reset_password',
         'POST users.delete' => 'route_users_delete',
         'GET sync' => 'route_sync',
+        'GET history' => 'route_history',
         'POST write' => 'route_write',
         'POST location' => 'route_location',
         'GET stats-days' => 'route_stats_days',
@@ -449,6 +452,52 @@ function auto_returns(PDO $pdo): int
     return $created;
 }
 
+function recent_cutoff(): string
+{
+    return (new DateTimeImmutable('now', new DateTimeZone('Asia/Qatar')))->modify('-' . RECENT_SYNC_DAYS . ' days')->format('Y-m-d');
+}
+
+/**
+ * المواعيد والطلبات الحديثة: موعد من تاريخ القطع فما بعد أو لم ينتهِ (لا «مكتملة» ولا «ملغي»)، وطلب لموعد حديث أو لم
+ * يصل إلى الوجهة، ومعهما ما يرتبطان به (موعد الطلب، والموعد الأول في النقل، والحالة المستعجلة قبل رحلة المستشفى).
+ * $rows: [col, id, data] من المجموعتين. يعيد [مواعيد => true، طلبات => true] للحديث منها.
+ */
+function recent_ids(array $rows, string $cutoff): array
+{
+    $appointments = [];
+    $requests = [];
+    foreach ($rows as [$col, $id, $data]) {
+        if ($data === null) continue;
+        if ($col === 'appointments') $appointments[$id] = $data;
+        elseif ($col === 'requests') $requests[$id] = $data;
+    }
+    $keepA = [];
+    foreach ($appointments as $id => $a) {
+        $open = !in_array($a['status'] ?? '', ['مكتملة', 'ملغي'], true);
+        if ($open || (string)($a['appointmentDate'] ?? '') >= $cutoff) $keepA[$id] = true;
+    }
+    $keepR = [];
+    for ($round = 0; $round < 3; $round++) {
+        foreach ($requests as $id => $r) {
+            if (isset($keepR[$id])) continue;
+            if (isset($keepA[(string)($r['appointmentId'] ?? '')]) || ($r['status'] ?? '') !== 'وصلت الوجهة') $keepR[$id] = true;
+        }
+        $added = false;
+        foreach (array_keys($keepR) as $id) {
+            foreach (['appointmentId', 'fromAppointmentId'] as $field) {
+                $ref = (string)($requests[$id][$field] ?? '');
+                if ($ref !== '' && isset($appointments[$ref]) && !isset($keepA[$ref])) { $keepA[$ref] = true; $added = true; }
+            }
+        }
+        foreach (array_keys($keepA) as $id) {
+            $ref = (string)($appointments[$id]['urgentFrom'] ?? '');
+            if ($ref !== '' && isset($appointments[$ref]) && !isset($keepA[$ref])) { $keepA[$ref] = true; $added = true; }
+        }
+        if (!$added) break;
+    }
+    return ['appointments' => $keepA, 'requests' => $keepR];
+}
+
 function route_sync(PDO $pdo): array
 {
     $user = current_user($pdo);
@@ -461,21 +510,47 @@ function route_sync(PDO $pdo): array
     $since = max(0, (int)($_GET['since'] ?? 0));
     $rev = current_revision($pdo);
     if ($since > $rev) $since = 0;
+    // أول تحميل بلا المواعيد والطلبات القديمة المنتهية (recent=1)، والتغييرات بعده كلها
+    $cutoff = $since === 0 && ($_GET['recent'] ?? '') === '1' ? recent_cutoff() : null;
     $collections = sync_collections($user);
     $marks = implode(', ', array_fill(0, count($collections), '?'));
     $sql = "SELECT col, id, data FROM docs WHERE rev > ? AND rev <= ? AND col IN ($marks)" . ($since === 0 ? ' AND data IS NOT NULL' : '');
     $stmt = $pdo->prepare($sql);
     $stmt->execute([$since, $rev, ...$collections]);
+    $rows = [];
+    foreach ($stmt as $row) $rows[] = [$row['col'], (string)$row['id'], decode_doc($row['data'])];
+    $keep = $cutoff !== null ? recent_ids($rows, $cutoff) : null;
     $docs = [];
     // شقق السيارات الخاصة: علامة privateCar مع ضيوفها
     $privateUnits = private_car_units();
-    foreach ($stmt as $row) {
-        $data = public_doc($row['col'], decode_doc($row['data']), $privateUnits);
+    foreach ($rows as [$col, $id, $raw]) {
+        if ($keep !== null && isset($keep[$col]) && !isset($keep[$col][$id])) continue;
+        $data = public_doc($col, $raw, $privateUnits);
         // الشكوى لمن سجّلها ولمسؤول مشرفي المباني والمدير فقط
-        if ($row['col'] === 'complaints' && $data !== null && !can_see_complaint($user, $data)) continue;
-        $docs[] = ['col' => $row['col'], 'id' => $row['id'], 'data' => $data];
+        if ($col === 'complaints' && $data !== null && !can_see_complaint($user, $data)) continue;
+        $docs[] = ['col' => $col, 'id' => $id, 'data' => $data];
     }
-    return ['rev' => $rev, 'full' => $since === 0, 'docs' => $docs];
+    return ['rev' => $rev, 'full' => $since === 0, 'docs' => $docs] + ($cutoff !== null ? ['recentFrom' => $cutoff] : []);
+}
+
+/** المواعيد والطلبات القديمة التي لم يرسلها أول تحميل (للإحصائيات و«كل الأيام» والأيام السابقة) */
+function route_history(PDO $pdo): array
+{
+    $user = current_user($pdo);
+    require_role($user, OFFICE_ROLES);
+    $rev = current_revision($pdo);
+    $cutoff = recent_cutoff();
+    $stmt = $pdo->prepare("SELECT col, id, data FROM docs WHERE col IN ('appointments', 'requests') AND data IS NOT NULL AND rev <= ?");
+    $stmt->execute([$rev]);
+    $rows = [];
+    foreach ($stmt as $row) $rows[] = [$row['col'], (string)$row['id'], decode_doc($row['data'])];
+    $keep = recent_ids($rows, $cutoff);
+    $docs = [];
+    foreach ($rows as [$col, $id, $raw]) {
+        if (isset($keep[$col][$id])) continue;
+        $docs[] = ['col' => $col, 'id' => $id, 'data' => public_doc($col, $raw)];
+    }
+    return ['rev' => $rev, 'recentFrom' => $cutoff, 'docs' => $docs];
 }
 
 /**

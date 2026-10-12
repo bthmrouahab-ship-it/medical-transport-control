@@ -2,7 +2,9 @@ import type { SharedBackend, SharedKey } from "./appStore";
 import { api } from "./api";
 
 type Rec = Record<string, unknown>;
-type SyncResponse = { rev: number; full: boolean; docs: { col: string; id: string; data: Rec | null }[] };
+type SyncResponse = { rev: number; full: boolean; recentFrom?: string; docs: { col: string; id: string; data: Rec | null }[] };
+/** المواعيد والطلبات القديمة المنتهية (قبل recentFrom) لا يرسلها أول تحميل؛ تُطلب من history عند الحاجة */
+const HISTORY_COLS = new Set(["appointments", "requests"]);
 type WriteOp =
   | { col: string; id: string; op: "set"; data: Rec }
   | { col: string; id: string; op: "update"; set: Rec; unset: string[] }
@@ -71,6 +73,12 @@ export function createApiBackend(): SharedBackend {
   let rev = 0;
   let emit: (key: SharedKey, value: unknown) => void = () => {};
   let syncing: Promise<void> | null = null;
+  // أول تحميل بلا المواعيد والطلبات القديمة: من أي يوم تبدأ (null = كلها محمّلة)
+  let recentFrom: string | null = null;
+  let historyWanted = false;
+  let historyLoading: Promise<void> | null = null;
+  // ما حُذف بعد أول تحميل، حتى لا يعيده رد history متأخر
+  const deleted = new Set<string>();
 
   const collection = (col: string) => {
     if (!docs.has(col)) docs.set(col, new Map());
@@ -94,10 +102,15 @@ export function createApiBackend(): SharedBackend {
     const changed = new Set<SharedKey>();
     if (response.full) {
       docs.clear();
+      deleted.clear();
+      recentFrom = response.recentFrom ?? null;
       (Object.keys({ ...COLLECTIONS, ...SINGLE_DOCS }) as SharedKey[]).forEach((key) => changed.add(key));
     }
     for (const item of response.docs) {
-      if (item.data === null) collection(item.col).delete(item.id);
+      if (item.data === null) {
+        collection(item.col).delete(item.id);
+        if (HISTORY_COLS.has(item.col)) deleted.add(`${item.col}/${item.id}`);
+      }
       else collection(item.col).set(item.id, item.data);
       keysOf(item.col, item.id).forEach((key) => changed.add(key));
     }
@@ -107,15 +120,37 @@ export function createApiBackend(): SharedBackend {
 
   function sync() {
     // طلب مزامنة واحد في كل مرة
-    syncing ??= api<SyncResponse>("sync", undefined, { since: rev })
+    syncing ??= api<SyncResponse>("sync", undefined, { since: rev, ...(recentFrom ? { recent: 1 } : {}) })
       .then((response) => {
         // أثناء وجود حفظ محلي معلّق نؤجل عرض التغييرات حتى لا تظهر حالة جزئية
         for (const key of Array.from(apply(response))) if (!pending.get(key)) emit(key, valueOf(key));
+        // تحميل كامل جديد (بعد إعادة ضبط المراجعة) بلا القديم وقد طُلب من قبل: يُطلب من جديد
+        if (response.full && recentFrom && historyWanted) loadHistory().catch(() => {});
       })
       .finally(() => {
         syncing = null;
       });
     return syncing;
+  }
+
+  /** المواعيد والطلبات القديمة مرة واحدة: تُضاف ما لم يصل أحدث منها بالمزامنة أو يُحذف */
+  function loadHistory(): Promise<void> {
+    historyWanted = true;
+    if (!recentFrom) return Promise.resolve();
+    historyLoading ??= api<{ rev: number; docs: { col: string; id: string; data: Rec }[] }>("history")
+      .then((response) => {
+        for (const item of response.docs) {
+          const current = collection(item.col);
+          if (current.has(item.id) || deleted.has(`${item.col}/${item.id}`)) continue;
+          current.set(item.id, item.data);
+        }
+        recentFrom = null;
+        for (const key of ["fox_appointments", "fox_requests"] as SharedKey[]) if (!pending.get(key)) emit(key, valueOf(key));
+      })
+      .finally(() => {
+        historyLoading = null;
+      });
+    return historyLoading;
   }
 
   function opsFor(key: SharedKey, next: unknown, previous: unknown): WriteOp[] {
@@ -157,7 +192,7 @@ export function createApiBackend(): SharedBackend {
 
   return {
     async init() {
-      apply(await api<SyncResponse>("sync", undefined, { since: 0 }));
+      apply(await api<SyncResponse>("sync", undefined, { since: 0, recent: 1 }));
       const out: Partial<Record<SharedKey, unknown>> = {};
       for (const key of Object.keys({ ...COLLECTIONS, ...SINGLE_DOCS }) as SharedKey[]) out[key] = valueOf(key);
       return out;
@@ -197,6 +232,9 @@ export function createApiBackend(): SharedBackend {
         });
       }
     },
+
+    historyFrom: () => recentFrom,
+    loadHistory,
 
     watch(onChange) {
       emit = onChange;

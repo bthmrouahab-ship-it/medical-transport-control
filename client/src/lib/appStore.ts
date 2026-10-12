@@ -32,6 +32,10 @@ export interface SharedBackend {
   write(key: SharedKey, next: unknown, previous: unknown): Promise<void>;
   /** يحفظ أكثر من مفتاح في دفعة واحدة بالترتيب (كلها أو لا شيء)، مثل طلب العودة وطلب سيارته معًا. */
   writeMany?(entries: { key: SharedKey; next: unknown; previous: unknown }[]): Promise<void>;
+  /** أول يوم محمّل من المواعيد والطلبات (YYYY-MM-DD)، أو null إن كانت كلها محمّلة */
+  historyFrom?(): string | null;
+  /** يحمّل المواعيد والطلبات الأقدم مرة واحدة (للإحصائيات و«كل الأيام» والأيام السابقة) */
+  loadHistory?(): Promise<void>;
   /** يستدعي onChange عند وصول تغيير من مستخدم آخر. يعيد دالة لإلغاء الاشتراك. */
   watch(onChange: (key: SharedKey, value: unknown) => void): () => void;
 }
@@ -89,6 +93,16 @@ export function clearSharedBackend() {
   backend = null;
   onError = null;
   cache.clear();
+}
+
+/** أول يوم محمّل من المواعيد والطلبات، أو null إن كانت كلها محمّلة (أو بلا قاعدة بيانات مشتركة) */
+export function historyFrom(): string | null {
+  return backend?.historyFrom?.() ?? null;
+}
+
+/** يحمّل المواعيد والطلبات الأقدم من أول تحميل (مرة واحدة)، قبل الإحصائيات والتصدير و«كل الأيام» */
+export function ensureHistory(): Promise<void> {
+  return backend?.loadHistory?.() ?? Promise.resolve();
 }
 
 /** هل توجد قيمة محفوظة لهذا المفتاح المشترك في قاعدة البيانات؟ */
