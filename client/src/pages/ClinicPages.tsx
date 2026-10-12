@@ -1,3 +1,4 @@
+import { beforeLoaded, useHistory } from "@/lib/history";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
@@ -188,6 +189,8 @@ export function ClinicHome({ t, lang, appointments, date, onDateChange, onNew, o
 
   // الجدول: اليوم المختار أو كل الأيام، وفلترة كل عمود مثل Excel
   const [scope, setScope] = useState<"day" | "all">("day");
+  // «كل الأيام» أو يوم قبل أول يوم محمّل: تُحمَّل المواعيد الأقدم مرة واحدة
+  const loadingOld = useHistory(scope === "all" || beforeLoaded(date));
   const byDateTime = (a: ClinicAppointment, b: ClinicAppointment) => `${a.appointmentDate} ${a.appointmentAt}`.localeCompare(`${b.appointmentDate} ${b.appointmentAt}`);
   const rows = useMemo(() => (scope === "all" ? [...appointments] : dayAppointments).sort(byDateTime), [appointments, dayAppointments, scope]); // eslint-disable-line react-hooks/exhaustive-deps
   const separator = t.dir === "rtl" ? "، " : ", ";
@@ -483,7 +486,7 @@ export function ClinicHome({ t, lang, appointments, date, onDateChange, onNew, o
         icon={UsersRound}
         title={t.list}
         count={shown.length}
-        description={<>{scope === "all" ? t.scopeAll : longDate(date, lang)} · {filtering ? `${t.results(shown.length)} · ${t.filtersOn(table.active)}` : t.filterHint}</>}
+        description={<>{scope === "all" ? t.scopeAll : longDate(date, lang)}{loadingOld ? (t.dir === "rtl" ? " · جارٍ تحميل المواعيد الأقدم…" : " · Loading older appointments…") : ""} · {filtering ? `${t.results(shown.length)} · ${t.filtersOn(table.active)}` : t.filterHint}</>}
         actions={(
           <>
             {(filtering || table.sort) && <button type="button" onClick={table.clear} className={btn("ghost", "sm")}><X className="h-4 w-4" /> {t.clearFilters}</button>}

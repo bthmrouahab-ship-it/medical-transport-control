@@ -1,3 +1,4 @@
+import { beforeLoaded, useHistory } from "@/lib/history";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import {
@@ -265,6 +266,8 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
   onEditTrip: (appointment: ClinicAppointment) => void;
   onDeleteTrip: (appointment: ClinicAppointment) => void;
 }) {
+  // يوم قبل أول يوم محمّل (آخر 30 يومًا): تُحمَّل المواعيد الأقدم مرة واحدة
+  useHistory(beforeLoaded(date));
   const [addingTrip, setAddingTrip] = useState(false);
   /** رحلة غير طبية قيد التعديل (قبل إرسال سيارتها) */
   const [editingTrip, setEditingTrip] = useState<ClinicAppointment | null>(null);

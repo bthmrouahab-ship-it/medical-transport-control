@@ -39,6 +39,7 @@ import ActivityLog from "./ActivityLog";
 import GuestStats from "./GuestStats";
 import StatsAppointments from "./StatsAppointments";
 import OperationsStats from "./OperationsStats";
+import { useHistory } from "@/lib/history";
 
 type Preset = "all" | "today" | "7d" | "30d" | "month" | "lastMonth" | "year" | "custom";
 
@@ -91,6 +92,8 @@ export default function StatsPanel({ canEdit, actor, hospitals, fleet, appointme
   requests: VehicleRequest[];
   history: HistorySummary | null;
 }) {
+  // المواعيد الأقدم من أول تحميل (آخر 30 يومًا) تُحمَّل عند فتح الإحصائيات
+  const loadingHistory = useHistory(true);
   const [imported, setImported] = useState<StatsDay[] | null>(null);
   const [loadError, setLoadError] = useState(false);
   const [preset, setPreset] = useState<Preset>("all");
@@ -262,6 +265,11 @@ export default function StatsPanel({ canEdit, actor, hospitals, fleet, appointme
 
   return (
     <div className="space-y-6">
+      {loadingHistory && (
+        <p role="status" className="flex items-center gap-2 rounded-xl bg-blue-50 px-4 py-3 text-sm text-blue-900 ring-1 ring-inset ring-blue-200">
+          <Loader2 className="h-4 w-4 animate-spin" /> جارٍ تحميل المواعيد الأقدم من 30 يومًا… الأرقام تكتمل بعد التحميل
+        </p>
+      )}
       {canEdit && <HistoryImport fleet={fleet} hospitals={hospitals} imported={imported ?? []} />}
 
       <Panel

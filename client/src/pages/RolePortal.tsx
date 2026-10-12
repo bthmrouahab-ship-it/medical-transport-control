@@ -46,7 +46,7 @@ import type { Hospital } from "@shared/hospitals";
 import type { UrgentOutcome } from "@shared/transport";
 import Login from "./Login";
 import ChangePasswordForm from "@/components/ChangePasswordForm";
-import { SHARED_KEYS, clearSharedBackend, loadState, removeState, saveState, saveStates, setSharedBackend, subscribeState } from "@/lib/appStore";
+import { SHARED_KEYS, clearSharedBackend, ensureHistory, loadState, removeState, saveState, saveStates, setSharedBackend, subscribeState } from "@/lib/appStore";
 import { createApiBackend } from "@/lib/apiBackend";
 import { authErrorMessage, logout, watchSession } from "@/lib/auth";
 import { api, serverUnavailable } from "@/lib/api";
@@ -371,9 +371,12 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
 
   async function exportStats() {
     try {
+      // التصدير لكل الأيام: المواعيد الأقدم من أول تحميل أولًا (والقوائم من المخزن بعد تحميلها)
+      await ensureHistory();
+      const allRequests = loadRequests();
       const XLSX = await import("xlsx");
-      const rows = appointments.map((appointment) => {
-        const appointmentRequests = requests.filter((request) => request.appointmentId === appointment.id);
+      const rows = loadAppointments().map((appointment) => {
+        const appointmentRequests = allRequests.filter((request) => request.appointmentId === appointment.id);
         return {
           "رقم الموعد": appointment.id,
           "الضيف": appointment.patientName,
