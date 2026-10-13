@@ -566,12 +566,21 @@ function valid_guest(array $data, string $id): bool
  * والوجهة اسم المستشفى كما في الدليل. $changed = null عند الإضافة (يُفحص كل شيء)، وعند التعديل ما تغيّر فقط.
  * $docOf(col, id) يقرأ المستند المحفوظ، و$docOf(col, null) أي مستند من المجموعة (لمعرفة هل هي فارغة).
  */
+/** الاستثناء الوحيد من منع السيارة الخاصة: موعد طبي في المستشفى الكوبي (PRIVATE_CAR_HOSPITAL في shared/guests.ts) */
+const PRIVATE_CAR_HOSPITAL = 'cuban';
+function private_car_allowed(array $appointment): bool
+{
+    return ($appointment['hospitalId'] ?? null) === PRIVATE_CAR_HOSPITAL && ($appointment['category'] ?? null) !== 'غير طبية';
+}
+
 function registry_error(array $appointment, callable $docOf, ?array $changed = null, bool $hospital = true): ?string
 {
     $guestChanged = $changed === null || (bool)array_intersect($changed, APPOINTMENT_GUEST_FIELDS);
     // الضيف أقل من 18 سنة: يُفحص عند تغيّر الضيف أو احتياجاته
     $needsChanged = $changed === null || (bool)array_intersect($changed, ['guestId', 'assistance']);
-    if ($guestChanged || $needsChanged) {
+    // السيارة الخاصة: يُفحص أيضًا عند تغيّر المستشفى (الاستثناء للمستشفى الكوبي فقط)
+    $hospitalChanged = $changed !== null && (bool)array_intersect($changed, ['hospitalId', 'clinic', 'category']);
+    if ($guestChanged || $needsChanged || $hospitalChanged) {
         $guestId = $appointment['guestId'] ?? null;
         $guest = is_string($guestId) && preg_match('/^[A-Za-z0-9._:-]{1,160}$/', $guestId) ? $docOf('guests', $guestId) : null;
         if ($guestChanged) {
@@ -581,13 +590,15 @@ function registry_error(array $appointment, callable $docOf, ?array $changed = n
             }
             // موعد الممرضة يحمل علامتها كما في القائمة
             if ((($appointment['nurse'] ?? null) === true) !== (($guest['nurse'] ?? null) === true)) return 'بيانات الضيف لا تطابق قائمة ضيوف المجمع';
-            // صاحب سيارة خاصة أو من يسكن معه في نفس الشقة
-            if (guest_has_private_car($guest)) return PRIVATE_CAR_MESSAGE;
+        }
+        // صاحب سيارة خاصة أو من يسكن معه في نفس الشقة: إلا لموعد طبي في المستشفى الكوبي
+        if (($guestChanged || $hospitalChanged) && $guest !== null && guest_has_private_car($guest) && !private_car_allowed($appointment)) {
+            return PRIVATE_CAR_MESSAGE;
         }
         $assistance = is_array($appointment['assistance'] ?? null) ? $appointment['assistance'] : [];
         // في الموعد الطبي فقط: الرحلة غير الطبية بلا مرافق إلزامي
         $medical = ($appointment['category'] ?? null) !== 'غير طبية';
-        if ($medical && guest_is_minor($guest) && !in_array('يحتاج مرافق', $assistance, true) && !in_array('يحتاج Nurse', $assistance, true)) {
+        if (($guestChanged || $needsChanged) && $medical && guest_is_minor($guest) && !in_array('يحتاج مرافق', $assistance, true) && !in_array('يحتاج Nurse', $assistance, true)) {
             return 'الضيف أقل من 18 سنة: يحتاج مرافقًا (إلا إن كان معه Nurse)';
         }
     }
