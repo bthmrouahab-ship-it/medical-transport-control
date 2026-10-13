@@ -72,7 +72,7 @@ import {
   isEmergencyReferral,
 } from "@shared/transport";
 import { matchHospital, normalizePlaceName, type Hospital } from "@shared/hospitals";
-import { guestIndex, guestOfAppointment, hasPrivateCar, hasSpecialNeeds, isMinor, isNurse, searchGuests, type Guest } from "@shared/guests";
+import { guestIndex, guestOfAppointment, hasPrivateCar, privateCarBlocked, PRIVATE_CAR_HOSPITAL, hasSpecialNeeds, isMinor, isNurse, searchGuests, type Guest } from "@shared/guests";
 import { Badge, DateChooser, EmptyState, Field, Panel, PageHeader, Segmented, Stat, StatusBadge, StatusBar, btn, choiceClass, cx, formatDay, inputClass, labelClass, longDate } from "@/components/ui-kit";
 import { FILTER_LABELS_AR, FILTER_LABELS_EN, FilterTable, useColumnFilters, type FilterColumn } from "@/components/ExcelFilter";
 import { cancelReasonText, enableTranslation, hasArabic, useCancelReason } from "@/lib/translate";
@@ -122,7 +122,8 @@ export function ClinicHome({ t, lang, appointments, date, onDateChange, onNew, o
   const names = useAppointmentNames(lang, guests, hospitals);
   // ضيف يسكن في شقة لها سيارة خاصة (لموعد أُضيف قبل رفع قائمة السيارات الخاصة)
   const guestsIndex = useMemo(() => guestIndex(guests), [guests]);
-  const privateCarOf = (appointment: ClinicAppointment) => hasPrivateCar(guestOfAppointment(guestsIndex, appointment));
+  // (الموعد في المستشفى الكوبي مستثنى)
+  const privateCarOf = (appointment: ClinicAppointment) => privateCarBlocked(guestOfAppointment(guestsIndex, appointment), appointment);
 
   async function importExcel(file?: File) {
     if (!file) return;
@@ -638,10 +639,6 @@ export function ClinicForm({ t, lang, initial, defaultDate, returnOnly = false, 
       toast.error(t.errGuest);
       return;
     }
-    if (hasPrivateCar(guest)) {
-      toast.error(t.privateCar);
-      return;
-    }
     const fromHospital = transfer ? hospitals.find((item) => item.id === form.fromHospitalId) : undefined;
     if (transfer && !fromHospital) {
       toast.error(t.errTransferFrom);
@@ -654,6 +651,11 @@ export function ClinicForm({ t, lang, initial, defaultDate, returnOnly = false, 
     }
     if (fromHospital && fromHospital.id === hospital.id) {
       toast.error(t.errTransferSame);
+      return;
+    }
+    // صاحب السيارة الخاصة (أو من يسكن معه): موعد في المستشفى الكوبي فقط
+    if (privateCarBlocked(guest, { hospitalId: hospital.id })) {
+      toast.error(t.privateCar, { description: t.privateCarCuban });
       return;
     }
     if (!form.mobile || !form.appointmentDate || !form.appointmentAt) {
@@ -690,6 +692,10 @@ export function ClinicForm({ t, lang, initial, defaultDate, returnOnly = false, 
       }
       if (second.appointmentAt <= form.appointmentAt) {
         toast.error(t.errSecondOrder);
+        return;
+      }
+      if (privateCarBlocked(guest, { hospitalId: secondHospital.id })) {
+        toast.error(t.privateCar, { description: `${t.secondTitle}: ${t.privateCarCuban}` });
         return;
       }
     }
@@ -756,7 +762,7 @@ export function ClinicForm({ t, lang, initial, defaultDate, returnOnly = false, 
               <ArrowLeftRight className="mt-1 h-4 w-4 shrink-0" /> {t.transferHint}
             </p>
           )}
-          <GuestPicker t={t} guests={guests} guest={guest} onSelect={selectGuest} notListed={notListed} />
+          <GuestPicker t={t} guests={guests} guest={guest} onSelect={selectGuest} notListed={notListed} cubanOnly={form.hospitalId !== PRIVATE_CAR_HOSPITAL} />
           {hasSpecialNeeds(guest) && <SpecialNeedsNote t={t} chosen={!initial} />}
           {transfer && <HospitalSelect id="hospital-from" label={t.transferFrom} value={form.fromHospitalId} onChange={(fromHospitalId) => setForm({ ...form, fromHospitalId })} hospitals={hospitals} lang={lang} placeholder={t.hospitalChoose} noMatch={t.hospitalNoMatch} wide />}
           <HospitalSelect id="hospital-first" label={returnOnly ? t.returnHospital : transfer ? t.transferTo : t.hospital} value={form.hospitalId} onChange={(hospitalId) => setForm({ ...form, hospitalId })} hospitals={hospitals} lang={lang} placeholder={t.hospitalChoose} noMatch={t.hospitalNoMatch} wide />
@@ -961,8 +967,13 @@ const byUnit = (a: string, b: string) => a.localeCompare(b, "en", { numeric: tru
  * اختيار الضيف من قائمة ضيوف المجمع: بحث بالاسم (العربي أو الإنجليزي أو الهاتف)، أو بالمبنى والشقة
  * لمن كُتب اسمه بطريقة مختلفة. القائمة تظهر تحت الحقول وتضيق مع كل اختيار.
  */
-export function GuestPicker({ t, guests, guest, onSelect, notListed }: {
+export function GuestPicker({ t, guests, guest, onSelect, notListed, cubanOnly }: {
   t: ClinicText;
+  /**
+   * موعد طبي: صاحب السيارة الخاصة يُختار مع تنبيه أنه يُسمح له فقط بموعد في المستشفى الكوبي
+   * (true: المستشفى المختار ليس الكوبي بعد). بلا القيمة (الرحلة غير الطبية) لا يُختار أبدًا.
+   */
+  cubanOnly?: boolean;
   guests: Guest[];
   guest?: Guest;
   onSelect: (guest: Guest | undefined) => void;
@@ -997,7 +1008,7 @@ export function GuestPicker({ t, guests, guest, onSelect, notListed }: {
   const otherName = (item: Guest) => (english ? (item.nameEn ? item.name : "") : item.nameEn);
   /** صاحب السيارة الخاصة ومن يسكن معه في نفس الشقة لا يُضاف لهم موعد */
   function choose(item: Guest) {
-    if (hasPrivateCar(item)) {
+    if (hasPrivateCar(item) && cubanOnly === undefined) {
       setBlocked(item);
       toast.error(t.privateCar, { description: mainName(item), duration: 8000 });
       return;
@@ -1028,7 +1039,10 @@ export function GuestPicker({ t, guests, guest, onSelect, notListed }: {
               {hasSpecialNeeds(guest) && <Badge tone="violet" icon={Accessibility}>{t.specialNeedsBadge}</Badge>}
             </div>
             {/* موعد سابق لضيف أُضيفت شقته إلى السيارات الخاصة */}
-            {hasPrivateCar(guest) && privateCarAlert(guest)}
+            {hasPrivateCar(guest) && (cubanOnly === false
+              ? <p className="mt-2 flex items-start gap-2 rounded-lg bg-amber-50 px-3 py-2 text-xs font-medium leading-5 text-amber-800 ring-1 ring-inset ring-amber-200"><CarFront className="mt-0.5 h-4 w-4 shrink-0" /> {t.privateCarCuban}</p>
+              : cubanOnly ? <p role="alert" className="mt-2 flex items-start gap-2 rounded-lg bg-red-50 px-3 py-2 text-xs font-medium leading-5 text-red-800 ring-1 ring-inset ring-red-200"><CarFront className="mt-0.5 h-4 w-4 shrink-0" /> {t.privateCarCuban}</p>
+              : privateCarAlert(guest))}
             <p className="mt-2 text-[11px] leading-4 text-slate-400">{t.guestFromList}</p>
           </div>
           <button type="button" onClick={() => { onSelect(undefined); requestAnimationFrame(() => inputRef.current?.focus()); }} className={btn("secondary", "sm")}>

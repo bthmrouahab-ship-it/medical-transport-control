@@ -54,6 +54,12 @@ export type SpecialNeed = {
 export type PrivateCar = { id: string; name?: string; plate?: string; buildingNumber: string; apartmentNumber: string };
 export const PRIVATE_CAR_MESSAGE = "هذا الشخص يمتلك سيارة خاصة ولا يمكنه استخدام سيارات المجمع";
 export const hasPrivateCar = (guest?: Pick<Guest, "privateCar"> | null) => guest?.privateCar === true;
+/** الاستثناء الوحيد من منع السيارة الخاصة: موعد طبي في المستشفى الكوبي (بعيد في دخان) — PRIVATE_CAR_HOSPITAL في rules.php */
+export const PRIVATE_CAR_HOSPITAL = "cuban";
+export const PRIVATE_CAR_EXCEPTION = "يُسمح له فقط بموعد في المستشفى الكوبي";
+/** صاحب السيارة الخاصة (أو من يسكن معه) ممنوع من سيارات المجمع إلا لموعد طبي في المستشفى الكوبي */
+export const privateCarBlocked = (guest: Pick<Guest, "privateCar"> | null | undefined, appointment: { hospitalId?: string; category?: string }) =>
+  hasPrivateCar(guest) && !(appointment.hospitalId === PRIVATE_CAR_HOSPITAL && appointment.category !== "غير طبية");
 
 /** المبنى والشقة للمطابقة: بأحرف كبيرة وبلا أصفار في البداية (03 = 3) — نفس unit_key في api/lib/rules.php */
 export function unitKey(buildingNumber: unknown, apartmentNumber: unknown) {

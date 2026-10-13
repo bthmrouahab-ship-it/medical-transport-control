@@ -2,7 +2,7 @@ import { COMPLEX_CLINIC, DEFAULT_HOSPITALS, distanceKm, matchHospital, type Hosp
 import { FLEET_SEED } from "./seedData";
 import { roadKm } from "./roads";
 import { isValidMobile, normalizeGender, normalizeMobile, readAliased, toText, toWesternDigits } from "./text";
-import { PRIVATE_CAR_MESSAGE, findGuestByName, guestIndex, guestOfAppointment, hasPrivateCar, isMinor, type Guest } from "./guests";
+import { PRIVATE_CAR_EXCEPTION, PRIVATE_CAR_MESSAGE, findGuestByName, guestIndex, guestOfAppointment, isMinor, privateCarBlocked, type Guest } from "./guests";
 
 export type AppointmentKind = "عادي" | "احتياجات خاصة";
 export type VehicleKind = "سيدان" | "احتياجات خاصة" | "باص";
@@ -583,11 +583,6 @@ export function parseImportedAppointments(
         errors.push(`الصف ${excelRow}: الضيف «${patientName}» غير موجود في قائمة ضيوف المجمع`);
         return;
       }
-      // صاحب سيارة خاصة أو من يسكن معه في نفس الشقة
-      if (hasPrivateCar(guest)) {
-        errors.push(`الصف ${excelRow}: «${guest.name}»: ${PRIVATE_CAR_MESSAGE}`);
-        return;
-      }
       guestId = guest.id;
       nurse = guest.nurse === true;
       patientName = guest.name;
@@ -605,6 +600,11 @@ export function parseImportedAppointments(
         return;
       }
       destination = hospital.name;
+    }
+    // صاحب سيارة خاصة أو من يسكن معه في نفس الشقة: موعد في المستشفى الكوبي فقط
+    if (index && guestId && privateCarBlocked(index.byId.get(guestId), { hospitalId: hospital?.id })) {
+      errors.push(`الصف ${excelRow}: «${patientName}»: ${PRIVATE_CAR_MESSAGE} (${PRIVATE_CAR_EXCEPTION})`);
+      return;
     }
     const fromHospital = fromName ? matchHospital(fromName, hospitals) : null;
     if (fromName && !fromHospital) {

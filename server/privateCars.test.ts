@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { PRIVATE_CAR_NAME_HEADERS, SPECIAL_NEED_HEADERS, hasPrivateCar, hasSpecialNeeds, parsePrivateCarRows, parseSpecialNeedsRows, planPrivateCars, tableRows, unitKey, type Guest } from "../shared/guests";
+import { PRIVATE_CAR_NAME_HEADERS, SPECIAL_NEED_HEADERS, hasPrivateCar, hasSpecialNeeds, privateCarBlocked, parsePrivateCarRows, parseSpecialNeedsRows, planPrivateCars, tableRows, unitKey, type Guest } from "../shared/guests";
 import { parseImportedAppointments } from "../shared/transport";
 import { DEFAULT_HOSPITALS } from "../shared/hospitals";
 
@@ -54,7 +54,20 @@ describe("private cars: the owner's whole apartment cannot use the complex cars"
     const row = (name: string) => ({ "اسم الضيف أو الرقم": name, "اسم العيادة أو المستشفى": "مستشفى حمد العام", "تاريخ الموعد": "2026-10-05", "وقت الموعد": "10:00", "نوع الرحلة": "عادي" });
     const { appointments, errors } = parseImportedAppointments([row("ابن صاحب السيارة"), row("ضيف بلا سيارة")], [], 1, "2026-10-04", DEFAULT_HOSPITALS, guests);
     expect(appointments.map((appointment) => appointment.guestId)).toEqual(["G-2"]);
-    expect(errors).toEqual(["الصف 2: «ابن صاحب السيارة»: هذا الشخص يمتلك سيارة خاصة ولا يمكنه استخدام سيارات المجمع"]);
+    expect(errors).toEqual(["الصف 2: «ابن صاحب السيارة»: هذا الشخص يمتلك سيارة خاصة ولا يمكنه استخدام سيارات المجمع (يُسمح له فقط بموعد في المستشفى الكوبي)"]);
+  });
+
+  it("the only exception: a medical appointment at The Cuban Hospital", () => {
+    const owner: Guest = { id: "G-1", name: "ابن صاحب السيارة", buildingNumber: "18", apartmentNumber: "209", mobile: "55500001", gender: "ذكر", privateCar: true };
+    expect(privateCarBlocked(owner, { hospitalId: "cuban" })).toBe(false);
+    expect(privateCarBlocked(owner, { hospitalId: "hgh" })).toBe(true);
+    // الرحلة غير الطبية ليست موعدًا في المستشفى
+    expect(privateCarBlocked(owner, { hospitalId: "cuban", category: "غير طبية" })).toBe(true);
+    expect(privateCarBlocked({ privateCar: undefined }, { hospitalId: "hgh" })).toBe(false);
+    const row = { "اسم الضيف أو الرقم": owner.name, "اسم العيادة أو المستشفى": "المستشفى الكوبي", "تاريخ الموعد": "2026-10-05", "وقت الموعد": "10:00", "نوع الرحلة": "عادي" };
+    const { appointments, errors } = parseImportedAppointments([row], [], 1, "2026-10-04", DEFAULT_HOSPITALS, [owner]);
+    expect(errors).toEqual([]);
+    expect(appointments.map((appointment) => appointment.hospitalId)).toEqual(["cuban"]);
   });
 });
 
