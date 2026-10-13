@@ -29,6 +29,7 @@ import { disablePush, enablePush, pushState, refreshPush, type PushState } from 
 import { APP_OPEN_EVENT, APP_RESUME_EVENT, APP_SHARING_EVENT, driverApp, inDriverApp } from "@/lib/driverApp";
 import { DRIVER_THEMES, useDriverTheme } from "@/lib/driverTheme";
 import { useNow } from "@/lib/useShared";
+import { holdAutoReload } from "@/lib/appVersion";
 
 /** أقل فترة بين إرسالين، وأقل مسافة تستدعي إرسالًا أسرع. */
 const SEND_EVERY_MS = 20000;
@@ -105,6 +106,13 @@ export default function DriverPage({ profile, onLogout, onChangePassword }: {
   /** خدمة الموقع في التطبيق تعمل بعد أول موقع (بعد إذن الموقع) */
   const appSharing = useRef(false);
   const [status, setStatus] = useState<Status>("idle");
+  // مشاركة الموقع من المتصفح تتوقف بإعادة الصفحة: لا تُعاد تلقائيًا عند نشر نسخة جديدة (التطبيق يستمر في الإرسال)
+  const browserSharing = status === "sharing" && !driverApp();
+  useEffect(() => {
+    if (!browserSharing) return;
+    holdAutoReload(true);
+    return () => holdAutoReload(false);
+  }, [browserSharing]);
   const [error, setError] = useState<LocationError | null>(null);
   const [last, setLast] = useState<{ lat: number; lng: number; accuracy: number; at: Date } | null>(null);
   const watchId = useRef<number | null>(null);

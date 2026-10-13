@@ -399,9 +399,10 @@ export function Switch({ checked, onChange, label, disabled, size = "md" }: { ch
       )}
     >
       <span className={cx(
-        "rounded-full bg-white shadow-[0_1px_3px_rgba(11,37,69,.3)] transition-transform duration-300 ease-spring group-active:scale-90",
+        "rounded-full bg-white shadow-[0_1px_3px_rgba(11,37,69,.3)] transition-[margin,transform] duration-300 ease-spring group-active:scale-90",
         big ? "h-7 w-7" : "h-5 w-5",
-        checked && (big ? "translate-x-6 rtl:-translate-x-6" : "translate-x-5 rtl:-translate-x-5"),
+        // الهامش من بداية السطر (margin-inline-start) يتبع اتجاه الصفحة أو الجزء الذي فيه المفتاح: يمينًا بالعربية ويسارًا بالإنجليزية
+        checked && (big ? "ms-6" : "ms-5"),
       )} />
     </button>
   );

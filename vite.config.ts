@@ -1,10 +1,21 @@
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import path from "node:path";
-import { defineConfig } from "vite";
+import { defineConfig, type Plugin } from "vite";
+
+// رقم النسخة: يتغير مع كل بناء، ويُكتب في /version.json لتعرف الصفحات المفتوحة أن نسخة جديدة نُشرت (client/src/lib/appVersion.ts)
+const BUILD_ID = new Date().toISOString().replace(/[-:.TZ]/g, "").slice(0, 14);
+const versionFile: Plugin = {
+  name: "version-file",
+  apply: "build",
+  generateBundle() {
+    this.emitFile({ type: "asset", fileName: "version.json", source: JSON.stringify({ build: BUILD_ID }) });
+  },
+};
 
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  plugins: [react(), tailwindcss(), versionFile],
+  define: { __BUILD_ID__: JSON.stringify(BUILD_ID) },
   resolve: {
     alias: {
       "@": path.resolve(import.meta.dirname, "client", "src"),

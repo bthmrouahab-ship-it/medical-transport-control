@@ -13,7 +13,7 @@ const QATAR = L.latLngBounds([QATAR_BOUNDS.south, QATAR_BOUNDS.west], [QATAR_BOU
 /** حالة السيارة على بطاقتها: تنتظر في المستشفى، أو متوقفة خارج المجمع */
 export type VehicleBadge = { text: string; tone: "waiting" | "stopped" };
 
-export default function LiveMap({ hospitals, locations, trips = [], tracks = [], badges, tripCounts, selectedHospitalId, onPick, onSelectHospital, focus, height = 520 }: {
+export default function LiveMap({ hospitals, locations, trips = [], tracks = [], badges, tripCounts, selectedHospitalId, onPick, onSelectHospital, focus, highlight = null, onSelectVehicle, height = 520 }: {
   hospitals: Hospital[];
   locations: VehicleLocation[];
   trips?: MapTrip[];
@@ -28,6 +28,10 @@ export default function LiveMap({ hospitals, locations, trips = [], tracks = [],
   onSelectHospital?: (id: string) => void;
   /** نقطة تنتقل إليها الخريطة (مثل سيارة اختيرت من القائمة) */
   focus?: { lat: number; lng: number; key: number } | null;
+  /** السيارة المختارة: مساراتها واضحة فوق غيرها، ومسارات باقي السيارات باهتة */
+  highlight?: string | null;
+  /** النقر على سيارة أو على أحد مساراتها يختارها، والنقر على مكان فارغ يلغي الاختيار */
+  onSelectVehicle?: (plate: string | null) => void;
   height?: number;
 }) {
   const container = useRef<HTMLDivElement>(null);
@@ -37,6 +41,13 @@ export default function LiveMap({ hospitals, locations, trips = [], tracks = [],
   pickRef.current = onPick;
   const selectRef = useRef(onSelectHospital);
   selectRef.current = onSelectHospital;
+  const vehicleRef = useRef(onSelectVehicle);
+  vehicleRef.current = onSelectVehicle;
+  // النقر على خط أو سيارة يختارها (ولا يصل النقر إلى الخريطة فيلغي الاختيار)
+  const pickVehicle = (plate?: string) => (event: L.LeafletMouseEvent) => {
+    L.DomEvent.stopPropagation(event);
+    if (plate) vehicleRef.current?.(plate);
+  };
 
   useEffect(() => {
     if (!container.current || map.current) return;
@@ -66,6 +77,10 @@ export default function LiveMap({ hospitals, locations, trips = [], tracks = [],
       .addTo(instance);
     layers.current = { tracks: L.layerGroup().addTo(instance), trips: L.layerGroup().addTo(instance), hospitals: L.layerGroup().addTo(instance), vehicles: L.layerGroup().addTo(instance) };
     instance.on("click", (event: L.LeafletMouseEvent) => {
+      if (!pickRef.current) {
+        vehicleRef.current?.(null);
+        return;
+      }
       if (!QATAR.contains(event.latlng)) return;
       pickRef.current?.({ lat: Number(event.latlng.lat.toFixed(6)), lng: Number(event.latlng.lng.toFixed(6)) });
     });
@@ -125,7 +140,9 @@ export default function LiveMap({ hospitals, locations, trips = [], tracks = [],
       .filter((location) => locationFreshness(location).state !== "offline")
       .map((location) => [location.plate, L.latLng(location.lat, location.lng)]));
     const drawn = new Set<string>();
-    for (const trip of trips) {
+    // السيارة المختارة تُرسم أخيرًا فتكون فوق غيرها
+    const ordered = highlight ? [...trips].sort((a, b) => Number(a.plate === highlight) - Number(b.plate === highlight)) : trips;
+    for (const trip of ordered) {
       const car = trip.plate ? positions.get(trip.plate) : undefined;
       const from = trip.from && L.latLng(trip.from.lat, trip.from.lng);
       const to = trip.to && L.latLng(trip.to.lat, trip.to.lng);
@@ -135,40 +152,59 @@ export default function LiveMap({ hospitals, locations, trips = [], tracks = [],
       // مسار الطريق الفعلي إن عُرف (من موقع السيارة الآن إلى المحطة التالية)، وإلا خط مستقيم
       const line = trip.path && trip.path.length > 1 ? trip.path.map(([lat, lng]) => L.latLng(lat, lng)) : straight;
       if (!line) continue;
+      // سيارة مختارة: مساراتها وحدها، ولا تُرسم خطوط باقي السيارات
+      if (highlight && trip.plate !== highlight) continue;
       const key = `${trip.plate}|${trip.phase}|${(straight ?? line).map((point) => point.toString()).join("|")}`;
       if (drawn.has(key)) continue;
       drawn.add(key);
       const road = Boolean(trip.path && trip.path.length > 1);
       const label = escapeHtml(trip.label) + (trip.roadText ? `<br>${escapeHtml(trip.roadText)}` : "");
       const color = trip.phase === "toDestination" ? MAP_COLORS.toDestination : MAP_COLORS.toPickup;
+      const focused = Boolean(highlight && trip.plate === highlight);
+      const dim = Boolean(highlight && !focused);
+      const weight = focused ? 6 : road ? 4 : 3;
       // حد أبيض تحت خط الطريق حتى يظهر فوق طرق الخريطة
-      if (road) L.polyline(line, { color: "#ffffff", weight: 7, opacity: 0.85, interactive: false }).addTo(group);
-      L.polyline(line, trip.phase === "toDestination"
-        ? { color, weight: road ? 4 : 3, opacity: 0.9, ...(road ? {} : { dashArray: "2 8" }) }
-        : { color, weight: road ? 4 : 3, opacity: 0.9, dashArray: road ? "8 6" : "2 8" })
+      if (road && !dim) L.polyline(line, { color: "#ffffff", weight: weight + 3, opacity: 0.85, interactive: false }).addTo(group);
+      const element = L.polyline(line, trip.phase === "toDestination"
+        ? { color, weight, opacity: dim ? 0.15 : 0.9, bubblingMouseEvents: false, ...(road ? {} : { dashArray: "2 8" }) }
+        : { color, weight, opacity: dim ? 0.15 : 0.9, bubblingMouseEvents: false, dashArray: road ? "8 6" : "2 8" })
         .bindTooltip(label)
+        .on("click", pickVehicle(trip.plate))
         .addTo(group)
-        .getElement()?.setAttribute("data-route", road ? "road" : "straight");
+        .getElement();
+      element?.setAttribute("data-route", road ? "road" : "straight");
+      if (trip.plate) element?.setAttribute("data-plate", trip.plate);
+      if (dim) element?.setAttribute("data-dim", "true");
     }
-  }, [trips, locations]);
+  }, [trips, locations, highlight]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // مسار كل سيارة في رحلتها: المواقع التي مرت بها من إرسالها (يُمحى عند بداية رحلتها التالية)
   useEffect(() => {
     const group = layers.current?.tracks;
     if (!group) return;
     group.clearLayers();
-    for (const track of tracks) {
+    const ordered = highlight ? [...tracks].sort((a, b) => Number(a.plate === highlight) - Number(b.plate === highlight)) : tracks;
+    for (const track of ordered) {
       if (track.path.length < 2) continue;
-      L.polyline(track.path, { color: MAP_COLORS.track, weight: 3, opacity: 0.7, lineJoin: "round" })
+      if (highlight && track.plate !== highlight) continue;
+      const focused = Boolean(highlight && track.plate === highlight);
+      const dim = Boolean(highlight && !focused);
+      if (focused) L.polyline(track.path, { color: "#ffffff", weight: 8, opacity: 0.85, interactive: false }).addTo(group);
+      const element = L.polyline(track.path, { color: MAP_COLORS.track, weight: focused ? 5 : 3, opacity: dim ? 0.12 : focused ? 0.95 : 0.7, lineJoin: "round", bubblingMouseEvents: false })
         .bindTooltip(escapeHtml(track.label))
+        .on("click", pickVehicle(track.plate))
         .addTo(group)
-        .getElement()?.setAttribute("data-track", track.plate);
+        .getElement();
+      element?.setAttribute("data-track", track.plate);
+      if (dim) element?.setAttribute("data-dim", "true");
+      if (dim) continue;
       const [lat, lng] = track.path[0];
-      L.circleMarker([lat, lng], { radius: 4, color: "#ffffff", weight: 2, fillColor: MAP_COLORS.track, fillOpacity: 1 })
+      L.circleMarker([lat, lng], { radius: focused ? 6 : 4, color: "#ffffff", weight: 2, fillColor: MAP_COLORS.track, fillOpacity: 1, bubblingMouseEvents: false })
         .bindTooltip(escapeHtml(`بداية الرحلة · ${track.label}`))
+        .on("click", pickVehicle(track.plate))
         .addTo(group);
     }
-  }, [tracks]);
+  }, [tracks, highlight]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // السيارات: بطاقة بأول كلمة من اسم السائق الذي يقودها فقط (بلا رقم اللوحة)، ولون النقطة حسب إشارة GPS، والاسم
   // الكامل ورقم اللوحة عند المرور عليها. آخر موقع قديم (يظهر بالبحث عنه فقط) يذكر منذ متى وصل.
@@ -188,18 +224,19 @@ export default function LiveMap({ hospitals, locations, trips = [], tracks = [],
       const icon = L.divIcon({
         className: "vehicle-pin",
         iconSize: [0, 0],
-        html: `<div class="vehicle-pin__body${fresh.state === "offline" ? " is-offline" : ""}${badge ? ` is-${badge.tone}` : ""}" data-plate="${escapeHtml(location.plate)}">`
+        html: `<div class="vehicle-pin__body${fresh.state === "offline" ? " is-offline" : ""}${badge ? ` is-${badge.tone}` : ""}${location.plate === highlight ? " is-selected" : highlight ? " is-dim" : ""}" data-plate="${escapeHtml(location.plate)}">`
           + `<div class="vehicle-pin__label"><b>${escapeHtml(short)}</b>${note ? `<span>${escapeHtml(note)}</span>` : ""}</div>`
           + `<span class="vehicle-pin__dot" style="background:${fresh.color}"></span></div>`,
       });
-      L.marker([location.lat, location.lng], { icon, zIndexOffset: fresh.state === "offline" ? 500 : 1000, keyboard: false })
+      L.marker([location.lat, location.lng], { icon, zIndexOffset: location.plate === highlight ? 2000 : fresh.state === "offline" ? 500 : 1000, keyboard: false })
+        .on("click", pickVehicle(location.plate))
         .bindTooltip(
           `<b>${escapeHtml(name)}</b> · <span dir="ltr">${escapeHtml(location.plate)}</span><br>GPS: ${gps}${location.speed ? ` · ${location.speed} كم/س` : ""}${trip ? `<br>${escapeHtml(trip.label)}` : ""}${badge ? `<br>${escapeHtml(badge.text)}` : ""}`,
           { direction: "top", offset: [0, -34] },
         )
         .addTo(group);
     }
-  }, [locations, trips, badges]);
+  }, [locations, trips, badges, highlight]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const viewButton = "h-8 rounded-lg px-3 text-xs font-semibold text-slate-700 transition hover:bg-slate-100";
   return (

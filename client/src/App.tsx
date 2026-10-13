@@ -3,6 +3,7 @@ import { Toaster } from "sonner";
 import ErrorBoundary from "./components/ErrorBoundary";
 import InstallPrompt from "./components/InstallPrompt";
 import RolePortal from "./pages/RolePortal";
+import UpdateBanner from "./components/UpdateBanner";
 
 const toasterStyle = {
   "--normal-bg": "#ffffff",
@@ -19,6 +20,7 @@ export default function App() {
       <Toaster position="top-center" richColors theme="light" className="toaster group" style={toasterStyle} />
       <RolePortal />
       <InstallPrompt />
+      <UpdateBanner />
     </ErrorBoundary>
   );
 }
