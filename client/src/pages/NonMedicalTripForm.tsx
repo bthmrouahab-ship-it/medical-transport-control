@@ -1,7 +1,7 @@
 import { isValidMobile, normalizeMobile } from "@shared/text";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
-import { Accessibility, CheckCircle2, MapPin, Repeat, Truck, X } from "lucide-react";
+import { Accessibility, CalendarPlus, CheckCircle2, MapPin, Repeat, Send, Truck, X } from "lucide-react";
 import {
   AUTHORIZED_BY_MAX,
   NON_MEDICAL_DESTINATIONS,
@@ -36,7 +36,8 @@ const dayText = (date: string) => `${WEEKDAY_NAMES[new Date(`${date}T00:00:00Z`)
  * (بنفس طريقة موعد العيادة): المبنى والشقة والجنس من القائمة، والهاتف منها ويمكن تغييره.
  * «رحلة متكررة»: نفس الرحلة في أيام محددة (الأحد إلى الخميس افتراضيًا) حتى تاريخ، بنفس رقم السلسلة (seriesId)،
  * بلا طلب سيارة: كل رحلة «بانتظار طلب السيارة» تظهر لمشرف المبنى في يومها، ولا تصل إلى مشرف السيارات حتى يطلبها.
- * الرحلة الواحدة مع طلب سيارتها مباشرة، وطلبها ليوم قادم فيه يوم الحجز (requestedOn).
+ * الرحلة الواحدة مع طلب سيارتها مباشرة، وطلبها ليوم قادم فيه يوم الحجز (requestedOn)؛ أو «أطلب السيارة لاحقًا»
+ * (fleetRequest): تُسجَّل «بانتظار طلب السيارة» بلا طلب حتى لا تُنسى، ويطلبها المشرف بنفسه حين يريد.
  * editing: تعديل رحلة لم تُرسل سيارتها (nonMedicalOpen): نفس النموذج بلا التكرار، ويُحفظ بنفس رقمها وحالتها (onUpdate).
  */
 export default function NonMedicalTripForm({ defaultDate, editing, onSave, onUpdate, onCancel }: {
@@ -67,6 +68,9 @@ export default function NonMedicalTripForm({ defaultDate, editing, onSave, onUpd
   const [repeat, setRepeat] = useState({ enabled: false, days: RECURRING_DEFAULT_DAYS, until: addDays(defaultDate, 27) });
   // العودة التلقائية بوقت ثابت (تُختار مع الرحلة المتكررة)، وإلا يطلبها مشرف المبنى
   const [autoReturn, setAutoReturn] = useState({ enabled: Boolean(editing?.returnAt), at: editing?.returnAt ?? "" });
+  // طلب السيارة الآن (يظهر في «بانتظار التوزيع»)، أو تسجيل الرحلة فقط وطلب سيارتها لاحقًا
+  const [requestNow, setRequestNow] = useState(true);
+  const later = !editing && !repeat.enabled && !requestNow;
   // أيام الرحلة المتكررة (بلا يوم اليوم إن مضى وقته)، أو null لمدة غير صالحة
   const seriesDates = useMemo(() => {
     if (!repeat.enabled) return null;
@@ -192,8 +196,9 @@ export default function NonMedicalTripForm({ defaultDate, editing, onSave, onUpd
         category: "غير طبية",
         kind: form.kind,
         assistance: form.assistance,
-        // المتكررة: ينتظر طلب مشرف المبنى في يومها
-        status: repeat.enabled ? "بانتظار طلب السيارة" : "تم طلب السيارة",
+        // المتكررة: ينتظر طلب مشرف المبنى في يومها، و«لاحقًا»: ينتظر أن يطلبها مشرف السيارات
+        status: repeat.enabled || later ? "بانتظار طلب السيارة" : "تم طلب السيارة",
+        ...(later ? { fleetRequest: true as const } : {}),
         ...series,
         ...(autoReturn.enabled ? { returnAt: autoReturn.at } : {}),
         authorizedBy,
@@ -208,7 +213,7 @@ export default function NonMedicalTripForm({ defaultDate, editing, onSave, onUpd
         // حجز ليوم قادم: السيارة مطلوبة من وقت الانطلاق في يومه
         ...(appointmentDate !== today ? { requestedOn: today } : {}),
       };
-      return repeat.enabled ? { appointment } : { appointment, request };
+      return repeat.enabled || later ? { appointment } : { appointment, request };
     }));
   }
 
@@ -219,7 +224,7 @@ export default function NonMedicalTripForm({ defaultDate, editing, onSave, onUpd
       title={editing ? "تعديل الرحلة غير الطبية" : "رحلة غير طبية"}
       description={editing
         ? `${editing.patientName} · ${editing.clinic} · ${editing.appointmentDate} ${editing.appointmentAt}${editing.seriesId ? " · هذه الرحلة فقط من الرحلات المتكررة" : ""}`
-        : "تُضاف مباشرة إلى الطلبات بانتظار التوزيع"}
+        : "تُضاف إلى الطلبات بانتظار التوزيع، أو تُسجَّل لتطلب سيارتها لاحقًا"}
       className="mb-6"
       actions={<button type="button" onClick={onCancel} aria-label="إغلاق" className={btn("ghost", "sm")}><X className="h-4 w-4" /></button>}
     >
@@ -256,6 +261,21 @@ export default function NonMedicalTripForm({ defaultDate, editing, onSave, onUpd
         )}
         <div className="sm:col-span-2"><DateChooser label={repeat.enabled ? "من تاريخ" : "التاريخ"} value={form.appointmentDate} onChange={(value) => setForm({ ...form, appointmentDate: value })} /></div>
         <Field label="الوقت" value={form.appointmentAt} onChange={(value) => setForm({ ...form, appointmentAt: value })} type="time" />
+
+        {!editing && !repeat.enabled && (
+          <fieldset className="sm:col-span-2">
+            <legend className={labelClass}>طلب السيارة</legend>
+            <div className="grid gap-2 sm:grid-cols-2">
+              <button type="button" aria-pressed={requestNow} onClick={() => setRequestNow(true)} className={choiceClass(requestNow)}><Send className="h-5 w-5" /> الآن</button>
+              <button type="button" aria-pressed={!requestNow} onClick={() => setRequestNow(false)} className={choiceClass(!requestNow)}><CalendarPlus className="h-5 w-5" /> لاحقًا (أطلبها بنفسي)</button>
+            </div>
+            <p className="mt-2 text-xs leading-5 text-slate-500">
+              {requestNow
+                ? "تظهر الرحلة في «بانتظار التوزيع» فور إضافتها."
+                : "تُسجَّل الرحلة فقط حتى لا تُنسى، وتظهر في «رحلات غير طبية لم تُطلب سيارتها» مع زر «طلب السيارة» تضغطه حين تريد. لا تظهر لمشرف المبنى قبل ذلك."}
+            </p>
+          </fieldset>
+        )}
 
         {!editing && <label className={cx(choiceClass(repeat.enabled), "cursor-pointer sm:col-span-2")}>
           <input type="checkbox" checked={repeat.enabled} onChange={(event) => {
@@ -326,7 +346,7 @@ export default function NonMedicalTripForm({ defaultDate, editing, onSave, onUpd
         <NeedsField t={CLINIC_TEXT.ar} value={form.assistance} minor={false} onChange={(assistance) => setForm((current) => ({ ...current, assistance }))} />
 
         <div className="flex gap-3 border-t border-slate-100 pt-5 sm:col-span-2">
-          <button className={cx(btn("primary", "lg"), "flex-1")}><CheckCircle2 className="h-4 w-4" /> {editing ? "حفظ التعديل" : repeat.enabled && seriesDates?.length ? `إضافة ${seriesDates.length.toLocaleString("en")} رحلة` : "إضافة الرحلة"}</button>
+          <button className={cx(btn("primary", "lg"), "flex-1")}><CheckCircle2 className="h-4 w-4" /> {editing ? "حفظ التعديل" : repeat.enabled && seriesDates?.length ? `إضافة ${seriesDates.length.toLocaleString("en")} رحلة` : later ? "تسجيل الرحلة" : "إضافة الرحلة"}</button>
           <button type="button" onClick={onCancel} className={btn("secondary", "lg")}>إلغاء</button>
         </div>
       </form>

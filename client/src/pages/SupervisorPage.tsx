@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import { goTo, reveal } from "@/lib/notify";
-import { Accessibility, AlertTriangle, ArrowLeftRight, Ban, BellRing, BriefcaseMedical, Building2, Check, CheckCircle2, ChevronDown, Clock3, Footprints, Hospital, House, Link2, MapPin, MessageSquareWarning, Pencil, Flag, RotateCcw, ShieldCheck, Siren, Smartphone, Stethoscope, Timer, Truck, UserMinus, Users, XCircle } from "lucide-react";
+import { Accessibility, AlertTriangle, ArrowLeftRight, Ban, BellRing, BriefcaseMedical, Building2, Check, CheckCircle2, ChevronDown, Clock3, Footprints, Hospital, House, Link2, MapPin, MessageSquareWarning, PauseCircle, Pencil, Flag, RotateCcw, ShieldCheck, Siren, Smartphone, Stethoscope, Timer, Truck, UserCheck, UserMinus, Users, XCircle } from "lucide-react";
 import { NURSE_BUILDING } from "@shared/guests";
 import { isValidMobile, normalizeMobile } from "@shared/text";
 import {
@@ -36,6 +36,7 @@ import {
   pickupLabels,
   isEmergencyReferral,
   EMERGENCY_PICKUP_BUILDING,
+  isHeld,
 } from "@shared/transport";
 import { LATE_MINUTES, minutesSince, tripEndpoints, tripPhase, type TripPhase } from "@shared/trips";
 import { distanceKm } from "@shared/hospitals";
@@ -151,6 +152,8 @@ export type RequestHandlers = {
   onSelfReturn: (appointment: ClinicAppointment) => void;
   /** تصحيح رقم هاتف الضيف قبل طلب السيارة (إن كان خطأ) */
   onEditMobile: (appointment: ClinicAppointment, mobile: string) => void;
+  /** «الضيف جاهز»: طلب أجّله مشرف السيارات (أُزيل الضيف من الرحلة لأنه غير جاهز) يعود إلى التوزيع */
+  onReleaseHeld: (requestId: string) => void;
 };
 
 /** المباني التي يتابعها المشرف على هذا الجهاز (فارغة = كل المباني). */
@@ -177,7 +180,7 @@ function newRequest(appointment: ClinicAppointment): VehicleRequest {
   };
 }
 
-export function SupervisorHome({ uid, userName = "", lead = false, nurses = false, lang = "ar", appointments, requests, vehicles, onRequest, onUpdateRequest, onCancel, onReturn, onTransfer, onCancelAppointment, onCheckReply, onNurseReturn, onSelfReturn, onEditMobile, onUrgent, onUrgentOutcome }: {
+export function SupervisorHome({ uid, userName = "", lead = false, nurses = false, lang = "ar", appointments, requests, vehicles, onRequest, onUpdateRequest, onCancel, onReturn, onTransfer, onCancelAppointment, onCheckReply, onNurseReturn, onSelfReturn, onEditMobile, onReleaseHeld, onUrgent, onUrgentOutcome }: {
   /** رقم حساب المشرف: يرى متابعة طلباته هو فقط */
   uid: string;
   /** اسم المشرف: في استمارة الشكوى */
@@ -251,6 +254,8 @@ export function SupervisorHome({ uid, userName = "", lead = false, nurses = fals
   const stageOf = (appointment: ClinicAppointment): Stage | null => {
     if (transferredFrom.has(appointment.id)) return null;
     const request = latest.get(appointment.id);
+    // رحلة غير طبية يطلب سيارتها مشرف السيارات بنفسه: لا تظهر هنا قبل طلبها
+    if (!request && appointment.fleetRequest) return null;
     if (!request) return requestWindow(appointment, now).open ? "request" : "expired";
     if (request.direction === "عودة") return follows(request) ? "progress" : null;
     if (BEFORE_PICKUP.includes(request.status)) return follows(request) ? "progress" : null;
@@ -346,7 +351,7 @@ export function SupervisorHome({ uid, userName = "", lead = false, nurses = fals
   const matches = new Map(findUnrequestedMatches(todays, requests, hospitals, now).map((match) => [match.appointment.id, match]));
   const matchCount = toRequest.filter((row) => matches.has(row.appointment.id)).length;
   // مواعيد بلا طلب يمكن طلبها معًا (نفس الوجهة أو وجهة مجاورة خلال 30 دقيقة)، ولو في مبنى آخر
-  const openUnrequested = todays.filter((appointment) => appointment.status === "بانتظار طلب السيارة" && !isReturnOnly(appointment) && !latest.has(appointment.id) && requestWindow(appointment, now).open);
+  const openUnrequested = todays.filter((appointment) => appointment.status === "بانتظار طلب السيارة" && !appointment.fleetRequest && !isReturnOnly(appointment) && !latest.has(appointment.id) && requestWindow(appointment, now).open);
   const partnerOf = (appointment: ClinicAppointment) => openUnrequested.find((other) => {
     if (other.id === appointment.id || isReturnOnly(appointment)) return false;
     const details = calculateTripGroupingScore(appointment, other, hospitals);
@@ -511,6 +516,7 @@ export function SupervisorHome({ uid, userName = "", lead = false, nurses = fals
                   onUpdateRequest={onUpdateRequest}
                   onCheckReply={onCheckReply}
                   onCancel={onCancel}
+                  onReleaseHeld={onReleaseHeld}
                   persons={requestPersons(request, appointment, requests)}
                   driverPhone={vehicles.find((vehicle) => vehicle.plate === request.vehiclePlate)?.phone}
                   now={now}
@@ -1013,7 +1019,7 @@ function GuestDetails({ appointment, request, driver, persons, onEditMobile }: {
         )}
         {/* غيّر مشرف السيارات السيارة بعد إرسالها (عطل أو حادث أو تأخر) */}
         {request?.removedFrom && request.status === "بانتظار التوزيع" && (
-          <span className="w-full font-medium text-red-700">{t("أُزيل من رحلة السيارة", "Removed from the trip of car")} <span dir="ltr">{request.removedFrom}</span>{request.removeReason ? ` · ${request.removeReason}` : ""} · {t("ينتظر سيارة أخرى", "waiting for another car")}</span>
+          <span className="w-full font-medium text-red-700">{t("أُزيل من رحلة السيارة", "Removed from the trip of car")} <span dir="ltr">{request.removedFrom}</span>{request.removeReason ? ` · ${request.removeReason}` : ""} · {request.held ? t("مؤجل حتى يجهز", "on hold until ready") : t("ينتظر سيارة أخرى", "waiting for another car")}</span>
         )}
         {request?.previousPlate && request.vehiclePlate && request.status !== "وصلت الوجهة" && (
           <span className="w-full font-medium text-amber-800">{t("تغيّرت السيارة: بدل", "Car changed: instead of")} <span dir="ltr">{request.previousPlate}</span>{request.changeReason ? ` · ${request.changeReason}` : ""}</span>
@@ -1197,7 +1203,7 @@ function RequestRow({ appointment, day, match, partner, earlier, now, onRequest,
   );
 }
 
-function ProgressRow({ appointment, request, byOther = false, day, driver, phase, from, persons, driverPhone, now, onUpdateRequest, onCheckReply, onCancel, onCancelAppointment }: {
+function ProgressRow({ appointment, request, byOther = false, day, driver, phase, from, persons, driverPhone, now, onUpdateRequest, onCheckReply, onCancel, onReleaseHeld, onCancelAppointment }: {
   appointment: ClinicAppointment;
   request: VehicleRequest;
   /** عدد الأشخاص في الرحلة (الضيف ومرافقه والـ Nurse، أو الـ Nurse وحدها) */
@@ -1215,9 +1221,12 @@ function ProgressRow({ appointment, request, byOther = false, day, driver, phase
   onUpdateRequest: RequestHandlers["onUpdateRequest"];
   onCheckReply: RequestHandlers["onCheckReply"];
   onCancel: RequestHandlers["onCancel"];
+  onReleaseHeld: RequestHandlers["onReleaseHeld"];
   onCancelAppointment?: () => void;
 }) {
   const { t, en, guest, place } = useText();
+  // أجّله مشرف السيارات لأن الضيف غير جاهز: لا تُرسل سيارة حتى «الضيف جاهز»
+  const held = isHeld(request);
   const name = guest(appointment);
   const returning = request.direction === "عودة";
   // الذهاب: بعد الاستلام تبقى الرحلة هنا «في الطريق إلى الوجهة» حتى تصل
@@ -1238,7 +1247,9 @@ function ProgressRow({ appointment, request, byOther = false, day, driver, phase
       ? <Badge tone="blue" icon={Timer}>{t("في الطريق · الوصول المتوقع", "On the way · expected")} <span dir="ltr" className="tabular">{timeLabel(phase.etaAt)}</span>{phase.late ? t(" (متأخرة)", " (late)") : ""}</Badge>
       : late !== null
         ? <Badge tone="red" icon={AlertTriangle}>{t(`تأخرت السيارة · ${late} د`, `Car late · ${late} min`)}</Badge>
-        : <Badge tone={step === 0 ? "amber" : "blue"}>{step === 0 ? t("بانتظار إرسال سيارة", "Waiting for a car") : rider(requestStatusText(request.status, en))}</Badge>;
+        : held
+          ? <Badge tone="neutral" icon={PauseCircle}>{t("مؤجل · الضيف غير جاهز", "On hold · guest not ready")}</Badge>
+          : <Badge tone={step === 0 ? "amber" : "blue"}>{step === 0 ? t("بانتظار إرسال سيارة", "Waiting for a car") : rider(requestStatusText(request.status, en))}</Badge>;
   return (
     <Expandable
       target={`request:${request.id}`}
@@ -1261,7 +1272,9 @@ function ProgressRow({ appointment, request, byOther = false, day, driver, phase
           </>}
         />
       )}
-      action={next && <button onClick={() => onUpdateRequest(request.id, next.status)} className={btn("dark")}><CheckCircle2 className="h-4 w-4" /> {next.label}</button>}
+      action={held
+        ? <button onClick={() => onReleaseHeld(request.id)} className={btn("dark")}><UserCheck className="h-4 w-4" /> {t("الضيف جاهز", "Guest ready")}</button>
+        : next && <button onClick={() => onUpdateRequest(request.id, next.status)} className={btn("dark")}><CheckCircle2 className="h-4 w-4" /> {next.label}</button>}
     >
       <GuestDetails appointment={appointment} request={request} driver={driver} persons={persons} />
       {byOther && request.createdAt && <p className="mt-2 flex items-center gap-1 text-xs text-violet-700"><Building2 className="h-3.5 w-3.5" /> طلبه {request.requestedByName || "مشرف مبنى آخر"} الساعة {request.createdAt}</p>}
@@ -1269,7 +1282,9 @@ function ProgressRow({ appointment, request, byOther = false, day, driver, phase
       {(request.arrivalCheck || request.pickupCheck) && (
         <DriverCheckBox request={request} appointment={appointment} from={from} onReply={(kind, reply) => onCheckReply(request, kind, reply)} />
       )}
-      {request.status === "بانتظار التوزيع" && <p className="mt-2 text-xs text-slate-500">{t(`بانتظار أن يرسل مشرف السيارات سيارة${from ? ` إلى ${from.clinic}` : ""}`, `Waiting for the fleet supervisor to send a car${from ? ` to ${place(from)}` : ""}`)}</p>}
+      {request.status === "بانتظار التوزيع" && <p className="mt-2 text-xs text-slate-500">{held
+        ? t("أجّل مشرف السيارات الطلب لأن الضيف غير جاهز. اضغط «الضيف جاهز» عندما يجهز ليرسل له سيارة.", "The fleet supervisor put the request on hold because the guest was not ready. Press “Guest ready” when the guest is ready.")
+        : t(`بانتظار أن يرسل مشرف السيارات سيارة${from ? ` إلى ${from.clinic}` : ""}`, `Waiting for the fleet supervisor to send a car${from ? ` to ${place(from)}` : ""}`)}</p>}
       {driverPhone && (request.status === "تم إرسال السيارة" || request.status === "وصلت السيارة") && (
         <DriverCall request={request} driver={driver} phone={driverPhone} now={now} />
       )}

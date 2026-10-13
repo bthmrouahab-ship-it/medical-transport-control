@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { appointmentsAfterPickup, appointmentsBeforePickup, removeRequestFromTrip, type ClinicAppointment, type VehicleRequest } from "../shared/transport";
+import { appointmentsAfterPickup, appointmentsBeforePickup, isHeld, releaseHeld, removeRequestFromTrip, type ClinicAppointment, type VehicleRequest } from "../shared/transport";
 
 const now = new Date("2026-10-02T07:30:00.000Z");
 const pickedUp: VehicleRequest = {
@@ -39,5 +39,41 @@ describe("removing a guest from a running trip", () => {
     expect(appointmentsBeforePickup(list, { ...pickedUp, nurseOnly: true })).toBe(list);
     expect(appointmentsAfterPickup([appointment("A2", "تم طلب السيارة")], pickedUp)[0].status).toBe("تم استلام المريض");
     expect(appointmentsAfterPickup([appointment("A2", "طلب عودة")], { ...pickedUp, direction: "عودة" })[0].status).toBe("مكتملة");
+  });
+});
+
+describe("a guest who is not ready: the request waits until «الضيف جاهز»", () => {
+  it("removing with hold keeps the request out of dispatch, with the time it was put on hold", () => {
+    const next = removeRequestFromTrip(pickedUp, "الضيف غير جاهز", now, true);
+    expect(next).toMatchObject({ status: "بانتظار التوزيع", held: true, heldAt: now.toISOString(), removeReason: "الضيف غير جاهز" });
+    expect(isHeld(next)).toBe(true);
+    // بلا تأجيل يعود إلى التوزيع مباشرة
+    expect(isHeld(removeRequestFromTrip(pickedUp, "لم يركب السيارة", now))).toBe(false);
+  });
+
+  it("«الضيف جاهز» brings it back to dispatch and keeps the rest", () => {
+    const ready = releaseHeld(removeRequestFromTrip(pickedUp, "الضيف غير جاهز", now, true));
+    expect(ready.held).toBeUndefined();
+    expect(ready.heldAt).toBeUndefined();
+    expect(isHeld(ready)).toBe(false);
+    expect(ready).toMatchObject({ status: "بانتظار التوزيع", removedFrom: "111", requestedBy: "4" });
+  });
+
+  it("only a request waiting for a car counts as on hold", () => {
+    expect(isHeld({ held: true, status: "تم إرسال السيارة" })).toBe(false);
+  });
+});
+
+describe("the new fields survive loading from the server", () => {
+  it("a held request and a trip to request later", async () => {
+    const { migrateAppointment, migrateRequest } = await import("../shared/transport");
+    const held = migrateRequest({ ...removeRequestFromTrip(pickedUp, "الضيف غير جاهز", now, true) });
+    expect(held?.held).toBe(true);
+    expect(held?.heldAt).toBe(now.toISOString());
+    // التأجيل لطلب أُرسلت سيارته لا معنى له
+    expect(migrateRequest({ ...pickedUp, held: true, heldAt: now.toISOString() })?.held).toBeUndefined();
+    const trip = { id: "T1", patientName: "ضيف", clinic: "المدرسة", buildingNumber: "5", apartmentNumber: "1", mobile: "55500000", appointmentDate: "2026-10-02", appointmentAt: "10:00", category: "غير طبية", kind: "عادي", assistance: [], status: "بانتظار طلب السيارة" };
+    expect(migrateAppointment({ ...trip, fleetRequest: true })?.fleetRequest).toBe(true);
+    expect(migrateAppointment({ ...trip, category: "طبية", fleetRequest: true })?.fleetRequest).toBeUndefined();
   });
 });

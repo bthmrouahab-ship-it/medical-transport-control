@@ -39,6 +39,9 @@ import {
   Wand2,
   School,
   CalendarClock,
+  CalendarPlus,
+  PauseCircle,
+  UserCheck,
 } from "lucide-react";
 import {
   BUS_ROLES,
@@ -56,6 +59,8 @@ import {
   BUS_ROLE_LABELS,
   CHANGE_VEHICLE_REASONS,
   REMOVE_FROM_TRIP_REASONS,
+  NOT_READY_REASON,
+  isHeld,
   VEHICLE_FAULT_REASONS,
   appointmentDateTime,
   appointmentPickupLabel,
@@ -238,7 +243,7 @@ const roleOf = (vehicle: Vehicle) => (vehicleRoleOf(vehicle) ? BUS_ROLE_LABELS[v
  */
 type VehicleChoice = { vehicle: Vehicle; why: string | null; warning?: string | null; regular?: boolean; reserved?: boolean };
 
-export function FleetSupervisorPage({ vehicles, appointments, requests, date, onDateChange, onManager, onUpdate, onDispatch, onDispatchMany, onArrived, onEndTrip, onChangeVehicle, onRemoveFromTrip, onAddToTrip, onExport, onAddTrips, onStopSeries, onEditTrip, onDeleteTrip }: {
+export function FleetSupervisorPage({ vehicles, appointments, requests, date, onDateChange, onManager, onUpdate, onDispatch, onDispatchMany, onArrived, onEndTrip, onChangeVehicle, onRemoveFromTrip, onReleaseHeld, onAddToTrip, onExport, onAddTrips, onRequestTrip, onStopSeries, onEditTrip, onDeleteTrip }: {
   vehicles: Vehicle[];
   appointments: ClinicAppointment[];
   requests: VehicleRequest[];
@@ -253,13 +258,17 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
   onEndTrip: (requestIds: string[]) => void;
   /** سيارة أخرى لرحلة أُرسلت لها سيارة (عطل أو حادث أو تأخر)، مع السبب وإيقاف السابقة. يعيد رسالة السائق الجديد */
   onChangeVehicle: (requestIds: string[], vehicle: Vehicle, reason: string, stopOld: boolean) => DriverMessage[];
-  /** إزالة ضيف من رحلة جارية (لم يركب أو سُجّل استلامه خطأً): يعود طلبه إلى «بانتظار التوزيع» */
-  onRemoveFromTrip: (requestId: string, reason: string) => void;
+  /** إزالة ضيف من رحلة جارية (لم يركب أو سُجّل استلامه خطأً): يعود طلبه إلى «بانتظار التوزيع»، أو يُؤجَّل حتى يجهز الضيف (hold) */
+  onRemoveFromTrip: (requestId: string, reason: string, hold: boolean) => void;
+  /** «الضيف جاهز»: يعود الطلب المؤجل إلى «بانتظار التوزيع» */
+  onReleaseHeld: (requestId: string) => void;
   /** ضم ضيف ينتظر السيارة إلى رحلة جارية (استلمه السائق أو سيستلمه). يعيد رسالة السائق */
   onAddToTrip: (requestId: string, tripRequestIds: string[], vehicle: Vehicle, pickedUp: boolean) => DriverMessage[];
   onExport: () => void;
   /** رحلة غير طبية مع طلب سيارتها، أو رحلات متكررة بلا طلب (يطلبها مشرف المبنى في يومها)، في حفظ واحد */
   onAddTrips: (trips: { appointment: ClinicAppointment; request?: VehicleRequest }[]) => void;
+  /** طلب سيارة رحلة غير طبية سجّلها ليطلبها لاحقًا (fleetRequest): تظهر في «بانتظار التوزيع» */
+  onRequestTrip: (appointment: ClinicAppointment) => void;
   /** إيقاف رحلات متكررة قادمة لم تُرسل سيارتها: تُلغى بالسبب ويُحذف طلبها */
   onStopSeries: (appointmentIds: string[], reason: string) => void;
   /** تعديل رحلة غير طبية لم تُرسل سيارتها، أو حذفها مع طلبها */
@@ -330,7 +339,14 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
   const onDate = (trip: Trip) => trip.appointment.appointmentDate === date;
 
   // كل الطلبات بانتظار التوزيع مهما كان يوم الموعد (عودة ضيف ذهب في يوم سابق، أو حجز ليوم قادم): لا يُختار اليوم لتظهر
-  const pending = requests.filter((request) => request.status === "بانتظار التوزيع").map(withAppointment).filter(isTrip);
+  // الطلب المؤجل (الضيف غير جاهز) خارج التوزيع والاقتراحات والعدادات حتى «الضيف جاهز»
+  const pending = requests.filter((request) => request.status === "بانتظار التوزيع" && !isHeld(request)).map(withAppointment).filter(isTrip);
+  const heldTrips = requests.filter(isHeld).map(withAppointment).filter(isTrip)
+    .sort((a, b) => (a.at?.getTime() ?? 0) - (b.at?.getTime() ?? 0));
+  // رحلات غير طبية سجّلها المشرف ليطلب سيارتها لاحقًا (بلا طلب بعد)
+  const laterTrips = appointments
+    .filter((appointment) => appointment.fleetRequest && appointment.status === "بانتظار طلب السيارة" && !requests.some((request) => request.appointmentId === appointment.id))
+    .sort((a, b) => `${a.appointmentDate} ${a.appointmentAt}`.localeCompare(`${b.appointmentDate} ${b.appointmentAt}`));
   // حالات السرطان أولًا، ثم حسب وقت الحاجة إلى السيارة (اليوم والوقت)
   const pendingShown = [...pending].sort((a, b) => Number(isPriority(b.appointment)) - Number(isPriority(a.appointment))
     || (a.at?.getTime() ?? 0) - (b.at?.getTime() ?? 0)
@@ -368,7 +384,7 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
   };
   // سيارة خارج المجمع لم تقطع نصف طريق العودة تُوجَّه إلى أقرب ضيف ينتظر العودة (أي تاريخ)
   const pendingReturns = requests
-    .filter((request) => request.status === "بانتظار التوزيع" && (request.direction === "عودة" || transferRequest(request)))
+    .filter((request) => request.status === "بانتظار التوزيع" && !isHeld(request) && (request.direction === "عودة" || transferRequest(request)))
     .map(withAppointment)
     .filter(isTrip);
   const redirects = suggestReturnRedirects(pendingReturns, dispatchable, locationStates, hospitals,
@@ -818,7 +834,7 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
         />
       )}
 
-      {view === "appointments" ? <AppointmentsOverview appointments={appointments} requests={requests} date={date} now={now} onStopSeries={setStopping} onEditTrip={editTrip} onDeleteTrip={deleteTrip} /> : (<>
+      {view === "appointments" ? <AppointmentsOverview appointments={appointments} requests={requests} date={date} now={now} onStopSeries={setStopping} onEditTrip={editTrip} onDeleteTrip={deleteTrip} onRequestTrip={onRequestTrip} /> : (<>
       {/* شريط الحالة: عدادات حية ملونة، والضغط ينقل إلى القسم */}
       <div className="mb-6">
         <StatusBar
@@ -826,7 +842,7 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
           items={[
             { key: "available", label: "سيارات متاحة", value: forAppointments.length, tone: "green", hint: `${vehicleCounts.inside} داخل المجمع · ${vehicleCounts.outside} خارجه${vehicleCounts.reserved ? ` · ${vehicleCounts.reserved} غير مخصصة للمواعيد` : ""}`, onClick: () => jump("fleet-vehicles") },
             { key: "active", label: "رحلات جارية", value: activeGroups.length, tone: "blue", hint: trackingCount ? `${trackingCount} بمتابعة GPS` : "من الإرسال حتى الوجهة", onClick: () => jump("fleet-active") },
-            { key: "pending", label: "بانتظار التوزيع", value: pending.length, tone: "amber", hint: pendingLater ? `كل الأيام · ${pendingLater} ليوم قادم` : "كل الأيام", onClick: () => jump("fleet-pending") },
+            { key: "pending", label: "بانتظار التوزيع", value: pending.length, tone: "amber", hint: `${pendingLater ? `كل الأيام · ${pendingLater} ليوم قادم` : "كل الأيام"}${heldTrips.length ? ` · ${heldTrips.length} مؤجلة` : ""}${laterTrips.length ? ` · ${laterTrips.length} لم تُطلب` : ""}`, onClick: () => jump("fleet-pending") },
             { key: "late", label: "متأخرة", value: latePending.length + lateTrips.length + stopped.length, tone: "red", hint: `${latePending.length} تنتظر سيارة · ${lateTrips.length} في الطريق${stopped.length ? ` · ${stopped.length} متوقفة` : ""}`, onClick: () => jump(stopped.length ? "fleet-stopped" : latePending.length ? "fleet-pending" : "fleet-active") },
           ]}
         />
@@ -1003,6 +1019,72 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
               </div>
             ) : <EmptyState icon={CheckCircle2} title="لا توجد طلبات بانتظار التوزيع" hint="تظهر هنا طلبات مشرفي المباني فور وصولها" />}
           </Panel>
+
+          {/* أُزيلوا من الرحلة لأنهم غير جاهزين: خارج التوزيع حتى «الضيف جاهز» */}
+          {heldTrips.length > 0 && (
+            <Panel id="fleet-held" tone="neutral" icon={PauseCircle} title="طلبات مؤجلة" count={heldTrips.length} description="الضيف غير جاهز · لا تظهر في «بانتظار التوزيع» حتى تضغط أنت أو مشرف المبنى «الضيف جاهز»">
+              <div className="divide-y divide-slate-100">
+                {heldTrips.map((trip) => (
+                  <div key={trip.request.id} data-target={`held:${trip.request.id}`} className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:p-5">
+                    <div className="flex min-w-0 flex-1 gap-4">
+                      <TimeBlock time={trip.appointment.appointmentAt} day={formatDay(trip.appointment.appointmentDate, now)} />
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <p className="font-semibold text-ink">{trip.appointment.patientName}</p>
+                          {trip.from ? <Badge tone="cyan">{transferLabels(trip.appointment).ar}</Badge> : trip.request.nurseOnly ? <Badge tone="amber">عودة الـ Nurse فقط</Badge> : <Badge tone={trip.request.direction === "عودة" ? "amber" : "neutral"}>{trip.request.direction}</Badge>}
+                          {isNonMedical(trip.appointment) && <Badge tone="violet">غير طبية</Badge>}
+                          <Badge tone="neutral" icon={PauseCircle}>مؤجل{trip.request.heldAt ? ` منذ ${timeLabel(new Date(trip.request.heldAt))}` : ""}</Badge>
+                        </div>
+                        <p className="mt-1 text-sm text-slate-600">{routeLabel(trip.appointment, trip.from)}</p>
+                        <p className="mt-0.5 text-xs text-slate-500">{riderDetails(trip)}</p>
+                        {trip.request.removedFrom && (
+                          <p className="mt-1 text-xs font-medium leading-5 text-slate-600">
+                            <UserMinus className="me-1 inline h-3.5 w-3.5 align-[-3px]" />أُزيل من رحلة السيارة <span dir="ltr">{trip.request.removedFrom}</span>{trip.request.removeReason ? ` · ${trip.request.removeReason}` : ""}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                    <button type="button" onClick={() => onReleaseHeld(trip.request.id)} className={btn("primary")}><UserCheck className="h-4 w-4" /> الضيف جاهز</button>
+                  </div>
+                ))}
+              </div>
+            </Panel>
+          )}
+
+          {/* رحلات غير طبية سُجّلت حتى لا تُنسى: يطلب المشرف سيارتها حين يريد */}
+          {laterTrips.length > 0 && (
+            <Panel id="fleet-later" tone="neutral" icon={CalendarPlus} title="رحلات غير طبية لم تُطلب سيارتها" count={laterTrips.length} description="سجّلتها لتطلب سيارتها لاحقًا · لا تظهر في «بانتظار التوزيع» ولا لمشرف المبنى حتى تضغط «طلب السيارة»">
+              <div className="divide-y divide-slate-100">
+                {laterTrips.map((appointment) => (
+                  <div key={appointment.id} data-target={`later:${appointment.id}`} className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:p-5">
+                    <div className="flex min-w-0 flex-1 gap-4">
+                      <TimeBlock time={appointment.appointmentAt} day={formatDay(appointment.appointmentDate, now)} />
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <p className="font-semibold text-ink">{appointment.patientName}</p>
+                          <Badge tone="violet">غير طبية</Badge>
+                          {appointment.kind === "احتياجات خاصة" && <Badge tone="amber">احتياجات خاصة</Badge>}
+                          {appointment.nurse && <Badge tone="violet" icon={BriefcaseMedical}>ممرضة</Badge>}
+                        </div>
+                        <p className="mt-1 text-sm text-slate-600">{routeLabel(appointment)}</p>
+                        {appointment.authorizedBy && <p className="mt-0.5 text-xs text-slate-500">بإذن {appointment.authorizedBy}</p>}
+                        {appointment.returnAt && <p className="mt-0.5 text-xs text-slate-500">العودة تلقائيًا {appointment.returnAt}</p>}
+                        <p className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1">
+                          <button type="button" onClick={() => editTrip(appointment)} aria-label={`تعديل رحلة ${appointment.patientName}`} className="inline-flex items-center gap-1 text-xs font-medium text-slate-500 underline-offset-2 hover:text-ink hover:underline">
+                            <Pencil className="h-3.5 w-3.5" /> تعديل
+                          </button>
+                          <button type="button" onClick={() => deleteTrip(appointment)} aria-label={`حذف رحلة ${appointment.patientName}`} className="inline-flex items-center gap-1 text-xs font-medium text-slate-500 underline-offset-2 hover:text-red-700 hover:underline">
+                            <Trash2 className="h-3.5 w-3.5" /> حذف
+                          </button>
+                        </p>
+                      </div>
+                    </div>
+                    <button type="button" onClick={() => onRequestTrip(appointment)} className={btn("primary")}><Send className="h-4 w-4" /> طلب السيارة</button>
+                  </div>
+                ))}
+              </div>
+            </Panel>
+          )}
 
           {(groups.length > 0 || joins.length > 0 || returnPickups.length > 0) && (
             <Panel tone="violet" icon={Sparkles} title="اقتراحات جمع الرحلات" count={groups.length + joins.length + returnPickups.length} description="ضيوف لنفس الوجهة أو وجهات متجاورة في نفس التوقيت، وسيارات فيها مقاعد فارغة قريبة منهم">
@@ -1336,8 +1418,8 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
         <RemoveFromTripDialog
           trip={removing.trip}
           alone={removing.alone}
-          onConfirm={(reason) => {
-            onRemoveFromTrip(removing.trip.request.id, reason);
+          onConfirm={(reason, hold) => {
+            onRemoveFromTrip(removing.trip.request.id, reason, hold);
             setRemoving(null);
           }}
           onClose={() => setRemoving(null)}
@@ -1348,7 +1430,7 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
         const day = adding[0].appointment.appointmentDate;
         // الضيوف الذين ينتظرون سيارة في يوم الرحلة: نفس الاتجاه أولًا، ثم الأقرب وقتًا
         const candidates = requests
-          .filter((request) => request.status === "بانتظار التوزيع")
+          .filter((request) => request.status === "بانتظار التوزيع" && !isHeld(request))
           .map(withAppointment)
           .filter(isTrip)
           .filter((trip) => trip.appointment.appointmentDate === day)
@@ -1684,14 +1766,17 @@ function StopSeriesDialog({ appointment, trips, onConfirm, onClose }: { appointm
   );
 }
 
-function RemoveFromTripDialog({ trip, alone, onConfirm, onClose }: { trip: Trip; alone: boolean; onConfirm: (reason: string) => void; onClose: () => void }) {
+function RemoveFromTripDialog({ trip, alone, onConfirm, onClose }: { trip: Trip; alone: boolean; onConfirm: (reason: string, hold: boolean) => void; onClose: () => void }) {
   const pickedUp = trip.request.status === "تم استلام المريض";
   // سجّل السائق الاستلام من تطبيقه (بموقع هاتفه)، لا مشرف المبنى
   const byDriver = pickedUp && Boolean(trip.request.pickupGps || trip.request.pickupCheck);
   const pickedAt = trip.request.pickedUpAt ? new Date(trip.request.pickedUpAt) : null;
-  const [reason, setReason] = useState<string>(pickedUp ? "لم يركب السيارة" : "الضيف غير جاهز");
+  const [reason, setReason] = useState<string>(pickedUp ? "لم يركب السيارة" : NOT_READY_REASON);
   const [other, setOther] = useState("");
   const text = reason === "أخرى" ? other.trim() : reason;
+  // الضيف غير جاهز: الطلب مؤجل حتى «الضيف جاهز» (يختاره المشرف لأي سبب، ومختار افتراضيًا لهذا السبب)
+  const [hold, setHold] = useState<boolean | null>(null);
+  const held = hold ?? reason === NOT_READY_REASON;
   return (
     <Modal
       tone="red"
@@ -1702,7 +1787,7 @@ function RemoveFromTripDialog({ trip, alone, onConfirm, onClose }: { trip: Trip;
       footer={(
         <>
           <button type="button" onClick={onClose} className={btn("secondary")}>إلغاء</button>
-          <button type="button" disabled={!text} onClick={() => onConfirm(text)} className={btn("danger")}><UserMinus className="h-4 w-4" /> إزالة من الرحلة</button>
+          <button type="button" disabled={!text} onClick={() => onConfirm(text, held)} className={btn("danger")}><UserMinus className="h-4 w-4" /> إزالة من الرحلة</button>
         </>
       )}
     >
@@ -1717,11 +1802,15 @@ function RemoveFromTripDialog({ trip, alone, onConfirm, onClose }: { trip: Trip;
         </div>
       )}
       <ul className="space-y-1.5 rounded-xl bg-slate-50 px-4 py-3 text-sm leading-6 text-slate-700 ring-1 ring-inset ring-slate-200/70">
-        <li>يعود طلبه إلى «بانتظار التوزيع» لترسل له سيارة أخرى، وتُلغى عند السائق.</li>
+        <li>{held ? "يُؤجَّل طلبه في «طلبات مؤجلة» ولا يظهر في «بانتظار التوزيع» حتى تضغط أنت أو مشرف المبنى «الضيف جاهز»، وتُلغى عند السائق." : "يعود طلبه إلى «بانتظار التوزيع» لترسل له سيارة أخرى، وتُلغى عند السائق."}</li>
         {pickedUp && <li>سُجّل استلامه، فتعود حالة موعده إلى ما قبل الاستلام.</li>}
         <li>{alone ? "هو الراكب الوحيد: تنتهي رحلة السيارة وتصبح متاحة." : "تبقى الرحلة لباقي الركاب."}</li>
       </ul>
-      <div className="mt-4"><ReasonChoice legend="السبب" reasons={REMOVE_FROM_TRIP_REASONS} value={reason} other={other} onChange={setReason} onOther={setOther} /></div>
+      <div className="mt-4"><ReasonChoice legend="السبب" reasons={REMOVE_FROM_TRIP_REASONS} value={reason} other={other} onChange={(next) => { setReason(next); setHold(null); }} onOther={setOther} /></div>
+      <label className={cx(choiceClass(held), "mt-4 cursor-pointer")}>
+        <input type="checkbox" checked={held} onChange={(event) => setHold(event.target.checked)} className="h-4 w-4 accent-brand-600" />
+        <PauseCircle className="h-4 w-4" /> تأجيل الطلب حتى يجهز الضيف
+      </label>
     </Modal>
   );
 }

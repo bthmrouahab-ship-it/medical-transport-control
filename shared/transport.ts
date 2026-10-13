@@ -96,6 +96,11 @@ export type ClinicAppointment = {
   returnAt?: string;
   /** الرحلة غير الطبية: اسم من أعطى الإذن بطلبها (إلزامي عند إضافتها من مشرف السيارات؛ لا يصل إلى السائق) */
   authorizedBy?: string;
+  /**
+   * رحلة غير طبية سجّلها مشرف السيارات ليطلب سيارتها بنفسه لاحقًا: «بانتظار طلب السيارة» بلا طلب، ولا تظهر لمشرف المبنى
+   * ولا في «بانتظار التوزيع» حتى يضغط «طلب السيارة» (true فقط، ولا تتغير بالتعديل)
+   */
+  fleetRequest?: true;
   /** وقت تسجيل الموعد (ISO)؛ يكتبه الخادم وحده عند الإضافة، للإحصائيات (مجدول قبل يومه أو غير مجدول في يومه) */
   addedAt?: string;
   /**
@@ -346,6 +351,12 @@ export type VehicleRequest = {
   removedFrom?: string;
   removeReason?: string;
   removedAt?: string;
+  /**
+   * طلب مؤجل: أُزيل الضيف من الرحلة لأنه غير جاهز، فيبقى «بانتظار التوزيع» خارج التوزيع والعدادات والاقتراحات حتى يضغط
+   * مشرف السيارات أو مشرف المبنى «الضيف جاهز» (releaseHeld)، ومعه وقت التأجيل
+   */
+  held?: true;
+  heldAt?: string;
 };
 
 export type GpsPoint = { lat: number; lng: number; accuracy?: number | null };
@@ -518,6 +529,7 @@ export function migrateAppointment(value: unknown, index = 0): ClinicAppointment
     ...(toText(raw.seriesId) ? { seriesId: toText(raw.seriesId) } : {}),
     ...(/^\d{2}:\d{2}$/.test(toText(raw.returnAt)) ? { returnAt: toText(raw.returnAt) } : {}),
     ...(toText(raw.authorizedBy) ? { authorizedBy: toText(raw.authorizedBy).slice(0, AUTHORIZED_BY_MAX) } : {}),
+    ...(raw.fleetRequest === true && raw.category === "غير طبية" ? { fleetRequest: true as const } : {}),
     ...(toText(raw.addedAt) && !Number.isNaN(Date.parse(toText(raw.addedAt))) ? { addedAt: toText(raw.addedAt) } : {}),
     ...(raw.urgent === true ? { urgent: true as const } : {}),
     ...(raw.urgent === true && URGENT_OUTCOME_VALUES.includes(raw.urgentOutcome as UrgentOutcome)
@@ -774,6 +786,8 @@ export function migrateRequest(value: unknown): VehicleRequest | null {
     removedFrom: toText(raw.removedFrom) || undefined,
     removeReason: toText(raw.removeReason) || undefined,
     removedAt: isoTime(raw.removedAt),
+    // الطلب المؤجل حتى يجهز الضيف
+    ...(raw.held === true && status === "بانتظار التوزيع" ? { held: true as const, heldAt: isoTime(raw.heldAt) } : {}),
     // الخانات الفارغة لا تُضاف، حتى لا تظهر تغييرات وهمية عند المقارنة قبل الحفظ
     ...Object.fromEntries(Object.entries(check).filter(([, value]) => value !== undefined)),
   };
@@ -811,12 +825,25 @@ export function changeRequestVehicle(request: VehicleRequest, vehicle: Pick<Vehi
 
 /** أسباب إزالة ضيف من رحلة جارية (ومعها «أخرى» مكتوب) */
 export const REMOVE_FROM_TRIP_REASONS = ["لم يركب السيارة", "الضيف غير جاهز", "سجّله السائق خطأً"] as const;
+/** سبب الإزالة الذي يؤجل الطلب افتراضيًا حتى يجهز الضيف */
+export const NOT_READY_REASON = "الضيف غير جاهز";
+
+/** الطلب مؤجل حتى يجهز الضيف: خارج «بانتظار التوزيع» والتوزيع والاقتراحات */
+export function isHeld(request: Pick<VehicleRequest, "held" | "status">) {
+  return request.held === true && request.status === "بانتظار التوزيع";
+}
+
+/** «الضيف جاهز»: يعود الطلب المؤجل إلى «بانتظار التوزيع» */
+export function releaseHeld(request: VehicleRequest): VehicleRequest {
+  const { held: _held, heldAt: _heldAt, ...rest } = request;
+  return rest;
+}
 
 /**
  * إزالة ضيف من رحلة جارية (لم يركب السيارة، أو سجّل السائق استلامه خطأً): يعود طلبه إلى «بانتظار التوزيع» بلا سيارة
  * ولا شيء من مراحل الرحلة، لترسل له سيارة أخرى، ومعه السيارة التي أُزيل منها والسبب. تبقى الرحلة لباقي الركاب.
  */
-export function removeRequestFromTrip(request: VehicleRequest, reason: string, now = new Date()): VehicleRequest {
+export function removeRequestFromTrip(request: VehicleRequest, reason: string, now = new Date(), hold = false): VehicleRequest {
   return {
     id: request.id,
     appointmentId: request.appointmentId,
@@ -834,6 +861,8 @@ export function removeRequestFromTrip(request: VehicleRequest, reason: string, n
     removedFrom: request.vehiclePlate,
     removeReason: reason.trim(),
     removedAt: now.toISOString(),
+    // الضيف غير جاهز: مؤجل حتى «الضيف جاهز»
+    ...(hold ? { held: true as const, heldAt: now.toISOString() } : {}),
   };
 }
 
