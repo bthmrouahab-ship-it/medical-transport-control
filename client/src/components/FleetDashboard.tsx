@@ -251,7 +251,7 @@ export default function FleetDashboard({ canEdit = false, alerts = false, actor,
               </div>
               {highlight && (
                 <p className="flex flex-wrap items-center gap-2 rounded-xl bg-navy-800 px-4 py-2 text-xs text-white shadow-card" role="status">
-                  <span>مسارات السيارة <span dir="ltr" className="font-semibold">{highlight}</span>{highlightDriver ? ` · ${highlightDriver}` : ""} واضحة، ومسارات باقي السيارات باهتة</span>
+                  <span>مسارات السيارة <span dir="ltr" className="font-semibold">{highlight}</span>{highlightDriver ? ` · ${highlightDriver}` : ""} وحدها على الخريطة</span>
                   <button type="button" onClick={() => { selectVehicle(null); if (words.length) search(""); }} className="ms-auto rounded-lg bg-white/15 px-2.5 py-1 font-semibold hover:bg-white/25">إظهار كل السيارات</button>
                 </p>
               )}
@@ -267,7 +267,7 @@ export default function FleetDashboard({ canEdit = false, alerts = false, actor,
                 <li className="flex items-center gap-2"><Dot tone="green" /> GPS مباشر</li>
                 <li className="flex items-center gap-2"><Dot tone="amber" /> آخر موقع قبل دقائق</li>
                 <li className="flex items-center gap-2"><Dot /> غير متصل (يُخفى بعد {MAP_HIDE_AFTER_MINUTES} دقائق إلا بالبحث)</li>
-                <li className="basis-full text-slate-500">اضغط على سيارة أو على أحد خطوطها لإبراز مساراتها وحدها، واضغط على مكان فارغ لإظهار الكل</li>
+                <li className="basis-full text-slate-500">اضغط على سيارة أو على أحد خطوطها لعرض مسارها وحده، واضغط على مكان فارغ لإظهار الكل</li>
               </ul>
             </div>
             <aside className="min-w-0 space-y-4">

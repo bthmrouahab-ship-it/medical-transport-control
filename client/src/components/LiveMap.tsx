@@ -152,6 +152,8 @@ export default function LiveMap({ hospitals, locations, trips = [], tracks = [],
       // مسار الطريق الفعلي إن عُرف (من موقع السيارة الآن إلى المحطة التالية)، وإلا خط مستقيم
       const line = trip.path && trip.path.length > 1 ? trip.path.map(([lat, lng]) => L.latLng(lat, lng)) : straight;
       if (!line) continue;
+      // سيارة مختارة: مساراتها وحدها، ولا تُرسم خطوط باقي السيارات
+      if (highlight && trip.plate !== highlight) continue;
       const key = `${trip.plate}|${trip.phase}|${(straight ?? line).map((point) => point.toString()).join("|")}`;
       if (drawn.has(key)) continue;
       drawn.add(key);
@@ -184,6 +186,7 @@ export default function LiveMap({ hospitals, locations, trips = [], tracks = [],
     const ordered = highlight ? [...tracks].sort((a, b) => Number(a.plate === highlight) - Number(b.plate === highlight)) : tracks;
     for (const track of ordered) {
       if (track.path.length < 2) continue;
+      if (highlight && track.plate !== highlight) continue;
       const focused = Boolean(highlight && track.plate === highlight);
       const dim = Boolean(highlight && !focused);
       if (focused) L.polyline(track.path, { color: "#ffffff", weight: 8, opacity: 0.85, interactive: false }).addTo(group);
