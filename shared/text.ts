@@ -39,6 +39,18 @@ export function readAliased(row: Record<string, unknown>, aliases: string[]) {
   return entry?.[1];
 }
 
+/** رقم الهاتف بلا مسافات ولا شرطات، وبلا رمز قطر (+974 أو 00974 أو 974) قبل الأرقام الثمانية */
 export function normalizeMobile(value: unknown) {
-  return toWesternDigits(toText(value)).replace(/\.0$/, "").replace(/[\s-]/g, "");
+  const digits = toWesternDigits(toText(value)).replace(/\.0$/, "").replace(/[\s\-()]/g, "");
+  return digits.match(/^(?:\+|00)?974(\d{8})$/)?.[1] ?? digits;
 }
+
+/** عدد أرقام الهاتف في قطر: 8 أرقام بالضبط */
+export const MOBILE_DIGITS = 8;
+
+/** رقم هاتف قطري صالح (بعد normalizeMobile): 8 أرقام لا أكثر ولا أقل (valid_mobile في الخادم) */
+export function isValidMobile(value: string) {
+  return /^\d{8}$/.test(value);
+}
+
+export const MOBILE_ERROR = "رقم الهاتف يجب أن يكون 8 أرقام";

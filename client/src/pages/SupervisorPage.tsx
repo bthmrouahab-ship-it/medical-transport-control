@@ -3,7 +3,7 @@ import { toast } from "sonner";
 import { goTo, reveal } from "@/lib/notify";
 import { Accessibility, AlertTriangle, ArrowLeftRight, Ban, BellRing, BriefcaseMedical, Building2, Check, CheckCircle2, ChevronDown, Clock3, Footprints, Hospital, House, Link2, MapPin, MessageSquareWarning, Pencil, Flag, RotateCcw, ShieldCheck, Siren, Smartphone, Stethoscope, Timer, Truck, UserMinus, Users, XCircle } from "lucide-react";
 import { NURSE_BUILDING } from "@shared/guests";
-import { toWesternDigits } from "@shared/text";
+import { isValidMobile, normalizeMobile } from "@shared/text";
 import {
   CANCEL_REASONS,
   appointmentPickupLabel,
@@ -1042,9 +1042,9 @@ function GuestMobile({ mobile, name, onSave }: { mobile: string; name: string; o
 
   function save(event: React.FormEvent) {
     event.preventDefault();
-    const next = toWesternDigits(draft ?? "").replace(/[\s-]/g, "");
-    if (!/^\+?\d{8,15}$/.test(next)) {
-      toast.error(t("أدخل رقم هاتف صحيحًا من 8 إلى 15 رقمًا", "Enter a valid phone number of 8 to 15 digits"));
+    const next = normalizeMobile(draft ?? "");
+    if (!isValidMobile(next)) {
+      toast.error(t("رقم الهاتف يجب أن يكون 8 أرقام", "The phone number must be 8 digits"));
       return;
     }
     if (next !== mobile) onSave(next);

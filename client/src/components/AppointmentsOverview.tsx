@@ -99,6 +99,7 @@ export function AppointmentsOverview({ appointments, requests, date, now, onStop
             {a.nurse && <Badge tone="violet" icon={BriefcaseMedical}>ممرضة</Badge>}
             {a.seriesId && <Badge tone="blue" icon={Repeat}>متكررة</Badge>}
           </p>
+          {a.authorizedBy && <p className="mt-1 text-xs text-slate-500">بإذن {a.authorizedBy}</p>}
           {/* تعديل رحلة غير طبية لم تُرسل سيارتها، أو حذفها */}
           {onEditTrip && onDeleteTrip && nonMedicalOpen(a, requests) && (
             <span className="mt-1 flex flex-wrap gap-x-3">

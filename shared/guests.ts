@@ -1,4 +1,4 @@
-import { normalizeGender, normalizeHeader, normalizeMobile, readAliased, toText, toWesternDigits } from "./text";
+import { isValidMobile, normalizeGender, normalizeHeader, normalizeMobile, readAliased, toText, toWesternDigits } from "./text";
 import type { ClinicAppointment, Gender, VehicleRequest } from "./transport";
 
 /**
@@ -270,7 +270,7 @@ export function normalizeHealthNumber(value: unknown) {
 
 /** رقم الهاتف: الأول إن كُتب أكثر من رقم (55512345/44412345) */
 export function normalizeGuestMobile(value: unknown) {
-  return toText(value).split(/[\/,،;|]|\sو\s/).map(normalizeMobile).find((mobile) => /^\+?\d{7,15}$/.test(mobile)) ?? "";
+  return toText(value).split(/[\/,،;|]|\sو\s/).map(normalizeMobile).find(isValidMobile) ?? "";
 }
 
 /** يقرأ صفوف ملف الضيوف (بعناوين الملف المرفوع أو ما يشبهها). الاسم بالعربية والمبنى والشقة إلزامية، والاسم لا يتكرر. */
@@ -350,7 +350,7 @@ export function validateGuest(guest: GuestRecord, guests: Guest[]): string | nul
   if (guest.buildingNumber.length > 20 || guest.apartmentNumber.length > 20) return "رقم المبنى أو الشقة غير صحيح.";
   const key = normalizeGuestName(guest.name);
   if (guests.some((other) => other.id !== guest.id && normalizeGuestName(other.name) === key)) return "يوجد ضيف بنفس الاسم في القائمة.";
-  if (guest.mobile && !/^\+?\d{7,15}$/.test(guest.mobile)) return "رقم الهاتف غير صحيح.";
+  if (guest.mobile && !isValidMobile(guest.mobile)) return "رقم الهاتف غير صحيح: 8 أرقام.";
   if (guest.age !== undefined && !(Number.isInteger(guest.age) && guest.age >= 0 && guest.age <= 130)) return "العمر غير صحيح.";
   return null;
 }

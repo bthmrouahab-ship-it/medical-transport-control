@@ -10,7 +10,7 @@ const APPOINTMENT_STATUSES = ['بانتظار طلب السيارة', 'تم طل
 const APPOINTMENT_FIELDS = ['id', 'guestId', 'patientName', 'clinic', 'buildingNumber', 'apartmentNumber', 'mobile', 'appointmentDate',
     'appointmentAt', 'hospitalId', 'category', 'kind', 'assistance', 'status', 'cancelReason', 'cancelledBy', 'cancelledAt',
     'gender', 'cancer', 'returnedSelf', 'returnedSelfBy', 'returnedSelfAt', 'approval', 'approvedBy', 'approvedAt', 'excludedBy', 'excludedAt',
-    'returnOnly', 'fromClinic', 'fromHospitalId', 'nurse', 'appointmentType', 'seriesId', 'returnAt', 'addedAt',
+    'returnOnly', 'fromClinic', 'fromHospitalId', 'nurse', 'appointmentType', 'seriesId', 'returnAt', 'authorizedBy', 'addedAt',
     'urgent', 'urgentOutcome', 'urgentOutcomeBy', 'urgentOutcomeAt', 'urgentFrom', '_o'];
 /**
  * الحالة المستعجلة في شفت الليل (shared/urgent.ts): مشرف المبنى يطلب سيارة من المبنى إلى عيادة المجمع من 10 مساءً إلى
@@ -35,7 +35,9 @@ const APPOINTMENT_CONTENT_FIELDS = ['guestId', 'patientName', 'clinic', 'buildin
     'hospitalId', 'category', 'kind', 'assistance', 'gender', 'cancer', 'returnOnly', 'fromClinic', 'fromHospitalId', 'nurse', 'appointmentType'];
 /** بيانات الرحلة غير الطبية التي يعدّلها مشرف السيارات قبل إرسال سيارتها (الضيف والوجهة والتاريخ والوقت والاحتياجات) */
 const NON_MEDICAL_EDIT_FIELDS = ['guestId', 'patientName', 'clinic', 'buildingNumber', 'apartmentNumber', 'mobile', 'appointmentDate', 'appointmentAt',
-    'gender', 'nurse', 'kind', 'assistance', 'returnAt'];
+    'gender', 'nurse', 'kind', 'assistance', 'returnAt', 'authorizedBy'];
+/** أطول اسم لمن أعطى الإذن بالرحلة غير الطبية (authorizedBy) */
+const AUTHORIZED_BY_MAX = 80;
 /** الضيف عاد إلى المجمع بنفسه بلا سيارة عودة (يسجّله مشرف المبنى باسمه ووقته) */
 const SELF_RETURN_FIELDS = ['returnedSelf', 'returnedSelfBy', 'returnedSelfAt'];
 /** خانات إلغاء الموعد (السبب إلزامي، ومن ألغاه، ومتى) */
@@ -551,7 +553,7 @@ function valid_guest(array $data, string $id): bool
         && is_text($data['name'] ?? null, 120) && trim($data['name']) !== ''
         && (!array_key_exists('nameEn', $data) || is_text($data['nameEn'], 120))
         && in_array($data['gender'] ?? 'ذكر', ['ذكر', 'أنثى'], true)
-        && (!array_key_exists('mobile', $data) || (is_string($data['mobile']) && preg_match('/^\+?\d{7,15}$/', $data['mobile'])))
+        && (!array_key_exists('mobile', $data) || valid_mobile($data['mobile']))
         && $unit($data['buildingNumber'] ?? null) && $unit($data['apartmentNumber'] ?? null)
         && (!array_key_exists('age', $data) || (is_int($data['age']) && $data['age'] >= 0 && $data['age'] <= 130))
         && (!array_key_exists('healthNumber', $data) || is_text($data['healthNumber'], 30))
@@ -675,10 +677,29 @@ function hospital_transfer(?array $appointment): bool
     return is_string($appointment['fromClinic'] ?? null) && $appointment['fromClinic'] !== '';
 }
 
-/** رقم هاتف صالح: 8 إلى 15 رقمًا، ويمكن أن يبدأ بـ + */
+/** رقم هاتف قطري صالح: 8 أرقام بالضبط (بلا رمز الدولة 974) */
 function valid_mobile($value): bool
 {
-    return is_string($value) && preg_match('/^\+?\d{8,15}$/', $value) === 1;
+    return is_string($value) && preg_match('/^\d{8}$/', $value) === 1;
+}
+
+/**
+ * مشرف المبنى (ومسؤولهم، ومسؤول العيادة لمواعيد الممرضات) صحّح رقم هاتف الضيف في موعده:
+ * يُحفظ الرقم في قائمة الضيوف (الضيف المربوط guestId) بنفس رقم المراجعة، فتأخذه المواعيد القادمة.
+ */
+function save_guest_mobile(PDO $pdo, array $user, ?array $before, ?array $after, int $rev): void
+{
+    if (!$before || !$after || ($before['mobile'] ?? null) === ($after['mobile'] ?? null)) return;
+    if (!in_array($user['role'], BUILDING_ROLES, true) && !nurse_lead($user, $before)) return;
+    $guestId = $after['guestId'] ?? null;
+    $mobile = $after['mobile'] ?? null;
+    if (!is_string($guestId) || $guestId === '' || !valid_mobile($mobile)) return;
+    $stmt = $pdo->prepare("SELECT data FROM docs WHERE col = 'guests' AND id = ? FOR UPDATE");
+    $stmt->execute([$guestId]);
+    $guest = decode_doc($stmt->fetchColumn() ?: null);
+    if (!$guest || ($guest['mobile'] ?? null) === $mobile) return;
+    $guest['mobile'] = $mobile;
+    save_doc($pdo, 'guests', $guestId, $guest, $rev);
 }
 
 /**
@@ -701,7 +722,7 @@ function building_appointment_error(array $user, array $before, array $after, ar
     // رقم هاتف الضيف خطأ: يصححه قبل طلب السيارة (لموعد وافق عليه مسؤول العيادة)
     if ($changed === ['mobile']) {
         if (($before['status'] ?? null) !== 'بانتظار طلب السيارة' || approval_of($before) !== 'approved') return $denied;
-        return valid_mobile($after['mobile'] ?? null) ? null : 'رقم الهاتف غير صالح';
+        return valid_mobile($after['mobile'] ?? null) ? null : 'رقم الهاتف يجب أن يكون 8 أرقام';
     }
     if (($after['status'] ?? null) === 'ملغي') {
         return in_array($before['status'] ?? null, ['بانتظار طلب السيارة', 'تم طلب السيارة'], true) && valid_cancel($user, $after, $changed) ? null : $denied;
@@ -892,6 +913,9 @@ function valid_appointment(array $data, string $id): bool
         // العودة التلقائية للرحلة غير الطبية: وقتها بعد وقت الذهاب في نفس اليوم (auto_returns في index.php)
         && (!array_key_exists('returnAt', $data) || (is_string($data['returnAt']) && preg_match('/^([01]\d|2[0-3]):[0-5]\d$/', $data['returnAt'])
             && ($data['category'] ?? '') === 'غير طبية' && $data['returnAt'] > (string)($data['appointmentAt'] ?? '')))
+        // الرحلة غير الطبية: اسم من أعطى الإذن بطلبها (يكتبه مشرف السيارات)
+        && (!array_key_exists('authorizedBy', $data) || (is_text($data['authorizedBy'], AUTHORIZED_BY_MAX) && mb_strlen(trim($data['authorizedBy'])) >= 2
+            && ($data['category'] ?? '') === 'غير طبية'))
         && valid_urgent_fields($data)
         && valid_approval($data);
 }
@@ -1056,6 +1080,8 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
                 }
                 // مشرف السيارات يضيف رحلات غير طبية فقط (بلا موافقة العيادة)، لضيف من قائمة ضيوف المجمع
                 if (!($role === 'fleetSupervisor' && ($after['category'] ?? '') === 'غير طبية' && !array_key_exists('approval', $after))) return $denied;
+                // ومعها اسم من أعطى الإذن بالطلب
+                if (!array_key_exists('authorizedBy', $after)) return 'اكتب اسم من أعطى الإذن بطلب الرحلة';
                 return $docOf ? registry_error($after, $docOf, null, false) : null;
             }
             if (!valid_approval($after) || !valid_urgent_fields($after)) return 'بيانات الموعد غير صالحة';

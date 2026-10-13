@@ -1,7 +1,7 @@
 import { COMPLEX_CLINIC, DEFAULT_HOSPITALS, distanceKm, matchHospital, type Hospital } from "./hospitals";
 import { FLEET_SEED } from "./seedData";
 import { roadKm } from "./roads";
-import { normalizeGender, normalizeMobile, readAliased, toText, toWesternDigits } from "./text";
+import { isValidMobile, normalizeGender, normalizeMobile, readAliased, toText, toWesternDigits } from "./text";
 import { PRIVATE_CAR_MESSAGE, findGuestByName, guestIndex, guestOfAppointment, hasPrivateCar, isMinor, type Guest } from "./guests";
 
 export type AppointmentKind = "عادي" | "احتياجات خاصة";
@@ -94,6 +94,8 @@ export type ClinicAppointment = {
    * بعد تسجيل استلام الضيف في الذهاب (auto_returns في api/index.php)، بدل أن يطلبها مشرف المبنى.
    */
   returnAt?: string;
+  /** الرحلة غير الطبية: اسم من أعطى الإذن بطلبها (إلزامي عند إضافتها من مشرف السيارات؛ لا يصل إلى السائق) */
+  authorizedBy?: string;
   /** وقت تسجيل الموعد (ISO)؛ يكتبه الخادم وحده عند الإضافة، للإحصائيات (مجدول قبل يومه أو غير مجدول في يومه) */
   addedAt?: string;
   /**
@@ -126,6 +128,8 @@ export const APPOINTMENT_TYPES: { ar: string; en: string }[] = [
   { ar: "تحويلة طارئة", en: "Emergency referral" },
 ];
 export const APPOINTMENT_TYPE_MAX = 60;
+/** أطول اسم لمن أعطى الإذن بالرحلة غير الطبية (AUTHORIZED_BY_MAX في rules.php) */
+export const AUTHORIZED_BY_MAX = 80;
 
 /** نوع الموعد من Excel أو النموذج: نوع من القائمة (بالعربية أو الإنجليزية) يُحفظ بالعربية، وغيره كما كُتب. */
 export function normalizeAppointmentType(value: unknown) {
@@ -513,6 +517,7 @@ export function migrateAppointment(value: unknown, index = 0): ClinicAppointment
     ...(toText(raw.appointmentType) ? { appointmentType: toText(raw.appointmentType).slice(0, APPOINTMENT_TYPE_MAX) } : {}),
     ...(toText(raw.seriesId) ? { seriesId: toText(raw.seriesId) } : {}),
     ...(/^\d{2}:\d{2}$/.test(toText(raw.returnAt)) ? { returnAt: toText(raw.returnAt) } : {}),
+    ...(toText(raw.authorizedBy) ? { authorizedBy: toText(raw.authorizedBy).slice(0, AUTHORIZED_BY_MAX) } : {}),
     ...(toText(raw.addedAt) && !Number.isNaN(Date.parse(toText(raw.addedAt))) ? { addedAt: toText(raw.addedAt) } : {}),
     ...(raw.urgent === true ? { urgent: true as const } : {}),
     ...(raw.urgent === true && URGENT_OUTCOME_VALUES.includes(raw.urgentOutcome as UrgentOutcome)
@@ -588,7 +593,7 @@ export function parseImportedAppointments(
       patientName = guest.name;
       buildingNumber = guest.buildingNumber;
       apartmentNumber = guest.apartmentNumber;
-      mobile = mobile || guest.mobile || "";
+      mobile = isValidMobile(mobile) ? mobile : guest.mobile || mobile;
       gender = guest.gender ?? gender;
       // أقل من 18 سنة: يُضاف المرافق تلقائيًا إلا إن كان معه Nurse
       assistance = withMinorEscort(assistance, isMinor(guest));
@@ -629,7 +634,7 @@ export function parseImportedAppointments(
       [clinic, "اسم العيادة أو المستشفى"],
       [buildingNumber, "رقم المبنى"],
       [apartmentNumber, "رقم الشقة"],
-      [mobile, "رقم الموبايل"],
+      [isValidMobile(mobile) ? mobile : "", "رقم الموبايل (8 أرقام)"],
       [appointmentAt, "وقت الموعد"],
       [appointmentDate, "تاريخ الموعد"],
       [kind, "نوع الرحلة"],

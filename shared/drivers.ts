@@ -1,4 +1,4 @@
-import { normalizeMobile, toText } from "./text";
+import { isValidMobile, normalizeMobile, toText } from "./text";
 import type { Vehicle } from "./transport";
 
 /**
@@ -35,7 +35,7 @@ export function validateDriver(
   const name = toText(input.name).replace(/\s+/g, " ");
   const phone = normalizeMobile(input.phone);
   if (name.length < 2 || name.length > 60) return { error: "اسم السائق يجب أن يكون من 2 إلى 60 حرفًا" };
-  if (!/^\+?\d{8,15}$/.test(phone)) return { error: "رقم موبايل السائق يجب أن يكون من 8 إلى 15 رقمًا" };
+  if (!isValidMobile(phone)) return { error: "رقم موبايل السائق يجب أن يكون 8 أرقام" };
   if (drivers.some((driver) => driver.id !== originalId && driver.name === name && (driver.phone ?? "") === phone)) {
     return { error: `السائق ${name} مسجل مسبقًا بنفس الرقم` };
   }
