@@ -221,6 +221,7 @@ function describe_write(PDO $pdo, string $col, string $id, ?array $before, ?arra
                 if ($transfer) return ['appointment', 'appointment.create', "إضافة نقل من مستشفى إلى مستشفى لـ $who من {$doc['fromClinic']} إلى {$details['destination']} ($when)", $details];
                 if ($returnOnly) return ['appointment', 'appointment.create', "إضافة طلب عودة من المستشفى لـ $who من {$details['destination']} إلى المجمع ($when)", $details];
                 $authorized = $nonMedical && !empty($doc['authorizedBy']) ? ' · بإذن ' . text_value($doc['authorizedBy']) : '';
+                if (($doc['fleetRequest'] ?? null) === true) $authorized .= ' · يطلب مشرف السيارات سيارتها لاحقًا';
                 return ['appointment', 'appointment.create', ($nonMedical ? 'إضافة رحلة غير طبية لـ ' : 'إضافة موعد ') . "$who إلى {$details['destination']} ($when)$authorized", $details];
             }
             if ($after === null) return ['appointment', 'appointment.delete', "حذف $noun $who ({$details['destination']}، $when)", $details];
@@ -314,8 +315,15 @@ function describe_write(PDO $pdo, string $col, string $id, ?array $before, ?arra
                 $details['plate'] = $before['vehiclePlate'];
                 $details['reason'] = $after['removeReason'] ?? '';
                 $picked = ($before['status'] ?? null) === 'تم استلام المريض' ? ' (كان مسجلًا أنه استُلم)' : '';
+                $held = ($after['held'] ?? null) === true;
+                if ($held) $details['held'] = true;
                 return ['request', 'request.remove_from_trip', "إزالة $who من رحلة السيارة {$before['vehiclePlate']} ($direction)$picked"
-                    . ($details['reason'] !== '' ? " · السبب: {$details['reason']}" : '') . ' · عاد طلبه إلى «بانتظار التوزيع»', $details];
+                    . ($details['reason'] !== '' ? " · السبب: {$details['reason']}" : '')
+                    . ($held ? ' · طلبه مؤجل حتى يجهز الضيف' : ' · عاد طلبه إلى «بانتظار التوزيع»'), $details];
+            }
+            // «الضيف جاهز»: عاد الطلب المؤجل إلى التوزيع
+            if ($before !== null && ($before['held'] ?? null) === true && !array_key_exists('held', $after) && ($after['status'] ?? null) === 'بانتظار التوزيع') {
+                return ['request', 'request.ready', "$who جاهز: عاد طلب سيارته ($direction) إلى «بانتظار التوزيع»", $details];
             }
             // ضم ضيف استلمه السائق إلى رحلة جارية
             if ($before !== null && ($before['status'] ?? null) === 'بانتظار التوزيع' && ($after['status'] ?? null) === 'تم استلام المريض') {

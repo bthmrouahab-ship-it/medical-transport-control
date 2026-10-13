@@ -1,6 +1,6 @@
 import { beforeLoaded, useHistory } from "@/lib/history";
 import { useMemo, useState } from "react";
-import { Accessibility, ArrowLeftRight, Ban, BriefcaseMedical, CalendarDays, Clock3, Eye, EyeOff, Filter, Footprints, House, Pencil, Repeat, Flag, Stethoscope, Trash2, Truck, UsersRound, X } from "lucide-react";
+import { Accessibility, ArrowLeftRight, Ban, BriefcaseMedical, CalendarDays, Clock3, Eye, EyeOff, Filter, Footprints, House, Pencil, Repeat, Flag, PauseCircle, Send, Stethoscope, Trash2, Truck, UsersRound, X } from "lucide-react";
 import {
   approvalOf,
   isApproved,
@@ -8,6 +8,7 @@ import {
   isPriority,
   isReturnOnly,
   isHospitalTransfer,
+  isHeld,
   isTransfer,
   transferLabels,
   appointmentCategory,
@@ -42,7 +43,7 @@ const requestKind = (request: VehicleRequest, appointment: ClinicAppointment) =>
  * ومن أرسلت إليه. طلب السيارة للموعد الطبي من مشرف المبنى وحده؛ والرحلة غير الطبية التي لم تُرسل سيارتها
  * يعدّلها مشرف السيارات أو يحذفها، والمتكررة يوقفها.
  */
-export function AppointmentsOverview({ appointments, requests, date, now, onStopSeries, onEditTrip, onDeleteTrip }: {
+export function AppointmentsOverview({ appointments, requests, date, now, onStopSeries, onEditTrip, onDeleteTrip, onRequestTrip }: {
   appointments: ClinicAppointment[];
   requests: VehicleRequest[];
   date: string;
@@ -52,6 +53,8 @@ export function AppointmentsOverview({ appointments, requests, date, now, onStop
   /** تعديل رحلة غير طبية لم تُرسل سيارتها، أو حذفها */
   onEditTrip?: (appointment: ClinicAppointment) => void;
   onDeleteTrip?: (appointment: ClinicAppointment) => void;
+  /** طلب سيارة رحلة غير طبية سجّلها مشرف السيارات ليطلبها لاحقًا */
+  onRequestTrip?: (appointment: ClinicAppointment) => void;
 }) {
   const [scope, setScope] = useState<"day" | "all">("day");
   // «كل الأيام» أو يوم قبل أول يوم محمّل: تُحمَّل المواعيد الأقدم مرة واحدة
@@ -158,6 +161,15 @@ export function AppointmentsOverview({ appointments, requests, date, now, onStop
       cell: (a) => {
         const list = requestsOf(a);
         if (!list.length) {
+          // سجّلها مشرف السيارات ليطلب سيارتها بنفسه
+          if (a.fleetRequest && a.status === WAITING) {
+            return (
+              <span className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
+                تطلب سيارتها لاحقًا
+                {onRequestTrip && <button type="button" onClick={() => onRequestTrip(a)} className={btn("primary", "sm")}><Send className="h-3.5 w-3.5" /> طلب السيارة</button>}
+              </span>
+            );
+          }
           if (!isApproved(a)) return <span className="text-xs text-slate-400">لا يظهر لمشرف المبنى</span>;
           const deadline = requestWindow(a, now);
           return a.status === WAITING
@@ -172,6 +184,7 @@ export function AppointmentsOverview({ appointments, requests, date, now, onStop
               <li key={request.id} className="flex flex-wrap items-center gap-1.5 text-xs text-slate-600">
                 <Badge tone={request.nurseOnly || request.direction === "عودة" ? "amber" : isTransfer(request, a) ? "cyan" : "neutral"} icon={request.nurseOnly ? Stethoscope : isTransfer(request, a) ? ArrowLeftRight : undefined}>{requestKind(request, a)}</Badge>
                 <StatusBadge status={request.status} />
+                {isHeld(request) && <Badge tone="neutral" icon={PauseCircle}>مؤجل · الضيف غير جاهز</Badge>}
                 {request.createdAt && (
                   <span className="text-slate-400">
                     {request.autoReturn ? `عودة تلقائية ${request.createdAt}` : request.requestedOn ? `حُجزت مسبقًا ${request.requestedOn.slice(8, 10)}-${request.requestedOn.slice(5, 7)} ${request.createdAt}` : `طُلبت ${request.createdAt}`}

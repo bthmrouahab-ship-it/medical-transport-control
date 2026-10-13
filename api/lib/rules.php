@@ -10,7 +10,7 @@ const APPOINTMENT_STATUSES = ['بانتظار طلب السيارة', 'تم طل
 const APPOINTMENT_FIELDS = ['id', 'guestId', 'patientName', 'clinic', 'buildingNumber', 'apartmentNumber', 'mobile', 'appointmentDate',
     'appointmentAt', 'hospitalId', 'category', 'kind', 'assistance', 'status', 'cancelReason', 'cancelledBy', 'cancelledAt',
     'gender', 'cancer', 'returnedSelf', 'returnedSelfBy', 'returnedSelfAt', 'approval', 'approvedBy', 'approvedAt', 'excludedBy', 'excludedAt',
-    'returnOnly', 'fromClinic', 'fromHospitalId', 'nurse', 'appointmentType', 'seriesId', 'returnAt', 'authorizedBy', 'addedAt',
+    'returnOnly', 'fromClinic', 'fromHospitalId', 'nurse', 'appointmentType', 'seriesId', 'returnAt', 'authorizedBy', 'fleetRequest', 'addedAt',
     'urgent', 'urgentOutcome', 'urgentOutcomeBy', 'urgentOutcomeAt', 'urgentFrom', '_o'];
 /**
  * الحالة المستعجلة في شفت الليل (shared/urgent.ts): مشرف المبنى يطلب سيارة من المبنى إلى عيادة المجمع من 10 مساءً إلى
@@ -51,6 +51,11 @@ const CHECK_SECONDS = 300;
 const VEHICLE_CHANGE_FIELDS = ['previousPlate', 'changeReason', 'changedAt'];
 /** إزالة ضيف من رحلة جارية (لم يركب، أو سُجّل استلامه خطأً): السيارة التي أُزيل منها، والسبب، والوقت */
 const TRIP_REMOVAL_FIELDS = ['removedFrom', 'removeReason', 'removedAt'];
+/**
+ * طلب مؤجل (الضيف غير جاهز عند إزالته من الرحلة): يبقى «بانتظار التوزيع» لكن خارج التوزيع حتى يضغط مشرف السيارات
+ * أو مشرف المبنى «الضيف جاهز» (فتُحذف الخانتان)، أو تُرسل له سيارة
+ */
+const HOLD_FIELDS = ['held', 'heldAt'];
 /** ما يُمحى من الطلب حين يعود إلى «بانتظار التوزيع» بعد إزالته من رحلة: السيارة وكل مراحل الرحلة */
 const TRIP_RESET_FIELDS = ['vehiclePlate', 'driver', 'groupId', 'notificationSentAt', 'pickedUpAt', 'etaAt', 'destLat', 'destLng', 'arrivedAt', 'arrivalSource',
     'driverArrivedAt', 'arrivalGps', 'pickupGps', 'arrivalCheck', 'arrivalCheckBy', 'arrivalCheckAt', 'pickupCheck', 'pickupCheckBy', 'pickupCheckAt',
@@ -59,7 +64,7 @@ const TRIP_RESET_FIELDS = ['vehiclePlate', 'driver', 'groupId', 'notificationSen
 const TRIP_UNDO_APPOINTMENT_STATUS = [['تم استلام المريض', 'تم طلب السيارة'], ['مكتملة', 'طلب عودة'], ['مكتملة', 'تم استلام المريض']];
 const REQUEST_FIELDS = ['id', 'appointmentId', 'vehiclePlate', 'driver', 'direction', 'status', 'notificationMethod',
     'createdAt', 'requestedOn', 'autoReturn', 'groupId', 'notificationSentAt', 'requestedBy', 'requestedByName', 'pickedUpAt', 'etaAt', 'destLat', 'destLng', 'arrivedAt', 'arrivalSource',
-    'fromAppointmentId', 'nurseOnly', 'driverArrivedAt', 'arrivalGps', 'pickupGps', ...CHECK_FIELDS, ...VEHICLE_CHANGE_FIELDS, ...TRIP_REMOVAL_FIELDS,
+    'fromAppointmentId', 'nurseOnly', 'driverArrivedAt', 'arrivalGps', 'pickupGps', ...CHECK_FIELDS, ...VEHICLE_CHANGE_FIELDS, ...TRIP_REMOVAL_FIELDS, ...HOLD_FIELDS,
     // يكتبها الخادم وحده للإحصائيات (stamp_tracking في tracking.php)، واسم من طلب السيارة (stamp_requester)
     'pickupArrivedAt', 'nearPickupAt', '_o'];
 /**
@@ -845,6 +850,10 @@ function valid_trip_fields(array $data): bool
     }
     if (array_key_exists('destLat', $data) && !(is_numeric($data['destLat']) && $data['destLat'] > 24 && $data['destLat'] < 27)) return false;
     if (array_key_exists('destLng', $data) && !(is_numeric($data['destLng']) && $data['destLng'] > 50 && $data['destLng'] < 52.5)) return false;
+    // الطلب المؤجل: held قيمته true مع وقت التأجيل، وبانتظار التوزيع فقط
+    if (array_key_exists('held', $data) || array_key_exists('heldAt', $data)) {
+        if (($data['held'] ?? null) !== true || !is_iso($data['heldAt'] ?? null) || ($data['status'] ?? null) !== 'بانتظار التوزيع') return false;
+    }
     return !array_key_exists('arrivalSource', $data) || in_array($data['arrivalSource'], ['gps', 'estimate', 'manual'], true);
 }
 
@@ -927,6 +936,8 @@ function valid_appointment(array $data, string $id): bool
         // الرحلة غير الطبية: اسم من أعطى الإذن بطلبها (يكتبه مشرف السيارات)
         && (!array_key_exists('authorizedBy', $data) || (is_text($data['authorizedBy'], AUTHORIZED_BY_MAX) && mb_strlen(trim($data['authorizedBy'])) >= 2
             && ($data['category'] ?? '') === 'غير طبية'))
+        // رحلة غير طبية يطلب سيارتها مشرف السيارات بنفسه لاحقًا (لا تظهر لمشرف المبنى قبل طلبها): true أو بلا الخانة
+        && (!array_key_exists('fleetRequest', $data) || ($data['fleetRequest'] === true && ($data['category'] ?? '') === 'غير طبية'))
         && valid_urgent_fields($data)
         && valid_approval($data);
 }
@@ -1066,6 +1077,8 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
                     }
                     return has_role($user, BUILDING_ROLES) ? urgent_case_error($after) : $denied;
                 }
+                // «يطلب سيارتها مشرف السيارات لاحقًا»: رحلة غير طبية يضيفها مشرف السيارات بلا طلب سيارة
+                if (array_key_exists('fleetRequest', $after) && !($role === 'fleetSupervisor' && ($after['status'] ?? null) === 'بانتظار طلب السيارة')) return $denied;
                 // موعد العيادة لضيف من قائمة المجمع ولمستشفى من الدليل
                 if (has_role($user, CLINIC_ROLES) && $docOf && ($error = registry_error($after, $docOf))) return $error;
                 // طلب العودة فقط من المستشفى يذهب مباشرة إلى مشرف السيارات: بلا موافقة، ومعه طلب سيارة العودة.
@@ -1114,6 +1127,8 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
                     && in_array($after['gender'] ?? 'ذكر', ['ذكر', 'أنثى'], true) && is_bool($after['cancer'] ?? false)
                     && ($after['returnOnly'] ?? true) === true && ($after['nurse'] ?? true) === true && valid_appointment_type($after);
                 if (!$valid) return $denied;
+                // «يطلب سيارتها مشرف السيارات» لا تتغير بالتعديل
+                if ($role !== 'admin' && in_array('fleetRequest', $changed, true)) return $denied;
                 // مستشفى الاستلام في النقل: نص من الدليل، ولا يصير الموعد نقلًا ولا العكس
                 if (hospital_transfer($before) !== hospital_transfer($after)) return $denied;
                 // ولا يصير الموعد تحويلة طارئة ولا العكس بالتعديل (لها طلب سيارة يُضاف معها)
@@ -1163,6 +1178,8 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
                         && valid_cancel($user, $after, $changed) ? null : $denied;
                 }
                 $move = [$before['status'] ?? null, $after['status'] ?? null];
+                // طلب سيارة رحلة غير طبية سجّلها ليطلبها لاحقًا (ومعها طلب سيارتها في نفس الدفعة)
+                if (($before['category'] ?? '') === 'غير طبية' && $changed === ['status'] && $move === ['بانتظار طلب السيارة', 'تم طلب السيارة']) return null;
                 return only($changed, ['status'])
                     && ((TRIP_END_APPOINTMENT_STATUS[$move[0] ?? ''] ?? null) === $move[1] || in_array($move, TRIP_UNDO_APPOINTMENT_STATUS, true)) ? null : $denied;
             }
@@ -1239,6 +1256,7 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
                         || ($after['nurseOnly'] === true && $after['direction'] === 'عودة' && !array_key_exists('fromAppointmentId', $after)))
                     // طلب العودة التلقائي ينشئه الخادم وحده
                     && !array_key_exists('autoReturn', $after)
+                    && !array_intersect(array_keys($after), HOLD_FIELDS)
                     // حجز مسبق (يوم الطلب قبل يوم الرحلة)
                     && (!array_key_exists('requestedOn', $after) || (is_string($after['requestedOn']) && preg_match('/^\d{4}-\d{2}-\d{2}$/', $after['requestedOn'])))
                     && !array_intersect(array_keys($after), ['vehiclePlate', 'driver', 'groupId', 'notificationSentAt', ...TRIP_FIELDS]);
@@ -1252,6 +1270,12 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
             // مشرف السيارات: إرسال السيارة وجمع الرحلات، وتأكيد وصولها إلى الوجهة (يدويًا أو
             // بانتهاء المدة التقديرية)، وإنهاء رحلة عالقة قبل تسجيل الاستلام (يدويًا فقط) حتى تتفرغ السيارة
             if (has_role($user, DISPATCH_ROLES)) {
+                $pendingBoth = ($before['status'] ?? null) === 'بانتظار التوزيع' && ($after['status'] ?? null) === 'بانتظار التوزيع';
+                // «الضيف جاهز»: يعود الطلب المؤجل إلى التوزيع (ويمكن ذلك مع إرسال السيارة له مباشرة)
+                if (($before['held'] ?? null) === true && array_intersect($changed, HOLD_FIELDS) && !array_intersect(array_keys($after), HOLD_FIELDS)) {
+                    $changed = array_values(array_diff($changed, HOLD_FIELDS));
+                    if (!$changed) return $pendingBoth ? null : $denied;
+                }
                 // تعديل تاريخ رحلة غير طبية قبل إرسال سيارتها: يوم الحجز (حجز ليوم قادم)
                 if ($role === 'fleetSupervisor' && $changed === ['requestedOn'] && ($before['status'] ?? null) === 'بانتظار التوزيع' && ($after['status'] ?? null) === 'بانتظار التوزيع') {
                     $linked = $docOf ? $docOf('appointments', (string)($before['appointmentId'] ?? '')) : null;
@@ -1260,8 +1284,9 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
                 }
                 // إزالة ضيف من رحلة جارية: يعود طلبه إلى «بانتظار التوزيع» بلا سيارة ولا مراحل الرحلة، ومعه السيارة والسبب ووقته
                 if (($after['status'] ?? null) === 'بانتظار التوزيع' && !empty($before['vehiclePlate'])) {
+                    // ومعه التأجيل إن لم يكن الضيف جاهزًا (held)
                     $valid = in_array($before['status'] ?? null, ['تم إرسال السيارة', 'وصلت السيارة', 'تم استلام المريض'], true)
-                        && only($changed, ['status', ...TRIP_RESET_FIELDS, ...TRIP_REMOVAL_FIELDS])
+                        && only($changed, ['status', ...TRIP_RESET_FIELDS, ...TRIP_REMOVAL_FIELDS, ...HOLD_FIELDS])
                         && !array_intersect(array_keys($after), TRIP_RESET_FIELDS)
                         && ($after['removedFrom'] ?? null) === $before['vehiclePlate']
                         && is_text($after['removeReason'] ?? null, 120) && trim($after['removeReason']) !== ''
@@ -1314,6 +1339,11 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
                     return in_array($before['status'] ?? null, ['بانتظار التوزيع', 'تم إرسال السيارة', 'وصلت السيارة'], true) ? null : $denied;
                 }
                 if (!follows_request($user, $before)) return $denied;
+                // «الضيف جاهز» لطلب أجّله مشرف السيارات: يعود إلى التوزيع
+                if ($changed && only($changed, HOLD_FIELDS)) {
+                    return ($before['held'] ?? null) === true && !array_intersect(array_keys($after), HOLD_FIELDS)
+                        && ($after['status'] ?? null) === 'بانتظار التوزيع' ? null : $denied;
+                }
                 if (!only($changed, ['status', 'pickedUpAt', 'etaAt', 'destLat', 'destLng', 'pickupGps', ...CHECK_FIELDS])) return $denied;
                 if (!valid_check_replies($user, $before, $after, $changed)) return $denied;
                 $from = $before['status'] ?? null;

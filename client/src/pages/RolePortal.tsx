@@ -10,6 +10,8 @@ import {
   canChangeVehicle,
   changeRequestVehicle,
   removeRequestFromTrip,
+  isHeld,
+  releaseHeld,
   isApproved,
   isNonMedical,
   isReturnOnly,
@@ -627,13 +629,14 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
   /**
    * إزالة ضيف من رحلة جارية (لم يركب السيارة، أو سجّل السائق استلامه خطأً): يعود طلبه إلى «بانتظار التوزيع» لترسل
    * له سيارة أخرى، وحالة موعده كما قبل الاستلام. إن بقي في الرحلة المجمّعة ضيف واحد لا تبقى مجمّعة.
+   * hold: الضيف غير جاهز، فيُؤجَّل طلبه خارج التوزيع حتى «الضيف جاهز».
    */
-  function removeFromTrip(requestId: string, reason: string) {
+  function removeFromTrip(requestId: string, reason: string, hold = false) {
     const request = requests.find((item) => item.id === requestId);
     if (!request || !canChangeVehicle(request)) return;
     const others = request.groupId ? requests.filter((item) => item.groupId === request.groupId && item.id !== request.id) : [];
     const next = requests.map((item) => {
-      if (item.id === request.id) return removeRequestFromTrip(item, reason);
+      if (item.id === request.id) return removeRequestFromTrip(item, reason, new Date(), hold);
       if (others.length === 1 && item.id === others[0].id) {
         const { groupId: _group, ...rest } = item;
         return rest;
@@ -643,7 +646,37 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
     // سُجّل استلامه: يعود موعده إلى ما قبل الاستلام
     if (request.status === "تم استلام المريض" && !request.nurseOnly) updateBoth(appointmentsBeforePickup(appointments, request), next, "requests");
     else updateRequests(next);
-    toast.success(`أُزيل ${request.nurseOnly ? "طلب الـ Nurse" : "الضيف"} من رحلة السيارة ${request.vehiclePlate ?? ""}`, { description: "عاد طلبه إلى «بانتظار التوزيع» لترسل له سيارة أخرى" });
+    toast.success(`أُزيل ${request.nurseOnly ? "طلب الـ Nurse" : "الضيف"} من رحلة السيارة ${request.vehiclePlate ?? ""}`, {
+      description: hold ? "طلبه مؤجل في «طلبات مؤجلة» حتى تضغط «الضيف جاهز»" : "عاد طلبه إلى «بانتظار التوزيع» لترسل له سيارة أخرى",
+    });
+  }
+
+  /** «الضيف جاهز»: يعود الطلب المؤجل إلى «بانتظار التوزيع» (مشرف السيارات، أو مشرف المبنى الذي يتابعه) */
+  function releaseHeldRequest(requestId: string) {
+    const request = requests.find((item) => item.id === requestId);
+    if (!request || !isHeld(request)) return;
+    const appointment = appointments.find((item) => item.id === request.appointmentId);
+    updateRequests(requests.map((item) => (item.id === requestId ? releaseHeld(item) : item)));
+    toast.success(tx(`${appointment?.patientName ?? "الضيف"} جاهز`, `${appointment?.patientName ?? "The guest"} is ready`), {
+      description: tx("عاد طلبه إلى «بانتظار التوزيع» لترسل له سيارة", "The request is back with the fleet supervisor to send a car"),
+    });
+  }
+
+  /** طلب سيارة رحلة غير طبية سجّلها مشرف السيارات ليطلبها لاحقًا: تظهر في «بانتظار التوزيع» (حجز مسبق ليوم قادم) */
+  function requestTripCar(appointment: ClinicAppointment) {
+    const current = appointments.find((item) => item.id === appointment.id);
+    if (!current || current.status !== "بانتظار طلب السيارة" || requests.some((request) => request.appointmentId === current.id)) {
+      toast.error("طُلبت سيارة هذه الرحلة أو تغيّرت حالتها");
+      return;
+    }
+    const today = localDateString();
+    const request: VehicleRequest = {
+      ...returnCarRequest(current),
+      direction: "ذهاب",
+      ...(current.appointmentDate > today ? { requestedOn: today } : {}),
+    };
+    updateBoth(appointments.map((item) => (item.id === current.id ? { ...item, status: "تم طلب السيارة" } : item)), [...requests, request]);
+    toast.success(`طُلبت سيارة رحلة ${current.patientName}`, { description: "تظهر الآن في «بانتظار التوزيع»" });
   }
 
   /**
@@ -789,6 +822,7 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
       updateAppointments(appointments.map((item) => (item.id === appointment.id ? { ...item, mobile } : item)));
       toast.success(tx(`تم تعديل رقم ${appointment.patientName}`, "Phone number updated"), { description: mobile });
     },
+    onReleaseHeld: releaseHeldRequest,
   };
 
   /**
@@ -950,6 +984,8 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
             onEndTrip={endTrips}
             onChangeVehicle={changeVehicle}
             onRemoveFromTrip={removeFromTrip}
+            onReleaseHeld={releaseHeldRequest}
+            onRequestTrip={requestTripCar}
             onAddToTrip={addToTrip}
             onExport={exportStats}
             date={selectedDate}
