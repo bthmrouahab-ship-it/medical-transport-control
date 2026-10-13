@@ -628,6 +628,8 @@ function route_write(PDO $pdo, array $body): array
             save_doc($pdo, $col, $id, $after, $rev);
             if ($entry) log_activity($pdo, empty($entry[4]) ? $user : null, $entry[0], $entry[1], $entry[2], $id, $entry[3]);
             if ($col === 'requests') queue_request_pushes($pdo, $before, $after);
+            // مشرف المبنى صحّح رقم هاتف الضيف: يُحفظ الرقم الجديد للضيف في قائمة الضيوف أيضًا
+            if ($col === 'appointments') save_guest_mobile($pdo, $user, $before, $after, $rev);
             // السيارة التي كانت تنتظر في المستشفى أُرسلت في رحلة: ينتهي انتظارها
             if ($col === 'requests' && $after !== null) end_waiting_on_dispatch($pdo, $before, $after, $rev);
             // حذف الشكوى يحذف صورة استمارتها الورقية

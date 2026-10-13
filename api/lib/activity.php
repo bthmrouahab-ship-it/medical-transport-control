@@ -244,7 +244,8 @@ function describe_write(PDO $pdo, string $col, string $id, ?array $before, ?arra
             // رقم هاتف الضيف وحده (يصححه مشرف المبنى قبل طلب السيارة إن كان خطأ)
             if ($changed === ['mobile']) {
                 $details['changes'] = text_value($before['mobile'] ?? '') . ' ← ' . text_value($after['mobile'] ?? '');
-                return ['appointment', 'appointment.mobile', "تعديل رقم هاتف $who ({$details['destination']}، $when): {$details['changes']}", $details];
+                $saved = !empty($after['guestId']) ? ' (وحُفظ في قائمة الضيوف)' : '';
+                return ['appointment', 'appointment.mobile', "تعديل رقم هاتف $who ({$details['destination']}، $when): {$details['changes']}$saved", $details];
             }
             $changes = field_changes($before, $after, APPOINTMENT_FIELD_LABELS);
             if (!$changes) return null;

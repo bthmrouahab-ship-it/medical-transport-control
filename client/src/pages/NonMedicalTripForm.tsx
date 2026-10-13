@@ -1,3 +1,4 @@
+import { isValidMobile, normalizeMobile } from "@shared/text";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Accessibility, CheckCircle2, MapPin, Repeat, Truck, X } from "lucide-react";
@@ -115,9 +116,9 @@ export default function NonMedicalTripForm({ defaultDate, editing, onSave, onUpd
       toast.error("اختر جنس الضيف");
       return;
     }
-    const mobile = form.mobile.replace(/[\s-]/g, "");
-    if (!/^\+?\d{8,15}$/.test(mobile)) {
-      toast.error("أدخل رقم موبايل صحيحًا من 8 إلى 15 رقمًا");
+    const mobile = normalizeMobile(form.mobile);
+    if (!isValidMobile(mobile)) {
+      toast.error("رقم الموبايل يجب أن يكون 8 أرقام");
       return;
     }
     if (repeat.enabled) {

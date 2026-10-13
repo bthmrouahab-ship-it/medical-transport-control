@@ -1,5 +1,5 @@
 import { COMPLEX_CLINIC, type Hospital } from "./hospitals";
-import { toWesternDigits } from "./text";
+import { isValidMobile, MOBILE_ERROR, normalizeMobile } from "./text";
 import {
   appointmentDateTime,
   localDateString,
@@ -75,8 +75,8 @@ export function urgentDraftError(draft: UrgentDraft): string | null {
   if (draft.patientName.trim().length < 2) return "اكتب اسم الضيف";
   if (!draft.buildingNumber.trim()) return "اكتب رقم المبنى";
   if (!draft.apartmentNumber.trim()) return "اكتب رقم الشقة";
-  const mobile = toWesternDigits(draft.mobile ?? "").replace(/[\s-]/g, "");
-  if (mobile && !/^\+?\d{8,15}$/.test(mobile)) return "رقم الهاتف غير صالح";
+  const mobile = normalizeMobile(draft.mobile ?? "");
+  if (mobile && !isValidMobile(mobile)) return MOBILE_ERROR;
   return null;
 }
 
@@ -88,7 +88,7 @@ const uniqueId = (prefix: string, now: Date) => `${prefix}-${now.getTime()}-${Ma
  * الذي طلبه (requestedBy) فيتابعه كطلباته في النهار.
  */
 export function buildUrgentCase(draft: UrgentDraft, requestedBy: string, now = new Date()): { appointment: ClinicAppointment; request: VehicleRequest } {
-  const mobile = toWesternDigits(draft.mobile ?? "").replace(/[\s-]/g, "");
+  const mobile = normalizeMobile(draft.mobile ?? "");
   const appointment: ClinicAppointment = {
     id: uniqueId("URG", now),
     patientName: draft.patientName.trim().replace(/\s+/g, " "),

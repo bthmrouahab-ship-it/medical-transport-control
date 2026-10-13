@@ -551,7 +551,7 @@ function valid_guest(array $data, string $id): bool
         && is_text($data['name'] ?? null, 120) && trim($data['name']) !== ''
         && (!array_key_exists('nameEn', $data) || is_text($data['nameEn'], 120))
         && in_array($data['gender'] ?? 'ذكر', ['ذكر', 'أنثى'], true)
-        && (!array_key_exists('mobile', $data) || (is_string($data['mobile']) && preg_match('/^\+?\d{7,15}$/', $data['mobile'])))
+        && (!array_key_exists('mobile', $data) || valid_mobile($data['mobile']))
         && $unit($data['buildingNumber'] ?? null) && $unit($data['apartmentNumber'] ?? null)
         && (!array_key_exists('age', $data) || (is_int($data['age']) && $data['age'] >= 0 && $data['age'] <= 130))
         && (!array_key_exists('healthNumber', $data) || is_text($data['healthNumber'], 30))
@@ -675,10 +675,29 @@ function hospital_transfer(?array $appointment): bool
     return is_string($appointment['fromClinic'] ?? null) && $appointment['fromClinic'] !== '';
 }
 
-/** رقم هاتف صالح: 8 إلى 15 رقمًا، ويمكن أن يبدأ بـ + */
+/** رقم هاتف قطري صالح: 8 أرقام بالضبط (بلا رمز الدولة 974) */
 function valid_mobile($value): bool
 {
-    return is_string($value) && preg_match('/^\+?\d{8,15}$/', $value) === 1;
+    return is_string($value) && preg_match('/^\d{8}$/', $value) === 1;
+}
+
+/**
+ * مشرف المبنى (ومسؤولهم، ومسؤول العيادة لمواعيد الممرضات) صحّح رقم هاتف الضيف في موعده:
+ * يُحفظ الرقم في قائمة الضيوف (الضيف المربوط guestId) بنفس رقم المراجعة، فتأخذه المواعيد القادمة.
+ */
+function save_guest_mobile(PDO $pdo, array $user, ?array $before, ?array $after, int $rev): void
+{
+    if (!$before || !$after || ($before['mobile'] ?? null) === ($after['mobile'] ?? null)) return;
+    if (!in_array($user['role'], BUILDING_ROLES, true) && !nurse_lead($user, $before)) return;
+    $guestId = $after['guestId'] ?? null;
+    $mobile = $after['mobile'] ?? null;
+    if (!is_string($guestId) || $guestId === '' || !valid_mobile($mobile)) return;
+    $stmt = $pdo->prepare("SELECT data FROM docs WHERE col = 'guests' AND id = ? FOR UPDATE");
+    $stmt->execute([$guestId]);
+    $guest = decode_doc($stmt->fetchColumn() ?: null);
+    if (!$guest || ($guest['mobile'] ?? null) === $mobile) return;
+    $guest['mobile'] = $mobile;
+    save_doc($pdo, 'guests', $guestId, $guest, $rev);
 }
 
 /**
@@ -701,7 +720,7 @@ function building_appointment_error(array $user, array $before, array $after, ar
     // رقم هاتف الضيف خطأ: يصححه قبل طلب السيارة (لموعد وافق عليه مسؤول العيادة)
     if ($changed === ['mobile']) {
         if (($before['status'] ?? null) !== 'بانتظار طلب السيارة' || approval_of($before) !== 'approved') return $denied;
-        return valid_mobile($after['mobile'] ?? null) ? null : 'رقم الهاتف غير صالح';
+        return valid_mobile($after['mobile'] ?? null) ? null : 'رقم الهاتف يجب أن يكون 8 أرقام';
     }
     if (($after['status'] ?? null) === 'ملغي') {
         return in_array($before['status'] ?? null, ['بانتظار طلب السيارة', 'تم طلب السيارة'], true) && valid_cancel($user, $after, $changed) ? null : $denied;

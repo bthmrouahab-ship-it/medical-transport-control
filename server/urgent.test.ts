@@ -37,7 +37,7 @@ describe("night shift: urgent cases from the building to the complex clinic", ()
     expect(urgentDraftError({ ...draft, patientName: " " })).toBe("اكتب اسم الضيف");
     expect(urgentDraftError({ ...draft, buildingNumber: "" })).toBe("اكتب رقم المبنى");
     expect(urgentDraftError({ ...draft, apartmentNumber: " " })).toBe("اكتب رقم الشقة");
-    expect(urgentDraftError({ ...draft, mobile: "123" })).toBe("رقم الهاتف غير صالح");
+    expect(urgentDraftError({ ...draft, mobile: "123" })).toBe("رقم الهاتف يجب أن يكون 8 أرقام");
     expect(urgentDraftError({ ...draft, mobile: "٥٥٥ ١٢٣٤٥" })).toBeNull();
   });
 

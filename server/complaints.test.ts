@@ -25,7 +25,9 @@ describe("complaint form", () => {
     expect(complaintError(draft({ guestName: " " }))).toBe("اكتب اسم الضيف");
     expect(complaintError(draft({ apartmentNumber: "" }))).toBe("اكتب رقم المبنى والشقة");
     expect(complaintError(draft({ text: "لا" }))).toBe("اكتب نص الشكوى");
-    expect(complaintError(draft({ mobile: "123" }))).toBe("رقم الهاتف غير صحيح");
+    expect(complaintError(draft({ mobile: "123" }))).toBe("رقم الهاتف يجب أن يكون 8 أرقام");
+    expect(complaintError(draft({ mobile: "555000111" }))).toBe("رقم الهاتف يجب أن يكون 8 أرقام");
+    expect(complaintError(draft({ mobile: "+974 5550 0011" }))).toBeNull();
     expect(complaintError(draft({ date: "2026-02-30" }))).toBe("اختر تاريخ الشكوى ووقتها");
     expect(complaintError(draft({ witnesses: [{ name: "" }] }))).toBe("اكتب اسم الشاهد أو احذفه");
     expect(complaintError(draft({ witnesses: [{ name: "أ" }, { name: "ب" }, { name: "ج" }] }))).toBe("شاهدان على الأكثر");

@@ -1,7 +1,7 @@
 import { COMPLEX_CLINIC, DEFAULT_HOSPITALS, distanceKm, matchHospital, type Hospital } from "./hospitals";
 import { FLEET_SEED } from "./seedData";
 import { roadKm } from "./roads";
-import { normalizeGender, normalizeMobile, readAliased, toText, toWesternDigits } from "./text";
+import { isValidMobile, normalizeGender, normalizeMobile, readAliased, toText, toWesternDigits } from "./text";
 import { PRIVATE_CAR_MESSAGE, findGuestByName, guestIndex, guestOfAppointment, hasPrivateCar, isMinor, type Guest } from "./guests";
 
 export type AppointmentKind = "عادي" | "احتياجات خاصة";
@@ -588,7 +588,7 @@ export function parseImportedAppointments(
       patientName = guest.name;
       buildingNumber = guest.buildingNumber;
       apartmentNumber = guest.apartmentNumber;
-      mobile = mobile || guest.mobile || "";
+      mobile = isValidMobile(mobile) ? mobile : guest.mobile || mobile;
       gender = guest.gender ?? gender;
       // أقل من 18 سنة: يُضاف المرافق تلقائيًا إلا إن كان معه Nurse
       assistance = withMinorEscort(assistance, isMinor(guest));
@@ -629,7 +629,7 @@ export function parseImportedAppointments(
       [clinic, "اسم العيادة أو المستشفى"],
       [buildingNumber, "رقم المبنى"],
       [apartmentNumber, "رقم الشقة"],
-      [mobile, "رقم الموبايل"],
+      [isValidMobile(mobile) ? mobile : "", "رقم الموبايل (8 أرقام)"],
       [appointmentAt, "وقت الموعد"],
       [appointmentDate, "تاريخ الموعد"],
       [kind, "نوع الرحلة"],

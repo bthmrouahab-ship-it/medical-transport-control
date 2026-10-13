@@ -1,3 +1,4 @@
+import { isValidMobile, normalizeMobile } from "@shared/text";
 import { beforeLoaded, useHistory } from "@/lib/history";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -659,8 +660,8 @@ export function ClinicForm({ t, lang, initial, defaultDate, returnOnly = false, 
       toast.error(t.errIncomplete);
       return;
     }
-    const mobile = form.mobile.replace(/[\s-]/g, "");
-    if (!/^\+?\d{8,15}$/.test(mobile)) {
+    const mobile = normalizeMobile(form.mobile);
+    if (!isValidMobile(mobile)) {
       toast.error(t.errMobile);
       return;
     }

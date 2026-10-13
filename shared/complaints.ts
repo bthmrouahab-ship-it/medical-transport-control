@@ -1,4 +1,4 @@
-import { normalizeMobile, toText } from "./text";
+import { isValidMobile, MOBILE_ERROR, normalizeMobile, toText } from "./text";
 
 /**
  * الشكاوى: «استمارة الشكاوى لجميع الخدمات المقدمة في مجمع الثمامة» (النموذج المعتمد) يسجّلها مشرف المبنى ومسؤولهم.
@@ -119,7 +119,7 @@ export function complaintError(draft: ComplaintDraft): string | null {
   if (!draft.buildingNumber.trim() || !draft.apartmentNumber.trim()) return "اكتب رقم المبنى والشقة";
   if (draft.text.trim().length < COMPLAINT_TEXT_MIN) return "اكتب نص الشكوى";
   if (draft.text.length > COMPLAINT_TEXT_MAX) return `الشكوى أطول من ${COMPLAINT_TEXT_MAX} حرف`;
-  if (draft.mobile && !/^\+?\d{7,15}$/.test(draft.mobile)) return "رقم الهاتف غير صحيح";
+  if (draft.mobile?.trim() && !isValidMobile(normalizeMobile(draft.mobile))) return MOBILE_ERROR;
   if (!isDate(draft.date) || !/^([01]\d|2[0-3]):[0-5]\d$/.test(draft.time)) return "اختر تاريخ الشكوى ووقتها";
   if ((draft.witnesses?.length ?? 0) > COMPLAINT_MAX_WITNESSES) return `شاهدان على الأكثر`;
   if (draft.witnesses?.some((witness) => !witness.name.trim())) return "اكتب اسم الشاهد أو احذفه";
