@@ -161,6 +161,14 @@ export default function FleetDashboard({ canEdit = false, alerts = false, actor,
     return [{ plate: track.plate, path: track.points.map(([lat, lng]) => [lat, lng] as [number, number]), label }];
   });
 
+  // السيارة المختارة (من القائمة أو الخريطة، أو المطابقة الوحيدة للبحث): مساراتها واضحة وغيرها باهتة
+  const searchPlates = words.length ? mapLocations.filter((location) => matches(location.plate)).map((location) => location.plate) : [];
+  const highlight = picked ?? (searchPlates.length === 1 ? searchPlates[0] : null);
+  const highlightDriver = highlight ? shortDriverName(driverOf(highlight)) : "";
+  function selectVehicle(plate: string | null) {
+    setPicked(plate);
+  }
+
   const liveCount = fleet.filter((vehicle) => isLive(vehicle.plate)).length;
   const busyPlates = new Set(trips.map((trip) => trip.plate));
 
@@ -241,7 +249,13 @@ export default function FleetDashboard({ canEdit = false, alerts = false, actor,
                   )}
                 </p>
               </div>
-              <LiveMap hospitals={hospitals} locations={visibleLocations} trips={trips} tracks={mapTracks} badges={badges} tripCounts={tripCounts} focus={focus} height={600} />
+              {highlight && (
+                <p className="flex flex-wrap items-center gap-2 rounded-xl bg-navy-800 px-4 py-2 text-xs text-white shadow-card" role="status">
+                  <span>مسارات السيارة <span dir="ltr" className="font-semibold">{highlight}</span>{highlightDriver ? ` · ${highlightDriver}` : ""} واضحة، ومسارات باقي السيارات باهتة</span>
+                  <button type="button" onClick={() => { selectVehicle(null); if (words.length) search(""); }} className="ms-auto rounded-lg bg-white/15 px-2.5 py-1 font-semibold hover:bg-white/25">إظهار كل السيارات</button>
+                </p>
+              )}
+              <LiveMap hospitals={hospitals} locations={visibleLocations} trips={trips} tracks={mapTracks} badges={badges} tripCounts={tripCounts} focus={focus} highlight={highlight} onSelectVehicle={selectVehicle} height={600} />
               <ul className="flex flex-wrap items-center gap-x-5 gap-y-2 rounded-xl bg-white px-4 py-2.5 text-xs text-slate-600 shadow-card ring-1 ring-slate-200/80" aria-label="مفتاح الخريطة">
                 <li className="flex items-center gap-2"><span className="h-3 w-3 rounded-full" style={{ background: MAP_COLORS.origin }} /> مجمع الثمامة</li>
                 <li className="flex items-center gap-2"><span className="h-3 w-3 rounded-full opacity-75" style={{ background: MAP_COLORS.hospital }} /> مستشفى (الحجم حسب الرحلات)</li>
@@ -253,6 +267,7 @@ export default function FleetDashboard({ canEdit = false, alerts = false, actor,
                 <li className="flex items-center gap-2"><Dot tone="green" /> GPS مباشر</li>
                 <li className="flex items-center gap-2"><Dot tone="amber" /> آخر موقع قبل دقائق</li>
                 <li className="flex items-center gap-2"><Dot /> غير متصل (يُخفى بعد {MAP_HIDE_AFTER_MINUTES} دقائق إلا بالبحث)</li>
+                <li className="basis-full text-slate-500">اضغط على سيارة أو على أحد خطوطها لإبراز مساراتها وحدها، واضغط على مكان فارغ لإظهار الكل</li>
               </ul>
             </div>
             <aside className="min-w-0 space-y-4">
@@ -276,7 +291,8 @@ export default function FleetDashboard({ canEdit = false, alerts = false, actor,
                             setPicked(vehicle.plate);
                             setFocus({ lat: location.lat, lng: location.lng, key: Date.now() });
                           }}
-                          className={cx("flex w-full items-center gap-3 px-4 py-3 text-start transition", location ? "hover:bg-slate-50" : "cursor-default")}
+                          aria-pressed={highlight === vehicle.plate}
+                          className={cx("flex w-full items-center gap-3 px-4 py-3 text-start transition", location ? "hover:bg-slate-50" : "cursor-default", highlight === vehicle.plate && "bg-slate-100")}
                         >
                           <Dot tone={FRESH_TONE[fresh?.state ?? "offline"]} pulse={fresh?.state === "live"} />
                           <span className="min-w-0 flex-1">

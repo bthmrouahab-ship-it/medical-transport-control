@@ -92,6 +92,11 @@ input::placeholder { color: #94a3b8; }
   box-shadow: 0 0 0 1px rgba(15, 31, 53, .3), 0 2px 4px rgba(15, 31, 53, .3);
 }
 .vehicle-pin__body.is-offline { opacity: .65; }
+/* السيارة المختارة على الخريطة واضحة، وباقي السيارات أخف */
+.vehicle-pin__body { cursor: pointer; }
+.vehicle-pin__body.is-selected .vehicle-pin__label { background: #0b2545; color: #fff; }
+.vehicle-pin__body.is-selected .vehicle-pin__label span { color: #cbd5e1; }
+.vehicle-pin__body.is-dim { opacity: .45; }
 /* تنتظر في المستشفى (سماوي)، ومتوقفة خارج المجمع 10 دقائق أو أكثر (أحمر) */
 .vehicle-pin__body.is-waiting .vehicle-pin__label { box-shadow: inset 0 0 0 2px #0891b2, 0 6px 14px -4px rgba(15, 31, 53, .3); }
 .vehicle-pin__body.is-waiting .vehicle-pin__label span { color: #0e7490; font-weight: 600; }
