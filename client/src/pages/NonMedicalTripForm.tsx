@@ -3,6 +3,7 @@ import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Accessibility, CheckCircle2, MapPin, Repeat, Truck, X } from "lucide-react";
 import {
+  AUTHORIZED_BY_MAX,
   NON_MEDICAL_DESTINATIONS,
   RECURRING_DEFAULT_DAYS,
   RECURRING_MAX_DAYS,
@@ -58,6 +59,7 @@ export default function NonMedicalTripForm({ defaultDate, editing, onSave, onUpd
     appointmentAt: editing?.appointmentAt ?? timeLabel(new Date(Date.now() + 30 * 60000)),
     kind: editing?.kind ?? "عادي" as AppointmentKind,
     assistance: editing ? [...editing.assistance] : [] as AssistanceNeed[],
+    authorizedBy: editing?.authorizedBy ?? "",
   });
 
   const guest = form.guestId ? index.byId.get(form.guestId) : undefined;
@@ -121,6 +123,12 @@ export default function NonMedicalTripForm({ defaultDate, editing, onSave, onUpd
       toast.error("رقم الموبايل يجب أن يكون 8 أرقام");
       return;
     }
+    // من أعطى الإذن بطلب الرحلة: إلزامي
+    const authorizedBy = form.authorizedBy.trim().replace(/\s+/g, " ");
+    if (authorizedBy.length < 2) {
+      toast.error("اكتب اسم من أعطى الإذن بطلب الرحلة");
+      return;
+    }
     if (repeat.enabled) {
       if (!seriesDates) {
         toast.error(`تاريخ النهاية بعد تاريخ البداية وخلال ${RECURRING_MAX_DAYS} يومًا (3 أشهر)`);
@@ -157,6 +165,7 @@ export default function NonMedicalTripForm({ defaultDate, editing, onSave, onUpd
         kind: form.kind,
         assistance: form.assistance,
         ...(autoReturn.enabled ? { returnAt: autoReturn.at } : {}),
+        authorizedBy,
       });
       return;
     }
@@ -187,6 +196,7 @@ export default function NonMedicalTripForm({ defaultDate, editing, onSave, onUpd
         status: repeat.enabled ? "بانتظار طلب السيارة" : "تم طلب السيارة",
         ...series,
         ...(autoReturn.enabled ? { returnAt: autoReturn.at } : {}),
+        authorizedBy,
       };
       const request: VehicleRequest = {
         id: `REQ-${stamp}-${index + 1}-${Math.random().toString(36).slice(2, 6)}`,
@@ -230,6 +240,10 @@ export default function NonMedicalTripForm({ defaultDate, editing, onSave, onUpd
         </fieldset>
 
         <Field label="رقم الموبايل" value={form.mobile} onChange={(value) => setForm({ ...form, mobile: value })} type="tel" dir="ltr" wide />
+        <label className="block sm:col-span-2">
+          <span className={labelClass}>من أعطى الإذن بالطلب</span>
+          <input value={form.authorizedBy} onChange={(event) => setForm({ ...form, authorizedBy: event.target.value })} maxLength={AUTHORIZED_BY_MAX} required placeholder="اسم المسؤول الذي وافق على الرحلة" className={inputClass} />
+        </label>
         {guest && !guest.gender && (
           <fieldset className="sm:col-span-2">
             <legend className={labelClass}>الجنس</legend>

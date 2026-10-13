@@ -29,6 +29,7 @@ const APPOINTMENT_FIELD_LABELS = [
     'kind' => 'نوع الرحلة',
     'assistance' => 'الاحتياجات',
     'gender' => 'الجنس',
+    'authorizedBy' => 'بإذن',
     'cancer' => 'أولوية',
     'appointmentType' => 'نوع الموعد',
 ];
@@ -219,7 +220,8 @@ function describe_write(PDO $pdo, string $col, string $id, ?array $before, ?arra
             if ($before === null) {
                 if ($transfer) return ['appointment', 'appointment.create', "إضافة نقل من مستشفى إلى مستشفى لـ $who من {$doc['fromClinic']} إلى {$details['destination']} ($when)", $details];
                 if ($returnOnly) return ['appointment', 'appointment.create', "إضافة طلب عودة من المستشفى لـ $who من {$details['destination']} إلى المجمع ($when)", $details];
-                return ['appointment', 'appointment.create', ($nonMedical ? 'إضافة رحلة غير طبية لـ ' : 'إضافة موعد ') . "$who إلى {$details['destination']} ($when)", $details];
+                $authorized = $nonMedical && !empty($doc['authorizedBy']) ? ' · بإذن ' . text_value($doc['authorizedBy']) : '';
+                return ['appointment', 'appointment.create', ($nonMedical ? 'إضافة رحلة غير طبية لـ ' : 'إضافة موعد ') . "$who إلى {$details['destination']} ($when)$authorized", $details];
             }
             if ($after === null) return ['appointment', 'appointment.delete', "حذف $noun $who ({$details['destination']}، $when)", $details];
             if (($after['status'] ?? null) === 'ملغي' && ($before['status'] ?? null) !== 'ملغي') {

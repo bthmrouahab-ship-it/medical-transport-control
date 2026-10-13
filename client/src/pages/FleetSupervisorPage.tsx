@@ -941,6 +941,9 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
                               <Navigation className="me-1 inline h-3.5 w-3.5 align-[-3px]" />{incomingText(car)} · بعد وصولها تُقترح لهذا الضيف
                             </p>
                           ))}
+                          {trip.appointment.authorizedBy && (
+                            <p className="mt-0.5 text-xs text-slate-500">بإذن {trip.appointment.authorizedBy}</p>
+                          )}
                           {trip.appointment.returnAt && trip.request.direction === "ذهاب" && (
                             <p className="mt-0.5 text-xs text-slate-500">العودة تلقائيًا {trip.appointment.returnAt}</p>
                           )}
