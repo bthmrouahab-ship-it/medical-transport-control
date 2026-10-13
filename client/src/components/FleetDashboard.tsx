@@ -77,9 +77,12 @@ export default function FleetDashboard({ canEdit = false, alerts = false, actor,
   }, [history]);
 
   // اسم السائق على الخريطة: من حسابه في صفحة السائق (من يقود السيارة فعلًا)، وإلا من بيانات السيارة
+  // سيارات القائمة فقط: مواقع أرقام قديمة (سيارة حُذفت أو تغيّر رقمها) لا تظهر ولا تُعد بين غير المتصلين
   const mapLocations = useMemo(() => {
     const drivers = new Map(fleet.map((vehicle) => [vehicle.plate, vehicle.driver]));
-    return locations.map((location) => ({ ...location, driver: location.driver?.trim() || drivers.get(location.plate) }));
+    return locations
+      .filter((location) => !fleet.length || drivers.has(location.plate))
+      .map((location) => ({ ...location, driver: location.driver?.trim() || drivers.get(location.plate) }));
   }, [locations, fleet]);
   const freshness = useMemo(() => new Map(mapLocations.map((location) => [location.plate, locationFreshness(location, now.getTime())])), [mapLocations, now]);
   const isLive = (plate?: string) => Boolean(plate && freshness.get(plate)?.state === "live");

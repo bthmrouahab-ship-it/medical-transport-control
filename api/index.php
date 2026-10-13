@@ -635,6 +635,12 @@ function route_write(PDO $pdo, array $body): array
             // حذف الشكوى يحذف صورة استمارتها الورقية
             if ($col === 'complaints' && $after === null) $pdo->prepare('DELETE FROM complaint_files WHERE id = ?')->execute([$id]);
             if ($col === 'fleet' || $col === 'drivers') $fleetChanged = true;
+            // حذف سيارة يحذف آخر موقع لها ومسار رحلتها (لا يبقى رقمها القديم على الخريطة)
+            if ($col === 'fleet' && $after === null) {
+                foreach (['vehicleLocations', 'vehicleTracks'] as $linked) {
+                    $pdo->prepare('UPDATE docs SET data = NULL, rev = ? WHERE col = ? AND id = ? AND data IS NOT NULL')->execute([$rev, $linked, $id]);
+                }
+            }
             // شقة أُضيفت إلى السيارات الخاصة أو حُذفت منها: يُعاد إرسال ضيوفها بالعلامة الجديدة
             if ($col === 'privateCars') {
                 private_car_units(true);
