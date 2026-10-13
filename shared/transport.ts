@@ -2,7 +2,7 @@ import { COMPLEX_CLINIC, DEFAULT_HOSPITALS, distanceKm, matchHospital, type Hosp
 import { FLEET_SEED } from "./seedData";
 import { roadKm } from "./roads";
 import { isValidMobile, normalizeGender, normalizeMobile, readAliased, toText, toWesternDigits } from "./text";
-import { PRIVATE_CAR_EXCEPTION, PRIVATE_CAR_MESSAGE, findGuestByName, guestIndex, guestOfAppointment, isMinor, privateCarBlocked, type Guest } from "./guests";
+import { PRIVATE_CAR_MESSAGE, findGuestByName, guestIndex, guestOfAppointment, isMinor, privateCarBlocked, type Guest } from "./guests";
 
 export type AppointmentKind = "عادي" | "احتياجات خاصة";
 export type VehicleKind = "سيدان" | "احتياجات خاصة" | "باص";
@@ -603,7 +603,7 @@ export function parseImportedAppointments(
     }
     // صاحب سيارة خاصة أو من يسكن معه في نفس الشقة: موعد في المستشفى الكوبي فقط
     if (index && guestId && privateCarBlocked(index.byId.get(guestId), { hospitalId: hospital?.id })) {
-      errors.push(`الصف ${excelRow}: «${patientName}»: ${PRIVATE_CAR_MESSAGE} (${PRIVATE_CAR_EXCEPTION})`);
+      errors.push(`الصف ${excelRow}: «${patientName}»: ${PRIVATE_CAR_MESSAGE}`);
       return;
     }
     const fromHospital = fromName ? matchHospital(fromName, hospitals) : null;

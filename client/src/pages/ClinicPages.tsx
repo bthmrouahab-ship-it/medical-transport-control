@@ -655,7 +655,7 @@ export function ClinicForm({ t, lang, initial, defaultDate, returnOnly = false, 
     }
     // صاحب السيارة الخاصة (أو من يسكن معه): موعد في المستشفى الكوبي فقط
     if (privateCarBlocked(guest, { hospitalId: hospital.id })) {
-      toast.error(t.privateCar, { description: t.privateCarCuban });
+      toast.error(t.privateCar);
       return;
     }
     if (!form.mobile || !form.appointmentDate || !form.appointmentAt) {
@@ -695,7 +695,7 @@ export function ClinicForm({ t, lang, initial, defaultDate, returnOnly = false, 
         return;
       }
       if (privateCarBlocked(guest, { hospitalId: secondHospital.id })) {
-        toast.error(t.privateCar, { description: `${t.secondTitle}: ${t.privateCarCuban}` });
+        toast.error(t.privateCar, { description: t.secondTitle });
         return;
       }
     }
@@ -970,7 +970,7 @@ const byUnit = (a: string, b: string) => a.localeCompare(b, "en", { numeric: tru
 export function GuestPicker({ t, guests, guest, onSelect, notListed, cubanOnly }: {
   t: ClinicText;
   /**
-   * موعد طبي: صاحب السيارة الخاصة يُختار مع تنبيه أنه يُسمح له فقط بموعد في المستشفى الكوبي
+   * موعد طبي: صاحب السيارة الخاصة يُختار مع تنبيه المنع، ويختفي التنبيه بعد اختيار المستشفى الكوبي (المستثنى)
    * (true: المستشفى المختار ليس الكوبي بعد). بلا القيمة (الرحلة غير الطبية) لا يُختار أبدًا.
    */
   cubanOnly?: boolean;
@@ -1039,10 +1039,8 @@ export function GuestPicker({ t, guests, guest, onSelect, notListed, cubanOnly }
               {hasSpecialNeeds(guest) && <Badge tone="violet" icon={Accessibility}>{t.specialNeedsBadge}</Badge>}
             </div>
             {/* موعد سابق لضيف أُضيفت شقته إلى السيارات الخاصة */}
-            {hasPrivateCar(guest) && (cubanOnly === false
-              ? <p className="mt-2 flex items-start gap-2 rounded-lg bg-amber-50 px-3 py-2 text-xs font-medium leading-5 text-amber-800 ring-1 ring-inset ring-amber-200"><CarFront className="mt-0.5 h-4 w-4 shrink-0" /> {t.privateCarCuban}</p>
-              : cubanOnly ? <p role="alert" className="mt-2 flex items-start gap-2 rounded-lg bg-red-50 px-3 py-2 text-xs font-medium leading-5 text-red-800 ring-1 ring-inset ring-red-200"><CarFront className="mt-0.5 h-4 w-4 shrink-0" /> {t.privateCarCuban}</p>
-              : privateCarAlert(guest))}
+            {/* المستشفى الكوبي مستثنى: بلا تنبيه بعد اختياره */}
+            {hasPrivateCar(guest) && cubanOnly !== false && privateCarAlert(guest)}
             <p className="mt-2 text-[11px] leading-4 text-slate-400">{t.guestFromList}</p>
           </div>
           <button type="button" onClick={() => { onSelect(undefined); requestAnimationFrame(() => inputRef.current?.focus()); }} className={btn("secondary", "sm")}>

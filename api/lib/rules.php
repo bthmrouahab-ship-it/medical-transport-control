@@ -568,7 +568,6 @@ function valid_guest(array $data, string $id): bool
  */
 /** الاستثناء الوحيد من منع السيارة الخاصة: موعد طبي في المستشفى الكوبي (PRIVATE_CAR_HOSPITAL في shared/guests.ts) */
 const PRIVATE_CAR_HOSPITAL = 'cuban';
-const PRIVATE_CAR_EXCEPTION = 'يُسمح له فقط بموعد في المستشفى الكوبي';
 function private_car_allowed(array $appointment): bool
 {
     return ($appointment['hospitalId'] ?? null) === PRIVATE_CAR_HOSPITAL && ($appointment['category'] ?? null) !== 'غير طبية';
@@ -594,7 +593,7 @@ function registry_error(array $appointment, callable $docOf, ?array $changed = n
         }
         // صاحب سيارة خاصة أو من يسكن معه في نفس الشقة: إلا لموعد طبي في المستشفى الكوبي
         if (($guestChanged || $hospitalChanged) && $guest !== null && guest_has_private_car($guest) && !private_car_allowed($appointment)) {
-            return PRIVATE_CAR_MESSAGE . ' (' . PRIVATE_CAR_EXCEPTION . ')';
+            return PRIVATE_CAR_MESSAGE;
         }
         $assistance = is_array($appointment['assistance'] ?? null) ? $appointment['assistance'] : [];
         // في الموعد الطبي فقط: الرحلة غير الطبية بلا مرافق إلزامي
