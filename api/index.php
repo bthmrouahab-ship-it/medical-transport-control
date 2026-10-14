@@ -25,6 +25,13 @@ const LOGIN_WINDOW_SECONDS = 900;
 const INVALID_LOGIN = 'اسم المستخدم أو كلمة المرور غير صحيحة';
 /** السيارة تُعتبر واصلة إذا اقتربت من الوجهة هذه المسافة بالأمتار (نفس القيمة في shared/trips.ts). */
 const ARRIVAL_RADIUS_M = 300;
+/**
+ * أعلى سرعة معقولة للسيارة (كم/س): موقع يبعد عن الموقع السابق أكثر مما تقطعه السيارة بهذه السرعة موقع قديم أعاده الهاتف
+ * (مثل موقع الصباح المخزّن)، فلا يُحفظ ولا يُكتشف به الوصول؛ ولا يُعلَّم وصول قبل أن يمضي من الاستلام وقت يكفي لقطع المسافة.
+ */
+const MAX_PLAUSIBLE_KMH = 160;
+/** القفزة التي تُفحص: أبعد من هذه المسافة عن الموقع السابق (الأقرب منها خطأ GPS عادي) */
+const JUMP_CHECK_M = 1000;
 /** موقع بدقة أسوأ من هذه (مثل تحديد الموقع من الشبكة بدل GPS) لا يُعتمد لاكتشاف الوصول. */
 const ARRIVAL_MAX_ACCURACY_M = 200;
 /** طلب العودة التلقائي للرحلة غير الطبية يُنشأ قبل وقت العودة بهذه الدقائق (حتى تصل السيارة في وقتها) */
@@ -923,6 +930,8 @@ function detect_arrivals(PDO $pdo, string $plate, float $lat, float $lng, int $r
         if (!$doc || ($doc['vehiclePlate'] ?? null) !== $plate || ($doc['status'] ?? null) !== 'تم استلام المريض' || isset($doc['arrivedAt'])) continue;
         if (!is_numeric($doc['destLat'] ?? null) || !is_numeric($doc['destLng'] ?? null)) continue;
         if (distance_m($lat, $lng, (float)$doc['destLat'], (float)$doc['destLng']) > ARRIVAL_RADIUS_M) continue;
+        // لا وصول قبل أن يمضي من الاستلام وقت يكفي لقطع المسافة من مكان الاستلام إلى الوجهة
+        if (implausible_trip($doc)) continue;
         $before = $doc;
         $doc['status'] = 'وصلت الوجهة';
         $doc['arrivedAt'] = now_iso();
@@ -933,6 +942,28 @@ function detect_arrivals(PDO $pdo, string $plate, float $lat, float $lng, int $r
         $arrived += 1;
     }
     return $arrived;
+}
+
+/** الوصول أسرع مما يمكن: المسافة من مكان استلام الضيف (موقع هاتف السائق) إلى الوجهة لا تُقطع في الوقت منذ الاستلام. */
+function implausible_trip(array $request): bool
+{
+    $gps = $request['pickupGps'] ?? null;
+    $since = strtotime((string)($request['pickedUpAt'] ?? ''));
+    if (!is_array($gps) || !is_numeric($gps['lat'] ?? null) || !is_numeric($gps['lng'] ?? null) || !$since) return false;
+    $meters = distance_m((float)$gps['lat'], (float)$gps['lng'], (float)$request['destLat'], (float)$request['destLng']);
+    return $meters > JUMP_CHECK_M && $meters / max(1, time() - $since) * 3.6 > MAX_PLAUSIBLE_KMH;
+}
+
+/**
+ * موقع قديم أعاده الهاتف: أبعد عن آخر موقع محفوظ (مع المشاركة) مما تقطعه السيارة في الوقت بينهما بسرعة MAX_PLAUSIBLE_KMH.
+ */
+function implausible_jump(?array $before, float $lat, float $lng): bool
+{
+    if (!($before['sharing'] ?? false) || !is_numeric($before['lat'] ?? null) || !is_numeric($before['lng'] ?? null)) return false;
+    $since = strtotime((string)($before['updatedAt'] ?? ''));
+    if (!$since) return false;
+    $meters = distance_m((float)$before['lat'], (float)$before['lng'], $lat, $lng);
+    return $meters > JUMP_CHECK_M && $meters / max(1, time() - $since) * 3.6 > MAX_PLAUSIBLE_KMH;
 }
 
 /** السائق يرسل موقع سيارته فقط (السيارة من حسابه، لا من الطلب). */
@@ -953,6 +984,11 @@ function route_location(PDO $pdo, array $body): array
             $lat = $body['lat'] ?? null;
             $lng = $body['lng'] ?? null;
             if (!is_numeric($lat) || !is_numeric($lng) || abs((float)$lat) > 90 || abs((float)$lng) > 180) throw new ApiException(400, 'موقع غير صالح', 'invalid');
+            // موقع قديم أعاده الهاتف (قفزة لا تقطعها السيارة): يُهمل، ويبقى آخر موقع صحيح
+            if (implausible_jump($before, (float)$lat, (float)$lng)) {
+                $pdo->commit();
+                return ['ok' => true, 'ignored' => 'jump'];
+            }
             $number = fn($value) => is_numeric($value) ? round((float)$value) : null;
             $after = [
                 'plate' => $plate,
