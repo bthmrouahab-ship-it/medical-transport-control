@@ -254,8 +254,6 @@ export function SupervisorHome({ uid, userName = "", lead = false, nurses = fals
   const stageOf = (appointment: ClinicAppointment): Stage | null => {
     if (transferredFrom.has(appointment.id)) return null;
     const request = latest.get(appointment.id);
-    // رحلة غير طبية يطلب سيارتها مشرف السيارات بنفسه: لا تظهر هنا قبل طلبها
-    if (!request && appointment.fleetRequest) return null;
     if (!request) return requestWindow(appointment, now).open ? "request" : "expired";
     if (request.direction === "عودة") return follows(request) ? "progress" : null;
     if (BEFORE_PICKUP.includes(request.status)) return follows(request) ? "progress" : null;
@@ -351,7 +349,7 @@ export function SupervisorHome({ uid, userName = "", lead = false, nurses = fals
   const matches = new Map(findUnrequestedMatches(todays, requests, hospitals, now).map((match) => [match.appointment.id, match]));
   const matchCount = toRequest.filter((row) => matches.has(row.appointment.id)).length;
   // مواعيد بلا طلب يمكن طلبها معًا (نفس الوجهة أو وجهة مجاورة خلال 30 دقيقة)، ولو في مبنى آخر
-  const openUnrequested = todays.filter((appointment) => appointment.status === "بانتظار طلب السيارة" && !appointment.fleetRequest && !isReturnOnly(appointment) && !latest.has(appointment.id) && requestWindow(appointment, now).open);
+  const openUnrequested = todays.filter((appointment) => appointment.status === "بانتظار طلب السيارة" && !isReturnOnly(appointment) && !latest.has(appointment.id) && requestWindow(appointment, now).open);
   const partnerOf = (appointment: ClinicAppointment) => openUnrequested.find((other) => {
     if (other.id === appointment.id || isReturnOnly(appointment)) return false;
     const details = calculateTripGroupingScore(appointment, other, hospitals);

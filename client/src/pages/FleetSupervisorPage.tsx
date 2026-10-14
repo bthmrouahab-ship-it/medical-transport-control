@@ -1053,7 +1053,7 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
 
           {/* رحلات غير طبية سُجّلت حتى لا تُنسى: يطلب المشرف سيارتها حين يريد */}
           {laterTrips.length > 0 && (
-            <Panel id="fleet-later" tone="neutral" icon={CalendarPlus} title="رحلات غير طبية لم تُطلب سيارتها" count={laterTrips.length} description="سجّلتها لتطلب سيارتها لاحقًا · لا تظهر في «بانتظار التوزيع» ولا لمشرف المبنى حتى تضغط «طلب السيارة»">
+            <Panel id="fleet-later" tone="neutral" icon={CalendarPlus} title="رحلات غير طبية لم تُطلب سيارتها" count={laterTrips.length} description="سجّلتها لتطلب سيارتها لاحقًا · لا تظهر في «بانتظار التوزيع» حتى تضغط «طلب السيارة» أنت أو مشرف المبنى (تظهر له في «تحتاج طلب سيارة»)">
               <div className="divide-y divide-slate-100">
                 {laterTrips.map((appointment) => (
                   <div key={appointment.id} data-target={`later:${appointment.id}`} className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:p-5">
