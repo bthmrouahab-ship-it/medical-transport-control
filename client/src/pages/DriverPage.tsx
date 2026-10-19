@@ -22,7 +22,7 @@ import {
 } from "@shared/transport";
 import { pickupDetails, tripEndpoints, tripPhase } from "@shared/trips";
 import { countdownText, driverCheck, type CheckKind } from "@shared/driverChecks";
-import { api, ApiError } from "@/lib/api";
+import { api, ApiError, hostingCheck } from "@/lib/api";
 import { beep } from "@/lib/beep";
 import { DRIVER_LANGS, DRIVER_TEXT, useDriverLang, type DriverLang, type DriverText } from "@/lib/driverI18n";
 import { disablePush, enablePush, pushState, refreshPush, type PushState } from "@/lib/push";
@@ -35,7 +35,9 @@ import { holdAutoReload } from "@/lib/appVersion";
 const SEND_EVERY_MS = 20000;
 const MIN_MOVE_KM = 0.05;
 /** تحديث قائمة الرحلات أثناء فتح التطبيق (والإشعار يصل ولو كان مغلقًا). */
-const TRIPS_EVERY_MS = 8000;
+const TRIPS_EVERY_MS = 15000;
+/** آخر إعادة تحميل لاجتياز فحص حماية الاستضافة (حتى لا تتكرر) */
+const CHECK_RELOAD_KEY = "fox_hosting_check_reload";
 
 type Status = "idle" | "starting" | "sharing" | "error";
 type Position = { lat: number; lng: number; accuracy: number; at: number };
@@ -117,6 +119,8 @@ export default function DriverPage({ profile, onLogout, onChangePassword }: {
   const [last, setLast] = useState<{ lat: number; lng: number; accuracy: number; at: Date } | null>(null);
   const watchId = useRef<number | null>(null);
   const lastSent = useRef<{ lat: number; lng: number; at: number } | null>(null);
+  /** مرات متتالية ردّت فيها حماية الاستضافة بصفحة الفحص بدل الرحلات */
+  const checkFailures = useRef(0);
   const lastPosition = useRef<Position | null>(null);
   const wakeLock = useRef<WakeLockSentinel | null>(null);
   /** فُتحت إعدادات الموقع لتشغيل GPS: تبدأ المشاركة عند الرجوع إلى التطبيق */
@@ -187,7 +191,8 @@ export default function DriverPage({ profile, onLogout, onChangePassword }: {
         const previous = lastSent.current;
         const moved = previous ? distanceKm(previous, point) : Infinity;
         if (previous && now - previous.at < SEND_EVERY_MS && moved < MIN_MOVE_KM) return;
-        if (previous && now - previous.at < 5000) return;
+        // ولا أقل من 10 ثوانٍ بين موقعين: الطلبات الكثيرة تُظهر صفحة فحص المتصفح من حماية الاستضافة
+        if (previous && now - previous.at < 10000) return;
         lastSent.current = { ...point, at: now };
         // السيارة ووقت التحديث يحددهما الخادم من حساب السائق
         api<{ ok: boolean; arrived?: number }>("location", {
@@ -253,8 +258,19 @@ export default function DriverPage({ profile, onLogout, onChangePassword }: {
       known.current = { active, denials };
       setTrips({ requests, appointments, hospitals: hospitals.length ? hospitals : DEFAULT_HOSPITALS, nurseBack, namesEn });
       setLoadError(null);
+      checkFailures.current = 0;
     } catch (loadFailure) {
       setLoadError(loadFailure);
+      // حماية الاستضافة تفحص الاتصال: إعادة تحميل الصفحة تجتاز الفحص (مرة كل دقيقتين على الأكثر). في التطبيق تستمر
+      // مشاركة الموقع من خدمته، وفي المتصفح لا تُعاد الصفحة أثناء المشاركة (تتوقف بإعادة التحميل)
+      if (hostingCheck(loadFailure) && ++checkFailures.current >= 2 && (inDriverApp() || watchId.current === null)) {
+        let last = 0;
+        try { last = Number(sessionStorage.getItem(CHECK_RELOAD_KEY) ?? 0); } catch { /* التخزين غير متاح */ }
+        if (Date.now() - last > 2 * 60000) {
+          try { sessionStorage.setItem(CHECK_RELOAD_KEY, String(Date.now())); } catch { /* التخزين غير متاح */ }
+          window.location.reload();
+        }
+      }
     }
   }, [plate]);
 

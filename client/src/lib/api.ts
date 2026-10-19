@@ -13,6 +13,12 @@ export class ApiError extends Error {
 
 /** الخادم لا يستجيب (انقطاع الاتصال، أو خطأ مؤقت في الاستضافة أو قاعدة البيانات)، لا رفض للطلب نفسه */
 export const serverUnavailable = (error: unknown) => error instanceof ApiError && (error.status === 0 || error.status >= 500);
+/**
+ * صفحة «Checking your browser…» من حماية استضافة Hostinger (hcdn) بدل رد الخادم: تظهر حين ترى الاستضافة طلبات كثيرة،
+ * وتُجتاز بفتح الصفحة نفسها في المتصفح (إعادة تحميلها)، لا بطلبات fetch.
+ */
+export const HOSTING_CHECK = "hosting_check";
+export const hostingCheck = (error: unknown) => error instanceof ApiError && error.code === HOSTING_CHECK;
 export const SERVER_DOWN_MESSAGE = "الخادم لا يستجيب الآن (العطل في الخادم، لا في اسم المستخدم أو كلمة المرور). انتظر دقيقة ثم حاول مرة أخرى.";
 
 type SessionEndListener = (message: string) => void;
@@ -45,7 +51,10 @@ export async function api<T>(route: string, body?: unknown, query: Record<string
   try {
     data = await response.json();
   } catch {
-    /* رد غير JSON (مثل صفحة خطأ من الاستضافة) */
+    // رد غير JSON: صفحة فحص المتصفح من حماية الاستضافة (ولو برمز 200) أو صفحة خطأ منها
+    if ((response.headers.get("content-type") ?? "").includes("text/html")) {
+      throw new ApiError("حماية الاستضافة تفحص الاتصال الآن. يعيد التطبيق المحاولة وحده.", response.ok ? 503 : response.status, HOSTING_CHECK);
+    }
   }
   if (!response.ok) {
     const error = new ApiError(data.error ?? "حدث خطأ في الخادم. حاول مرة أخرى.", response.status, data.code ?? "error");
