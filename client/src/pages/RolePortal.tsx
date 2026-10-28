@@ -42,7 +42,7 @@ import { CLINIC_TEXT, useLang } from "@/lib/i18n";
 import { ClinicForm, ClinicHome, useAppointmentNames } from "./ClinicPages";
 import { SupervisorHome, type RequestHandlers } from "./SupervisorPage";
 import { FleetSupervisorPage } from "./FleetSupervisorPage";
-import { ReferredComplaints } from "@/components/ComplaintReferrals";
+import { ReferredComplaints } from "@/components/ReferredComplaints";
 import { buildUrgentCase, hospitalTransfer, isUrgent, withUrgentOutcome, type UrgentDraft } from "@shared/urgent";
 import type { Hospital } from "@shared/hospitals";
 import type { UrgentOutcome } from "@shared/transport";
