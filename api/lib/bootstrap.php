@@ -36,8 +36,9 @@ final class ApiException extends Exception
 function config_paths(): array
 {
     $paths = [];
-    $root = $_SERVER['DOCUMENT_ROOT'] ?? '';
-    if ($root !== '') $paths[] = dirname(rtrim($root, '/')) . '/althumama-config.php';
+    // من سطر الأوامر (cron.php) بلا DOCUMENT_ROOT: مجلد الموقع هو أعلى api/
+    $root = ($_SERVER['DOCUMENT_ROOT'] ?? '') ?: dirname(__DIR__, 2);
+    $paths[] = dirname(rtrim($root, '/')) . '/althumama-config.php';
     $paths[] = dirname(__DIR__) . '/config.php';
     return $paths;
 }
@@ -230,6 +231,14 @@ function respond_early(int $status, array $body): void
         while (ob_get_level() > 0) ob_end_flush();
         flush();
     }
+}
+
+/** أعمال تُنفَّذ بعد إرسال الرد (مثل سؤال خدمة التتبع)، فلا ينتظرها المستخدم. بلا وسيط: تعيد القائمة. */
+function after_response(?callable $job = null): array
+{
+    static $jobs = [];
+    if ($job) $jobs[] = $job;
+    return $jobs;
 }
 
 /** جسم الطلب JSON. الطلبات التي تغيّر البيانات تحتاج ترويسة خاصة لا يرسلها موقع آخر (حماية من CSRF). */

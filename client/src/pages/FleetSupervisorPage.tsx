@@ -1957,8 +1957,8 @@ function VehicleDetailsDialog({ vehicle, driver, state, place, current, dayTrips
   const locationText = !location || !lastSeen
     ? "لم يشارك السائق موقعه بعد"
     : fresh?.state === "live"
-      ? [`GPS مباشر · آخر تحديث ${lastSeenText}`, location.accuracy ? `دقة ${Math.round(location.accuracy)} م` : "", location.speed ? `${location.speed} كم/س` : ""].filter(Boolean).join(" · ")
-      : `${location.sharing === false ? "أوقف السائق مشاركة الموقع" : "لا يصل موقعها الآن"} · آخر موقع ${lastSeenText}`;
+      ? [`${location.source === "tracker" ? "جهاز التتبع" : "GPS مباشر"} · آخر تحديث ${lastSeenText}`, location.accuracy ? `دقة ${Math.round(location.accuracy)} م` : "", location.speed ? `${location.speed} كم/س` : ""].filter(Boolean).join(" · ")
+      : `${location.sharing === false ? "أوقف السائق مشاركة الموقع" : location.source === "tracker" ? "لا يصل موقعها من جهاز التتبع الآن" : "لا يصل موقعها الآن"} · آخر موقع ${lastSeenText}`;
   const heading = Array.from(new Set(current.map((trip) => tripEndpoints(trip.appointment, trip.request.direction, hospitals, trip.from).destination))).join("، ");
   const placeText = phase?.kind === "toPickup" ? (phase.atPickup ? "عند نقطة الاستلام" : "في الطريق إلى الاستلام")
     : phase?.kind === "toDestination" ? `في الطريق إلى ${heading}`

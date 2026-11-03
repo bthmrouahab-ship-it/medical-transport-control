@@ -295,7 +295,7 @@ function active_trip_ids(PDO $pdo, string $plate): array
  * مسار السيارة في رحلتها (vehicleTracks/{plate}): مواقعها الدقيقة من إرسالها حتى وصولها، لمشرف السيارات والمدير على الخريطة.
  * يبقى بعد الوصول حتى تبدأ رحلتها التالية فيُمحى ويبدأ من جديد. الرحلة نفسها إذا ضُم إليها ضيف أو وصل بعض ركابها.
  */
-function record_track(PDO $pdo, string $plate, float $lat, float $lng, int $rev): void
+function record_track(PDO $pdo, string $plate, float $lat, float $lng, int $rev, ?int $at = null): void
 {
     $active = active_trip_ids($pdo, $plate);
     if (!$active) return;
@@ -310,7 +310,7 @@ function record_track(PDO $pdo, string $plate, float $lat, float $lng, int $rev)
     $last = $points ? $points[count($points) - 1] : null;
     $same = $previous === $active;
     if ($same && $last && distance_m((float)$last[0], (float)$last[1], $lat, $lng) < TRACK_STEP_M) return;
-    $points[] = [round($lat, 5), round($lng, 5), time()];
+    $points[] = [round($lat, 5), round($lng, 5), $at ?? time()];
     if (count($points) > TRACK_MAX_POINTS) {
         $kept = [];
         foreach ($points as $index => $point) if ($index % 2 === 0 || $index === count($points) - 1) $kept[] = $point;

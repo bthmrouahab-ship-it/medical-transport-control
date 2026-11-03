@@ -6,6 +6,10 @@ export type VehicleLocation = {
   speed?: number | null;
   driver?: string;
   sharing?: boolean;
+  /** «tracker»: الموقع من جهاز التتبع في السيارة (يكتبه الخادم من خدمة التتبع)، وإلا من هاتف السائق */
+  source?: "tracker";
+  /** حالة السيارة في خدمة التتبع (Free، Hired، Logged Off…) */
+  trackerStatus?: string;
   updatedAt: string;
   /** منذ متى لم تتحرك السيارة من مكانها (يكتبه الخادم): تنبيه السيارة المتوقفة */
   stillSince?: string;
