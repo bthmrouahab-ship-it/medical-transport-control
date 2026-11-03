@@ -12,28 +12,20 @@ declare(strict_types=1);
 ini_set('display_errors', '0');
 
 require __DIR__ . '/lib/bootstrap.php';
+require __DIR__ . '/lib/docs.php';
 require __DIR__ . '/lib/rules.php';
 require __DIR__ . '/lib/activity.php';
 require __DIR__ . '/lib/push.php';
 require __DIR__ . '/lib/driver.php';
 require __DIR__ . '/lib/drivers.php';
 require __DIR__ . '/lib/tracking.php';
+require __DIR__ . '/lib/positions.php';
+require __DIR__ . '/lib/tracker.php';
 
 /** محاولات خاطئة قبل الإيقاف: للحساب الواحد، ولعنوان الشبكة (موظفو المكتب قد يشتركون في عنوان واحد) */
 const LOGIN_MAX_FAILURES = ['u' => 10, 'ip' => 50];
 const LOGIN_WINDOW_SECONDS = 900;
 const INVALID_LOGIN = 'اسم المستخدم أو كلمة المرور غير صحيحة';
-/** السيارة تُعتبر واصلة إذا اقتربت من الوجهة هذه المسافة بالأمتار (نفس القيمة في shared/trips.ts). */
-const ARRIVAL_RADIUS_M = 300;
-/**
- * أعلى سرعة معقولة للسيارة (كم/س): موقع يبعد عن الموقع السابق أكثر مما تقطعه السيارة بهذه السرعة موقع قديم أعاده الهاتف
- * (مثل موقع الصباح المخزّن)، فلا يُحفظ ولا يُكتشف به الوصول؛ ولا يُعلَّم وصول قبل أن يمضي من الاستلام وقت يكفي لقطع المسافة.
- */
-const MAX_PLAUSIBLE_KMH = 160;
-/** القفزة التي تُفحص: أبعد من هذه المسافة عن الموقع السابق (الأقرب منها خطأ GPS عادي) */
-const JUMP_CHECK_M = 1000;
-/** موقع بدقة أسوأ من هذه (مثل تحديد الموقع من الشبكة بدل GPS) لا يُعتمد لاكتشاف الوصول. */
-const ARRIVAL_MAX_ACCURACY_M = 200;
 /** طلب العودة التلقائي للرحلة غير الطبية يُنشأ قبل وقت العودة بهذه الدقائق (حتى تصل السيارة في وقتها) */
 const AUTO_RETURN_LEAD_MINUTES = 30;
 /** أول تحميل يرسل المواعيد وطلبات السيارات لآخر هذه الأيام (والقادمة والمفتوحة)، والأقدم عند الحاجة من history */
@@ -56,6 +48,7 @@ try {
         'GET history' => 'route_history',
         'POST write' => 'route_write',
         'POST location' => 'route_location',
+        'GET tracker-status' => 'route_tracker_status',
         'GET stats-days' => 'route_stats_days',
         'GET activity' => 'route_activity',
         'POST stats-days.save' => 'route_stats_days_save',
@@ -77,13 +70,20 @@ try {
     if (!$handler) throw new ApiException(404, 'طلب غير معروف', 'not_found');
     $body = $method === 'POST' ? read_body() : [];
     $result = $handler(db(), $body);
-    if (!push_queue()) send_json(200, $result);
-    // إشعارات السائقين تُرسل بعد الرد، فلا ينتظرها مشرف السيارات
+    if (!push_queue() && !after_response()) send_json(200, $result);
+    // إشعارات السائقين وسؤال خدمة التتبع بعد الرد، فلا ينتظرها المستخدم
     respond_early(200, $result);
     try {
-        flush_pushes(db());
+        if (push_queue()) flush_pushes(db());
     } catch (Throwable $error) {
         error_log('[althumama push] ' . $error);
+    }
+    foreach (after_response() as $job) {
+        try {
+            $job(db());
+        } catch (Throwable $error) {
+            error_log('[althumama after] ' . $error);
+        }
     }
     exit;
 } catch (ApiException $error) {
@@ -363,41 +363,6 @@ function route_users_delete(PDO $pdo, array $body): array
 
 // ————— البيانات المشتركة —————
 
-function current_revision(PDO $pdo): int
-{
-    return (int)$pdo->query('SELECT value FROM revision WHERE id = 1')->fetchColumn();
-}
-
-/** رقم مراجعة جديد لكل عملية حفظ؛ يرتّب الكتابات فتعرف المزامنة ما تغيّر منذ آخر مرة. */
-function next_revision(PDO $pdo): int
-{
-    $pdo->exec('UPDATE revision SET value = value + 1 WHERE id = 1');
-    return current_revision($pdo);
-}
-
-function encode_doc(array $data): string
-{
-    return json_encode($data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
-}
-
-function decode_doc(?string $data): ?array
-{
-    if ($data === null) return null;
-    $value = json_decode($data, true);
-    return is_array($value) ? $value : null;
-}
-
-function valid_doc_id(string $id): bool
-{
-    return (bool)preg_match('/^[A-Za-z0-9._:-]{1,160}$/', $id);
-}
-
-function save_doc(PDO $pdo, string $col, string $id, ?array $data, int $rev): void
-{
-    $pdo->prepare('INSERT INTO docs (col, id, data, rev) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE data = VALUES(data), rev = VALUES(rev)')
-        ->execute([$col, $id, $data === null ? null : encode_doc($data), $rev]);
-}
-
 /**
  * التغييرات منذ مراجعة معيّنة (since=0: كل البيانات). المحذوف يرجع data = null.
  * السائق لا يرى بيانات المرضى، لذلك المزامنة لموظفي المكتب فقط، وقائمة الضيوف للمدير والعيادة
@@ -514,6 +479,8 @@ function route_sync(PDO $pdo): array
     } catch (Throwable $error) {
         error_log('[auto_returns] ' . $error->getMessage());
     }
+    // مواقع السيارات من جهاز التتبع (مرة كل TRACKER_POLL_SECONDS على الأكثر، بعد الرد)
+    if (tracker_config()) after_response('poll_tracker');
     $since = max(0, (int)($_GET['since'] ?? 0));
     $rev = current_revision($pdo);
     if ($since > $rev) $since = 0;
@@ -905,67 +872,6 @@ function route_guests_stats(PDO $pdo): array
     return ['guests' => $guests];
 }
 
-function distance_m(float $lat1, float $lng1, float $lat2, float $lng2): float
-{
-    $dlat = deg2rad($lat2 - $lat1);
-    $dlng = deg2rad($lng2 - $lng1);
-    $a = sin($dlat / 2) ** 2 + cos(deg2rad($lat1)) * cos(deg2rad($lat2)) * sin($dlng / 2) ** 2;
-    return 2 * 6371000 * asin(min(1.0, sqrt($a)));
-}
-
-/**
- * الطلبات التي في الطريق إلى وجهتها بهذه السيارة تُعلَّم «وصلت الوجهة» عندما تقترب منها،
- * فتظهر لمشرف السيارات وتصبح السيارة متاحة. يعيد عدد الطلبات التي وصلت.
- */
-function detect_arrivals(PDO $pdo, string $plate, float $lat, float $lng, int $rev, ?array $user = null): int
-{
-    $like = fn(string $text) => '%' . addcslashes($text, '%_\\') . '%';
-    $candidates = $pdo->prepare("SELECT id FROM docs WHERE col = 'requests' AND data LIKE ? AND data LIKE ?");
-    $candidates->execute([$like('"vehiclePlate":' . json_encode($plate, JSON_UNESCAPED_UNICODE)), $like('"status":"تم استلام المريض"')]);
-    $arrived = 0;
-    foreach ($candidates->fetchAll(PDO::FETCH_COLUMN) as $id) {
-        $lock = $pdo->prepare("SELECT data FROM docs WHERE col = 'requests' AND id = ? FOR UPDATE");
-        $lock->execute([$id]);
-        $doc = decode_doc($lock->fetchColumn() ?: null);
-        if (!$doc || ($doc['vehiclePlate'] ?? null) !== $plate || ($doc['status'] ?? null) !== 'تم استلام المريض' || isset($doc['arrivedAt'])) continue;
-        if (!is_numeric($doc['destLat'] ?? null) || !is_numeric($doc['destLng'] ?? null)) continue;
-        if (distance_m($lat, $lng, (float)$doc['destLat'], (float)$doc['destLng']) > ARRIVAL_RADIUS_M) continue;
-        // لا وصول قبل أن يمضي من الاستلام وقت يكفي لقطع المسافة من مكان الاستلام إلى الوجهة
-        if (implausible_trip($doc)) continue;
-        $before = $doc;
-        $doc['status'] = 'وصلت الوجهة';
-        $doc['arrivedAt'] = now_iso();
-        $doc['arrivalSource'] = 'gps';
-        $entry = describe_write($pdo, 'requests', (string)$id, $before, $doc);
-        save_doc($pdo, 'requests', (string)$id, $doc, $rev);
-        if ($entry && $user) log_activity($pdo, $user, $entry[0], $entry[1], $entry[2], (string)$id, $entry[3]);
-        $arrived += 1;
-    }
-    return $arrived;
-}
-
-/** الوصول أسرع مما يمكن: المسافة من مكان استلام الضيف (موقع هاتف السائق) إلى الوجهة لا تُقطع في الوقت منذ الاستلام. */
-function implausible_trip(array $request): bool
-{
-    $gps = $request['pickupGps'] ?? null;
-    $since = strtotime((string)($request['pickedUpAt'] ?? ''));
-    if (!is_array($gps) || !is_numeric($gps['lat'] ?? null) || !is_numeric($gps['lng'] ?? null) || !$since) return false;
-    $meters = distance_m((float)$gps['lat'], (float)$gps['lng'], (float)$request['destLat'], (float)$request['destLng']);
-    return $meters > JUMP_CHECK_M && $meters / max(1, time() - $since) * 3.6 > MAX_PLAUSIBLE_KMH;
-}
-
-/**
- * موقع قديم أعاده الهاتف: أبعد عن آخر موقع محفوظ (مع المشاركة) مما تقطعه السيارة في الوقت بينهما بسرعة MAX_PLAUSIBLE_KMH.
- */
-function implausible_jump(?array $before, float $lat, float $lng): bool
-{
-    if (!($before['sharing'] ?? false) || !is_numeric($before['lat'] ?? null) || !is_numeric($before['lng'] ?? null)) return false;
-    $since = strtotime((string)($before['updatedAt'] ?? ''));
-    if (!$since) return false;
-    $meters = distance_m((float)$before['lat'], (float)$before['lng'], $lat, $lng);
-    return $meters > JUMP_CHECK_M && $meters / max(1, time() - $since) * 3.6 > MAX_PLAUSIBLE_KMH;
-}
-
 /** السائق يرسل موقع سيارته فقط (السيارة من حسابه، لا من الطلب). */
 function route_location(PDO $pdo, array $body): array
 {
@@ -1002,26 +908,25 @@ function route_location(PDO $pdo, array $body): array
                 'sharing' => true,
                 'updatedAt' => now_iso(),
             ];
-        } elseif ($before !== null) {
+        } elseif ($before !== null && ($before['source'] ?? null) !== 'tracker') {
+            // إيقاف المشاركة في الهاتف لا يمس موقع جهاز التتبع
             $after = ['sharing' => false, 'updatedAt' => now_iso()] + $before;
         } else {
             $pdo->commit();
             return ['ok' => true];
         }
         $precise = $sharing && ($after['accuracy'] === null || $after['accuracy'] <= ARRIVAL_MAX_ACCURACY_M);
-        // منذ متى لم تتحرك السيارة (تنبيه السيارة المتوقفة خارج المجمع لمشرف السيارات)
-        if ($sharing) $after = stamp_still($before, $after, $precise);
-        save_doc($pdo, 'vehicleLocations', $plate, $after, $rev);
         // بداية مشاركة الموقع وإيقافها (لا تُسجَّل كل نقطة موقع)
-        $wasSharing = (bool)($before['sharing'] ?? false);
+        $wasSharing = (bool)($before['sharing'] ?? false) && ($before['source'] ?? null) !== 'tracker';
         if ($sharing !== $wasSharing) {
             log_activity($pdo, $user, 'location', $sharing ? 'location.start' : 'location.stop', ($sharing ? 'بدء' : 'إيقاف') . " مشاركة موقع السيارة $plate", $plate, ['plate' => $plate, 'driver' => $user['display_name']]);
         }
-        // مسار السيارة في رحلتها الجارية (يُمحى عند بداية رحلتها التالية)
-        if ($precise) record_track($pdo, $plate, (float)$after['lat'], (float)$after['lng'], $rev);
-        $arrived = $precise ? detect_arrivals($pdo, $plate, (float)$after['lat'], (float)$after['lng'], $rev, $user) : 0;
-        // سيارة العودة أو النقل وصلت قرب المستشفى ولم يُسجَّل وصولها بعد (لإحصائيات التأخير)
-        if ($precise) detect_pickup_proximity($pdo, $plate, (float)$after['lat'], (float)$after['lng'], $rev);
+        if ($sharing) {
+            $arrived = apply_position($pdo, $plate, $before, $after, $precise, $rev, $user);
+        } else {
+            save_doc($pdo, 'vehicleLocations', $plate, $after, $rev);
+            $arrived = 0;
+        }
         $pdo->commit();
     } catch (Throwable $error) {
         $pdo->rollBack();

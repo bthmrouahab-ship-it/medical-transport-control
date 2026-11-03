@@ -36,6 +36,7 @@ import {
   type VehicleKind,
   type VehicleRequest,
 } from "@shared/transport";
+import { TrackerStatus } from "@/components/TrackerStatus";
 import {
   ROLE_LABELS,
   USER_ROLES,
@@ -459,6 +460,7 @@ function VehiclesTab({ vehicles, requests, onChange }: {
         actions={<button onClick={() => setEditing("")} className={btn("primary")}><Plus className="h-4 w-4" /> إضافة سيارة</button>}
       />
       {editing === "" && <VehicleForm onSave={save} onCancel={() => setEditing(null)} />}
+      <TrackerStatus vehicles={vehicles} />
       <Panel icon={Truck} title="السيارات" count={vehicles.length}>
         <div className="divide-y divide-slate-100">
           {vehicles.length === 0 && <EmptyState icon={Truck} title="لا توجد سيارات مسجلة" />}
