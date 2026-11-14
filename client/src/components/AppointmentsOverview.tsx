@@ -129,6 +129,7 @@ export function AppointmentsOverview({ appointments, requests, date, now, onStop
     { key: "mobile", label: "الموبايل", value: (a) => (a.mobile === "-" ? "" : a.mobile), cell: (a) => (a.mobile && a.mobile !== "-" ? <span className="whitespace-nowrap text-xs"><GuestContact mobile={a.mobile} /></span> : <span className="text-slate-300">—</span>) },
     { key: "destination", label: "الوجهة", value: (a) => a.clinic, cell: (a) => <span className="block max-w-[200px] whitespace-normal">{a.clinic}{a.fromClinic && <span className="block text-[11px] text-slate-500">من {a.fromClinic}</span>}</span> },
     { key: "appointmentType", label: "نوع الموعد", value: (a) => a.appointmentType ?? "", cell: (a) => (a.appointmentType ? <span className="block max-w-[150px] whitespace-normal">{a.appointmentType}</span> : <span className="text-slate-300">—</span>) },
+    { key: "sameDayReason", label: "سبب الحجز في نفس اليوم", value: (a) => a.sameDayReason ?? "", cell: (a) => (a.sameDayReason ? <span className="block max-w-[200px] whitespace-normal text-xs">{a.sameDayReason}</span> : <span className="text-slate-300">—</span>) },
     {
       // طبية (موعد)، أو طلب عودة فقط من المستشفى، أو غير طبية
       key: "category",

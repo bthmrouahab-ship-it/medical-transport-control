@@ -6,6 +6,8 @@ import {
   destinationLabels,
   escortLocked,
   migrateAppointment,
+  needsSameDayReason,
+  sameDayReasonValid,
   normalizeAppointmentType,
   parseImportedAppointments,
   withMinorEscort,
@@ -106,5 +108,42 @@ describe("English names for the English interface and the driver", () => {
     const [plain] = importRows([row("ضيف بلا اسم إنجليزي")]).appointments;
     expect(buildDriverMessage([{ appointment: plain, request: { ...request, appointmentId: plain.id } }], { plate: "111", driver: "علي" }, DEFAULT_HOSPITALS, guests))
       .toContain("Guest: ضيف بلا اسم إنجليزي");
+  });
+});
+
+describe("same-day booking needs a reason", () => {
+  const today = "2026-10-03";
+  const base = { appointmentDate: today };
+
+  it("asks for it for a medical appointment added for today or moved to today", () => {
+    expect(needsSameDayReason(base, undefined, today)).toBe(true);
+    expect(needsSameDayReason({ appointmentDate: "2026-10-04" }, undefined, today)).toBe(false);
+    // نُقل من الغد إلى اليوم، أو موعد اليوم يُعدَّل (القديم بلا سبب لا يُطلب له)
+    expect(needsSameDayReason(base, { appointmentDate: "2026-10-04" }, today)).toBe(true);
+    expect(needsSameDayReason(base, { appointmentDate: today }, today)).toBe(false);
+  });
+
+  it("does not ask for return-only, hospital transfer, emergency referral or non-medical trips", () => {
+    expect(needsSameDayReason({ ...base, returnOnly: true }, undefined, today)).toBe(false);
+    expect(needsSameDayReason({ ...base, fromClinic: "مركز الثمامة الصحي" }, undefined, today)).toBe(false);
+    expect(needsSameDayReason({ ...base, appointmentType: "تحويلة طارئة" }, undefined, today)).toBe(false);
+    expect(needsSameDayReason({ ...base, category: "غير طبية" }, undefined, today)).toBe(false);
+  });
+
+  it("refuses a same-day Excel row without the reason and keeps the reason it was given", () => {
+    const missing = importRows([row("ضيف بالغ", { "تاريخ الموعد": today })]);
+    expect(missing.appointments).toHaveLength(0);
+    expect(missing.errors[0]).toContain("سبب حجز الموعد في نفس اليوم");
+    const given = importRows([row("ضيف بالغ", { "تاريخ الموعد": today, "سبب الحجز في نفس اليوم": "موعد جديد من المستشفى" })]);
+    expect(given.errors).toEqual([]);
+    expect(given.appointments[0].sameDayReason).toBe("موعد جديد من المستشفى");
+    // موعد الغد بلا سبب يُقبل
+    expect(importRows([row("ضيف بالغ")]).errors).toEqual([]);
+  });
+
+  it("keeps the reason when the appointment syncs, and a reason needs at least three letters", () => {
+    expect(migrateAppointment({ id: "A", patientName: "ضيف", clinic: "مستشفى حمد العام", appointmentDate: today, appointmentAt: "09:00", sameDayReason: "موعد طارئ" })?.sameDayReason).toBe("موعد طارئ");
+    expect(sameDayReasonValid("  ")).toBe(false);
+    expect(sameDayReasonValid("سبب")).toBe(true);
   });
 });

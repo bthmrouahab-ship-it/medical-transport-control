@@ -158,7 +158,7 @@ const ar = {
   cols: {
     date: "التاريخ", time: "الوقت", id: "رقم الموعد", guest: "الضيف", gender: "الجنس", building: "المبنى", apartment: "الشقة",
     mobile: "الموبايل", destination: "الوجهة", kind: "نوع الرحلة", needs: "الاحتياجات", status: "الحالة", reason: "سبب الإلغاء", actions: "إجراءات",
-    approval: "الموافقة", alerts: "تنبيهات", type: "الطلب", appointmentType: "نوع الموعد",
+    approval: "الموافقة", alerts: "تنبيهات", type: "الطلب", appointmentType: "نوع الموعد", sameDayReason: "سبب الحجز في نفس اليوم",
   },
   filterHint: "اضغط ▾ في عنوان أي عمود للفرز والفلترة كما في Excel",
   filtersOn: (count: number) => `${count} ${count === 1 ? "فلتر" : "فلاتر"}`,
@@ -257,6 +257,11 @@ const ar = {
   appointmentTypeOther: "أخرى (اكتب النوع)",
   appointmentTypeOtherLabel: "نوع الموعد الآخر",
   appointmentTypeOtherPlaceholder: "اكتب نوع الموعد",
+  // موعد لنفس اليوم (غير مجدول): سبب الحجز إلزامي
+  sameDayReason: "سبب الحجز في نفس اليوم",
+  sameDayReasonHint: "الموعد لليوم نفسه: اكتب لماذا لم يُسجَّل قبل يومه.",
+  sameDayReasonPlaceholder: "مثال: موعد جديد من المستشفى اليوم",
+  errSameDayReason: "اكتب سبب حجز الموعد في نفس اليوم",
   // الضيف أقل من 18 سنة: المرافق إلزامي إلا مع Nurse
   minor: "أقل من 18 سنة",
   minorEscortHint: "الضيف أقل من 18 سنة: أُضيف المرافق تلقائيًا، ولا يمكن إزالته إلا إذا كان معه Nurse.",
@@ -382,7 +387,7 @@ const en: ClinicText = {
   cols: {
     date: "Date", time: "Time", id: "Appointment no.", guest: "Guest", gender: "Gender", building: "Building", apartment: "Apt",
     mobile: "Mobile", destination: "Destination", kind: "Trip type", needs: "Needs", status: "Status", reason: "Cancellation reason", actions: "Actions",
-    approval: "Approval", alerts: "Alerts", type: "Request", appointmentType: "Appointment type",
+    approval: "Approval", alerts: "Alerts", type: "Request", appointmentType: "Appointment type", sameDayReason: "Same-day reason",
   },
   filterHint: "Use ▾ in any column header to sort and filter, as in Excel",
   filtersOn: (count) => `${count} ${count === 1 ? "filter" : "filters"}`,
@@ -474,6 +479,10 @@ const en: ClinicText = {
   appointmentTypeOther: "Other (type it)",
   appointmentTypeOtherLabel: "Other appointment type",
   appointmentTypeOtherPlaceholder: "Type the appointment type",
+  sameDayReason: "Reason for booking on the same day",
+  sameDayReasonHint: "This appointment is for today: write why it was not registered before its day.",
+  sameDayReasonPlaceholder: "e.g. new appointment from the hospital today",
+  errSameDayReason: "Write the reason for booking the appointment on the same day",
   minor: "Under 18",
   minorEscortHint: "The guest is under 18: an escort was added automatically and can be removed only if a nurse goes with them.",
   minorEscortLocked: "An escort is required for a guest under 18 unless a nurse goes with them",

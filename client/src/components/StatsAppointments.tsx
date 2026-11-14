@@ -19,6 +19,8 @@ type Row = {
   destination: string;
   category: string;
   booking: string;
+  /** سبب الحجز في نفس اليوم (غير مجدولة) */
+  sameDayReason: string;
   status: string;
   outcome: Outcome | null;
   cancelReason: string;
@@ -61,6 +63,7 @@ export default function StatsAppointments({ trips, appointments, requests }: {
         destination: appointment.clinic,
         category: appointmentCategory(appointment),
         booking: trip.booking ? BOOKING_LABELS[trip.booking] : "",
+        sameDayReason: appointment.sameDayReason ?? "",
         status: statusText(appointment.status),
         outcome: trip.outcome ?? null,
         cancelReason: trip.cancel?.reason ?? "",
@@ -86,6 +89,12 @@ export default function StatsAppointments({ trips, appointments, requests }: {
       label: "التسجيل",
       value: (row) => row.booking,
       cell: (row) => (row.booking ? <Badge tone={row.booking === BOOKING_LABELS.sameDay ? "amber" : "blue"}>{row.booking}</Badge> : <span className="text-slate-300">—</span>),
+    },
+    {
+      key: "sameDayReason",
+      label: "سبب الحجز في نفس اليوم",
+      value: (row) => row.sameDayReason,
+      cell: (row) => (row.sameDayReason ? <span className="block max-w-[200px] whitespace-normal text-xs">{row.sameDayReason}</span> : <span className="text-slate-300">—</span>),
     },
     { key: "status", label: "الحالة", value: (row) => row.status },
     {
