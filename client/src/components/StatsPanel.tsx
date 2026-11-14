@@ -9,6 +9,9 @@ import {
   TRIP_KINDS,
   filterOptions,
   hasDetailFilters,
+  countsRoleBuses,
+  BOOKING_LABELS,
+  BOOKING_HINTS,
   inRange,
   matchesFilter,
   selectTrips,
@@ -124,8 +127,8 @@ export default function StatsPanel({ canEdit, actor, hospitals, fleet, appointme
 
   const systemTrips = useMemo(() => tripsFromSystem(appointments, requests, fleet, hospitals), [appointments, requests, fleet, hospitals]);
   const selected = useMemo(
-    () => selectTrips({ imported: imported ?? [], legacy: history, system: systemTrips }, filter.source),
-    [imported, history, systemTrips, filter.source],
+    () => selectTrips({ imported: imported ?? [], legacy: history, system: systemTrips }, "all"),
+    [imported, history, systemTrips],
   );
   const periodTrips = useMemo(() => selected.trips.filter((trip) => inRange(trip.date, filter)), [selected, filter]);
   const options = useMemo(() => filterOptions(periodTrips, hospitals), [periodTrips, hospitals]);
@@ -185,8 +188,8 @@ export default function StatsPanel({ canEdit, actor, hospitals, fleet, appointme
       && (!filter.to || filter.to >= selected.legacy.to)
       && !hasDetailFilters(filter)
       ? selected.legacy : null;
-    // الباصات المخصصة في الخدمة سيارات عاملة، ما لم تُختر وجهة أو منطقة أو مبنى أو نوع رحلة
-    const roleDays = filter.zone === "all" && filter.destination === "all" && filter.building === "all" && filter.category === "all" ? service?.days ?? [] : [];
+    // الباصات المخصصة في الخدمة سيارات عاملة، ما لم تُختر وجهة أو منطقة أو مبنى أو نوع رحلة أو تسجيل
+    const roleDays = countsRoleBuses(filter) ? service?.days ?? [] : [];
     return summarizeTrips(filteredTrips, hospitals, legacy, roleDays, schedules);
   }, [filteredTrips, filter, hospitals, selected.legacy, service, schedules]);
 
@@ -224,7 +227,8 @@ export default function StatsPanel({ canEdit, actor, hospitals, fleet, appointme
       // من سجل العمليات: من طلب كل رحلة ومن أرسل سيارتها ومتى (في «الرحلات بالتفصيل»)، والسجل نفسه لا يُصدَّر
       const { items } = await fetchAllActivity(range);
       const title = "إحصائيات سيارات مجمع الثمامة";
-      const subtitle = `${periodLabel} · أنشأه ${actor} في ${stamp()}`;
+      const bookingText = filter.booking === "all" ? "" : ` · المواعيد ${filter.booking === "scheduled" ? "المجدولة" : "غير المجدولة"} فقط`;
+      const subtitle = `${periodLabel}${bookingText} · أنشأه ${actor} في ${stamp()}`;
       // تقويم الأيام في التصدير لأكثر من يوم (من بداية الفلتر ونهايته، وإلا أول يوم وآخر يوم فيهما مواعيد)
       const report = statsReport(summary, title, subtitle, service, operations, { from: filter.from || undefined, to: filter.to || undefined });
       const index = guestIndex(guestRecords ?? []);
@@ -278,7 +282,7 @@ export default function StatsPanel({ canEdit, actor, hospitals, fleet, appointme
         description={(
           <>
             {summary.totalTrips ? <>الفترة من <span dir="ltr">{summary.from}</span> إلى <span dir="ltr">{summary.to}</span> · </> : null}
-            {selected.days.excel} يوم من ملفات Excel · {selected.days.system} يوم من رحلات النظام{filter.source === "all" ? " (اليوم الذي له ملف Excel يُحسب من الملف فقط)" : ""}
+            {selected.days.excel} يوم من ملفات Excel · {selected.days.system} يوم من رحلات النظام (اليوم الذي له ملف Excel يُحسب من الملف فقط){filter.booking !== "all" ? " · فلتر التسجيل لمواعيد النظام فقط" : ""}
           </>
         )}
         actions={(
@@ -304,10 +308,10 @@ export default function StatsPanel({ canEdit, actor, hospitals, fleet, appointme
           )}
         </div>
         <div className="grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-7">
-          <Select label="المصدر" value={filter.source} onChange={(value) => update({ source: value as StatsFilter["source"] })}>
+          <Select label="التسجيل" value={filter.booking} onChange={(value) => update({ booking: value as StatsFilter["booking"] })}>
             <option value="all">الكل</option>
-            <option value="excel">ملفات Excel</option>
-            <option value="system">رحلات النظام</option>
+            <option value="scheduled">{BOOKING_LABELS.scheduled} ({BOOKING_HINTS.scheduled})</option>
+            <option value="sameDay">{BOOKING_LABELS.sameDay} ({BOOKING_HINTS.sameDay})</option>
           </Select>
           <Select label="نوع الرحلة" value={filter.category} onChange={(value) => update({ category: value as StatsFilter["category"] })}>
             <option value="all">الكل</option>

@@ -279,7 +279,8 @@ export type StatsFilter = {
   /** "" = بلا حد */
   from: string;
   to: string;
-  source: StatsSource;
+  /** المواعيد المجدولة أو غير المجدولة (رحلات النظام فقط: ملفات Excel والملخص القديم بلا وقت تسجيل) */
+  booking: Booking | "all";
   kind: TripKind | "all";
   zone: string;
   destination: string;
@@ -291,7 +292,7 @@ export type StatsFilter = {
 export const EMPTY_FILTER: StatsFilter = {
   from: "",
   to: "",
-  source: "all",
+  booking: "all",
   kind: "all",
   zone: "all",
   destination: "all",
@@ -672,7 +673,12 @@ export function inRange(date: string, filter: Pick<StatsFilter, "from" | "to">) 
 /** فلاتر لا يستطيع الملخص القديم تطبيقها على الساعات والوجهات والسيارات. */
 export function hasDetailFilters(filter: StatsFilter) {
   return filter.kind !== "all" || filter.zone !== "all" || filter.destination !== "all"
-    || filter.plate !== "all" || filter.building !== "all" || filter.category !== "all";
+    || filter.plate !== "all" || filter.building !== "all" || filter.category !== "all" || filter.booking !== "all";
+}
+
+/** الباصات المخصصة وسيارات المدارس في الخدمة تُعد سيارات عاملة ما لم تُختر وجهة أو منطقة أو مبنى أو نوع رحلة أو تسجيل. */
+export function countsRoleBuses(filter: StatsFilter) {
+  return filter.zone === "all" && filter.destination === "all" && filter.building === "all" && filter.category === "all" && filter.booking === "all";
 }
 
 export function matchesFilter(trip: TripStat, filter: StatsFilter, hospitals: Hospital[]) {
@@ -680,6 +686,7 @@ export function matchesFilter(trip: TripStat, filter: StatsFilter, hospitals: Ho
   if (filter.kind !== "all" && trip.kind !== filter.kind) return false;
   if (filter.category === "medical" && trip.nonMedical) return false;
   if (filter.category === "nonMedical" && !trip.nonMedical) return false;
+  if (filter.booking !== "all" && trip.booking !== filter.booking) return false;
   if (filter.plate !== "all" && !tripVehicles(trip).some((vehicle) => vehicle.plate === filter.plate)) return false;
   if (filter.building !== "all" && trip.building !== filter.building) return false;
   if (filter.zone !== "all" && (trip.legacy || tripZone(trip, hospitals) !== filter.zone)) return false;

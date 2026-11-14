@@ -1,5 +1,5 @@
 import { summarizeOperations } from "@shared/operations";
-import { serviceSummaryOf, summarizeTrips } from "@shared/stats";
+import { countsRoleBuses, serviceSummaryOf, summarizeTrips } from "@shared/stats";
 import type { ReportSection } from "@/lib/report";
 import type { ReportViewerData } from "./types";
 
@@ -11,9 +11,8 @@ export function statsForDates(data: ReportViewerData, dates: string[]) {
   const set = new Set(dates);
   const trips = data.trips.filter((trip) => set.has(trip.date));
   const service = data.service ? serviceSummaryOf(data.service.days.filter((day) => set.has(day.date))) : null;
-  // الباصات المخصصة في الخدمة سيارات عاملة، ما لم تُختر وجهة أو منطقة أو مبنى أو نوع رحلة (كما في الموقع)
-  const { filter } = data;
-  const roleDays = filter.zone === "all" && filter.destination === "all" && filter.building === "all" && filter.category === "all" ? service?.days ?? [] : [];
+  // الباصات المخصصة في الخدمة سيارات عاملة، ما لم تُختر وجهة أو منطقة أو مبنى أو نوع رحلة أو تسجيل (كما في الموقع)
+  const roleDays = countsRoleBuses(data.filter) ? service?.days ?? [] : [];
   return {
     trips,
     service,

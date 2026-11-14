@@ -138,3 +138,28 @@ describe("working hours of the vehicles", () => {
     expect(clockText(24 * 60 + 30)).toBe("00:30 (+1)");
   });
 });
+
+describe("scheduled and same-day appointments filter", () => {
+  // A: سُجّل قبل يومه (مجدول)، B: في يومه (غير مجدول)، C: قبل حفظ وقت التسجيل
+  const appointments = [
+    appointment("A", "2026-10-06", { addedAt: "2026-10-04T08:00:00" }),
+    appointment("B", "2026-10-06", { addedAt: "2026-10-06T06:00:00" }),
+    appointment("C", "2026-10-06"),
+  ];
+  const requests = [request("RA", "A", "ذهاب", "111"), request("RB", "B", "ذهاب", "222"), request("RC", "C", "ذهاب", "111")];
+  const trips = tripsFromSystem(appointments, requests, fleet, DEFAULT_HOSPITALS);
+  const ids = (booking: "scheduled" | "sameDay") =>
+    trips.filter((trip) => matchesFilter(trip, { ...EMPTY_FILTER, booking }, DEFAULT_HOSPITALS)).map((trip) => trip.appointmentId);
+
+  it("keeps only the chosen kind of booking", () => {
+    expect(ids("scheduled")).toEqual(["A"]);
+    expect(ids("sameDay")).toEqual(["B"]);
+    expect(trips.filter((trip) => matchesFilter(trip, EMPTY_FILTER, DEFAULT_HOSPITALS))).toHaveLength(3);
+  });
+
+  it("leaves out Excel trips and appointments without a booking time", () => {
+    const excel = { date: "2026-10-06", kind: "سيدان", plate: "111" } as TripStat;
+    expect(matchesFilter(excel, { ...EMPTY_FILTER, booking: "scheduled" }, DEFAULT_HOSPITALS)).toBe(false);
+    expect(ids("scheduled")).not.toContain("C");
+  });
+});
