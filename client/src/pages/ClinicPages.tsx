@@ -44,6 +44,10 @@ import {
   ESCORT_NEED,
   GENDERS,
   appointmentTypeText,
+  needsSameDayReason,
+  sameDayReasonValid,
+  SAME_DAY_REASON_MAX,
+  SAME_DAY_REASON_LABEL,
   approvalOf,
   destinationLabels,
   guestAlerts,
@@ -166,6 +170,8 @@ export function ClinicHome({ t, lang, appointments, date, onDateChange, onNew, o
         "رقم الشقة": "4",
         "رقم الموبايل": "55123456",
         "تاريخ الموعد": localDateString(),
+        // إلزامي لموعد اليوم نفسه (وإلا يبقى فارغًا)
+        [SAME_DAY_REASON_LABEL]: "موعد جديد من المستشفى اليوم",
         "وقت الموعد": "09:30",
         "نوع الرحلة": "عادي",
         "احتياجات الضيف": "يحتاج مرافق، يحتاج Nurse، كرسي متحرك",
@@ -176,7 +182,7 @@ export function ClinicHome({ t, lang, appointments, date, onDateChange, onNew, o
         // نقل من مستشفى إلى مستشفى: اسم مستشفى الاستلام من الدليل (وإلا يبقى فارغًا)
         "من مستشفى": "",
       }]);
-      worksheet["!cols"] = [{ wch: 22 }, { wch: 28 }, { wch: 16 }, { wch: 14 }, { wch: 14 }, { wch: 16 }, { wch: 14 }, { wch: 14 }, { wch: 18 }, { wch: 30 }, { wch: 10 }, { wch: 12 }, { wch: 10 }, { wch: 28 }];
+      worksheet["!cols"] = [{ wch: 22 }, { wch: 28 }, { wch: 16 }, { wch: 14 }, { wch: 14 }, { wch: 16 }, { wch: 14 }, { wch: 30 }, { wch: 14 }, { wch: 18 }, { wch: 30 }, { wch: 10 }, { wch: 12 }, { wch: 10 }, { wch: 28 }];
       const workbook = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(workbook, worksheet, "المواعيد");
       XLSX.writeFile(workbook, "appointments-template.xlsx");
@@ -324,6 +330,13 @@ export function ClinicHome({ t, lang, appointments, date, onDateChange, onNew, o
       value: (a) => appointmentTypeText(a.appointmentType, lang),
       cell: (a) => (a.appointmentType ? <span className="block max-w-[160px] whitespace-normal">{appointmentTypeText(a.appointmentType, lang)}</span> : <span className="text-slate-300">—</span>),
     },
+    {
+      // سبب حجز موعد اليوم في يومه نفسه (يراه مسؤول العيادة قبل الموافقة)
+      key: "sameDayReason",
+      label: t.cols.sameDayReason,
+      value: (a) => a.sameDayReason ?? "",
+      cell: (a) => (a.sameDayReason ? <span className="block max-w-[200px] whitespace-normal text-xs">{a.sameDayReason}</span> : <span className="text-slate-300">—</span>),
+    },
     { key: "kind", label: t.cols.kind, value: (a) => t.kind(a.kind) },
     { key: "needs", label: t.cols.needs, value: (a) => a.assistance.map(t.need).join(separator), cell: (a) => (a.assistance.length ? <span className="block max-w-[180px] whitespace-normal text-xs">{a.assistance.map(t.need).join(separator)}</span> : <span className="text-slate-300">—</span>) },
     {
@@ -380,6 +393,7 @@ export function ClinicHome({ t, lang, appointments, date, onDateChange, onNew, o
         "الجنس": appointment.gender ?? "",
         "اسم العيادة أو المستشفى": appointment.clinic,
         "نوع الموعد": appointment.appointmentType ?? "",
+        [SAME_DAY_REASON_LABEL]: appointment.sameDayReason ?? "",
         "رقم المبنى": appointment.buildingNumber,
         "رقم الشقة": appointment.apartmentNumber,
         "رقم الموبايل": appointment.mobile,
@@ -607,12 +621,18 @@ export function ClinicForm({ t, lang, initial, defaultDate, returnOnly = false, 
       gender: initial?.gender ?? guest?.gender,
       cancer: initial?.cancer ?? false,
       appointmentType: initial?.appointmentType ?? "",
+      sameDayReason: initial?.sameDayReason ?? "",
     };
   });
   const guest = form.guestId ? index.byId.get(form.guestId) : undefined;
   const minor = isMinor(guest);
   // موعد ثانٍ لنفس الضيف في نفس اليوم (عند الإضافة فقط)
   const [second, setSecond] = useState({ enabled: false, hospitalId: "", appointmentAt: "", appointmentType: "" });
+  // موعد لليوم نفسه (أو نُقل إلى اليوم): سبب الحجز إلزامي، لا لطلب العودة والنقل والتحويلة الطارئة (والموعد الثاني يأخذه من الأول)
+  const sameDayKind = { appointmentDate: form.appointmentDate, returnOnly, fromClinic: transfer ? "transfer" : undefined };
+  const sameDayRequired = needsSameDayReason({ ...sameDayKind, appointmentType: form.appointmentType }, initial ?? undefined)
+    || (second.enabled && !initial && !returnOnly && !transfer && needsSameDayReason({ ...sameDayKind, appointmentType: second.appointmentType }));
+  const showSameDayReason = sameDayRequired || Boolean(initial?.sameDayReason);
 
   function selectGuest(next: Guest | undefined) {
     setForm((current) => {
@@ -682,6 +702,11 @@ export function ClinicForm({ t, lang, initial, defaultDate, returnOnly = false, 
       toast.error(t.emergencyTodayOnly);
       return;
     }
+    if (sameDayRequired && !sameDayReasonValid(form.sameDayReason)) {
+      toast.error(t.errSameDayReason);
+      document.getElementById("same-day-reason")?.focus();
+      return;
+    }
     // طلب العودة أو النقل ليوم غير اليوم: يُسأل أولًا (الطلب يصل إلى مشرف السيارات لذلك اليوم، لا سيارة اليوم)
     if ((returnOnly || transfer) && form.appointmentDate !== localDateString() && !window.confirm(t.directNotTodayConfirm(dayName(form.appointmentDate)))) return;
     const secondHospital = hospitals.find((item) => item.id === second.hospitalId);
@@ -717,6 +742,7 @@ export function ClinicForm({ t, lang, initial, defaultDate, returnOnly = false, 
       gender: form.gender,
       ...(form.cancer ? { cancer: true } : {}),
       ...(appointmentType ? { appointmentType } : {}),
+      ...(showSameDayReason && form.sameDayReason.trim() ? { sameDayReason: form.sameDayReason.trim().slice(0, SAME_DAY_REASON_MAX) } : {}),
       ...(returnOnly ? { returnOnly: true } : {}),
       ...(fromHospital ? { fromClinic: fromHospital.name, fromHospitalId: fromHospital.id } : {}),
       // ممرضة من قائمة الممرضات: تُعرف بها عند المشرفين والسائق
@@ -794,6 +820,22 @@ export function ClinicForm({ t, lang, initial, defaultDate, returnOnly = false, 
                 </p>
               ))}
           </div>
+          {showSameDayReason && (
+            <label htmlFor="same-day-reason" className="block sm:col-span-2">
+              <span className={labelClass}>{t.sameDayReason}</span>
+              <textarea
+                id="same-day-reason"
+                value={form.sameDayReason}
+                onChange={(event) => setForm({ ...form, sameDayReason: event.target.value })}
+                maxLength={SAME_DAY_REASON_MAX}
+                rows={2}
+                required={sameDayRequired}
+                placeholder={t.sameDayReasonPlaceholder}
+                className={inputClass}
+              />
+              <span className="mt-1.5 block text-xs leading-5 text-slate-500">{t.sameDayReasonHint}</span>
+            </label>
+          )}
           <Field label={returnOnly ? t.returnTime : t.time} value={form.appointmentAt} onChange={(value) => setForm({ ...form, appointmentAt: value })} type="time" />
           <AppointmentTypeField
             id="appointment-type"

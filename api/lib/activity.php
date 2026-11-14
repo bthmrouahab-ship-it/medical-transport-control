@@ -32,6 +32,7 @@ const APPOINTMENT_FIELD_LABELS = [
     'authorizedBy' => 'بإذن',
     'cancer' => 'أولوية',
     'appointmentType' => 'نوع الموعد',
+    'sameDayReason' => 'سبب الحجز في نفس اليوم',
 ];
 
 const VEHICLE_FIELD_LABELS = ['plate' => 'رقم السيارة', 'driver' => 'السائق', 'phone' => 'الهاتف', 'kind' => 'النوع', 'busRole' => 'التخصيص'];
@@ -222,6 +223,7 @@ function describe_write(PDO $pdo, string $col, string $id, ?array $before, ?arra
                 if ($returnOnly) return ['appointment', 'appointment.create', "إضافة طلب عودة من المستشفى لـ $who من {$details['destination']} إلى المجمع ($when)", $details];
                 $authorized = $nonMedical && !empty($doc['authorizedBy']) ? ' · بإذن ' . text_value($doc['authorizedBy']) : '';
                 if (($doc['fleetRequest'] ?? null) === true) $authorized .= ' · يطلب مشرف السيارات سيارتها لاحقًا';
+                if (!empty($doc['sameDayReason'])) $authorized .= ' · سبب الحجز في نفس اليوم: ' . text_value($doc['sameDayReason']);
                 return ['appointment', 'appointment.create', ($nonMedical ? 'إضافة رحلة غير طبية لـ ' : 'إضافة موعد ') . "$who إلى {$details['destination']} ($when)$authorized", $details];
             }
             if ($after === null) return ['appointment', 'appointment.delete', "حذف $noun $who ({$details['destination']}، $when)", $details];

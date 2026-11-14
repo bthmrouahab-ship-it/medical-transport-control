@@ -10,7 +10,7 @@ const APPOINTMENT_STATUSES = ['بانتظار طلب السيارة', 'تم طل
 const APPOINTMENT_FIELDS = ['id', 'guestId', 'patientName', 'clinic', 'buildingNumber', 'apartmentNumber', 'mobile', 'appointmentDate',
     'appointmentAt', 'hospitalId', 'category', 'kind', 'assistance', 'status', 'cancelReason', 'cancelledBy', 'cancelledAt',
     'gender', 'cancer', 'returnedSelf', 'returnedSelfBy', 'returnedSelfAt', 'approval', 'approvedBy', 'approvedAt', 'excludedBy', 'excludedAt',
-    'returnOnly', 'fromClinic', 'fromHospitalId', 'nurse', 'appointmentType', 'seriesId', 'returnAt', 'authorizedBy', 'fleetRequest', 'addedAt',
+    'returnOnly', 'fromClinic', 'fromHospitalId', 'nurse', 'appointmentType', 'sameDayReason', 'seriesId', 'returnAt', 'authorizedBy', 'fleetRequest', 'addedAt',
     'urgent', 'urgentOutcome', 'urgentOutcomeBy', 'urgentOutcomeAt', 'urgentFrom', '_o'];
 /**
  * الحالة المستعجلة في شفت الليل (shared/urgent.ts): مشرف المبنى يطلب سيارة من المبنى إلى عيادة المجمع من 10 مساءً إلى
@@ -32,7 +32,7 @@ const URGENT_GUEST_FIELDS = ['patientName', 'buildingNumber', 'apartmentNumber',
 const APPROVAL_FIELDS = ['approval', 'approvedBy', 'approvedAt', 'excludedBy', 'excludedAt'];
 /** بيانات الموعد نفسه: تعديل العيادة لها يعيد الموعد إلى انتظار موافقة مسؤولها */
 const APPOINTMENT_CONTENT_FIELDS = ['guestId', 'patientName', 'clinic', 'buildingNumber', 'apartmentNumber', 'mobile', 'appointmentDate', 'appointmentAt',
-    'hospitalId', 'category', 'kind', 'assistance', 'gender', 'cancer', 'returnOnly', 'fromClinic', 'fromHospitalId', 'nurse', 'appointmentType'];
+    'hospitalId', 'category', 'kind', 'assistance', 'gender', 'cancer', 'returnOnly', 'fromClinic', 'fromHospitalId', 'nurse', 'appointmentType', 'sameDayReason'];
 /** بيانات الرحلة غير الطبية التي يعدّلها مشرف السيارات قبل إرسال سيارتها (الضيف والوجهة والتاريخ والوقت والاحتياجات) */
 const NON_MEDICAL_EDIT_FIELDS = ['guestId', 'patientName', 'clinic', 'buildingNumber', 'apartmentNumber', 'mobile', 'appointmentDate', 'appointmentAt',
     'gender', 'nurse', 'kind', 'assistance', 'returnAt', 'authorizedBy'];
@@ -928,6 +928,7 @@ function valid_appointment(array $data, string $id): bool
         // موعد ممرضة من قائمة الممرضات: true أو بلا الخانة
         && ($data['nurse'] ?? true) === true
         && valid_appointment_type($data)
+        && valid_same_day_reason($data)
         // رحلة غير طبية متكررة: رقم سلسلتها
         && (!array_key_exists('seriesId', $data) || (is_text($data['seriesId'], 40) && $data['seriesId'] !== '' && ($data['category'] ?? '') === 'غير طبية'))
         // العودة التلقائية للرحلة غير الطبية: وقتها بعد وقت الذهاب في نفس اليوم (auto_returns في index.php)
@@ -1031,6 +1032,26 @@ function valid_cancel(array $user, array $after, array $changed): bool
         && is_text($after['cancelledAt'] ?? null, 40) && strtotime($after['cancelledAt']) !== false;
 }
 
+/** سبب حجز الموعد في نفس اليوم (sameDayReason): نص حتى SAME_DAY_REASON_MAX حرفًا، أو بلا الخانة */
+const SAME_DAY_REASON_MAX = 200;
+const SAME_DAY_REASON_MESSAGE = 'اكتب سبب حجز الموعد في نفس اليوم';
+
+function valid_same_day_reason(array $data): bool
+{
+    return !array_key_exists('sameDayReason', $data) || (is_text($data['sameDayReason'], SAME_DAY_REASON_MAX) && mb_strlen(trim($data['sameDayReason'])) >= 3);
+}
+
+/**
+ * الموعد الطبي الذي تضيفه العيادة لليوم (أو تنقله إلى اليوم) يحتاج سبب الحجز في نفس اليوم. طلب العودة والنقل والتحويلة الطارئة
+ * لليوم بطبيعتها، والموعد الذي كان لليوم قبل التعديل لا يُطلب له (needsSameDayReason في shared/transport.ts).
+ */
+function same_day_reason_error(?array $before, array $after): ?string
+{
+    if (($after['category'] ?? '') === 'غير طبية' || ($after['urgent'] ?? null) === true || direct_request($after)) return null;
+    if (!emergency_today($after) || ($before !== null && emergency_today($before))) return null;
+    return trim((string)($after['sameDayReason'] ?? '')) === '' ? SAME_DAY_REASON_MESSAGE : null;
+}
+
 /** نوع الموعد (اختياري): نص قصير غير فارغ، أو بلا الخانة */
 function valid_appointment_type(array $data): bool
 {
@@ -1096,6 +1117,8 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
                 }
                 // النقل من مستشفى تضيفه العيادة (أو المدير) فقط
                 if (hospital_transfer($after)) return $denied;
+                // موعد اليوم: سبب الحجز في نفس اليوم
+                if (has_role($user, CLINIC_ROLES) && ($error = same_day_reason_error(null, $after))) return $error;
                 // موعد العيادة ينتظر موافقة مسؤولها، وما يضيفه المسؤول بنفسه موافق عليه باسمه
                 if ($role === 'clinic') return ($after['approval'] ?? null) === 'pending' ? null : $denied;
                 if ($role === 'clinicLead') {
@@ -1125,7 +1148,8 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
                 $valid = only($changed, APPOINTMENT_FIELDS) && !in_array('id', $changed, true)
                     && in_array($after['status'] ?? null, APPOINTMENT_STATUSES, true)
                     && in_array($after['gender'] ?? 'ذكر', ['ذكر', 'أنثى'], true) && is_bool($after['cancer'] ?? false)
-                    && ($after['returnOnly'] ?? true) === true && ($after['nurse'] ?? true) === true && valid_appointment_type($after);
+                    && ($after['returnOnly'] ?? true) === true && ($after['nurse'] ?? true) === true && valid_appointment_type($after)
+                    && valid_same_day_reason($after);
                 if (!$valid) return $denied;
                 // «يطلب سيارتها مشرف السيارات» لا تتغير بالتعديل
                 if ($role !== 'admin' && in_array('fleetRequest', $changed, true)) return $denied;
@@ -1138,6 +1162,8 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
                 if ($role === 'admin') return null;
                 // تغيير الضيف أو الوجهة: من قائمة المجمع ودليل المستشفيات
                 if ($docOf && ($error = registry_error($after, $docOf, $changed))) return $error;
+                // نقل الموعد إلى اليوم: سبب الحجز في نفس اليوم
+                if (in_array('appointmentDate', $changed, true) && ($error = same_day_reason_error($before, $after))) return $error;
                 $approvalChanged = (bool)array_intersect($changed, APPROVAL_FIELDS);
                 // الموعد لا يصير طلب عودة ولا العكس، وطلب العودة بلا موافقة: تُعدَّل بياناته فقط
                 if (in_array('returnOnly', $changed, true)) return $denied;

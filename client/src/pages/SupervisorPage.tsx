@@ -1006,6 +1006,7 @@ function GuestDetails({ appointment, request, driver, persons, onEditMobile }: {
         )}
       <p className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-500">
         {appointment.appointmentType && <span>{t("نوع الموعد:", "Appointment type:")} <span className="font-medium text-slate-700">{appointmentTypeText(appointment.appointmentType, en ? "en" : "ar")}</span></span>}
+        {appointment.sameDayReason && <span>{t("سبب الحجز في نفس اليوم:", "Same-day reason:")} <span className="font-medium text-slate-700">{appointment.sameDayReason}</span></span>}
         {appointment.gender && <span>{en ? (appointment.gender === "أنثى" ? "Female" : "Male") : appointment.gender}</span>}
         {assistance && !request?.nurseOnly && <span className="inline-flex items-center gap-1"><Accessibility className="h-3.5 w-3.5" />{assistance}</span>}
         <span className="inline-flex items-center gap-1"><Users className="h-3.5 w-3.5" />{personsLabel(count, en)}</span>

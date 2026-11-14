@@ -63,7 +63,7 @@ describe("two appointments for the same guest on the same day", () => {
 
   it("reads escort and nurse as separate needs when importing", () => {
     const rows = [{ "اسم الضيف أو الرقم": "ضيف", "اسم العيادة أو المستشفى": "مستشفى الوكرة", "رقم المبنى": "1", "رقم الشقة": "2", "رقم الموبايل": "55500000",
-      "تاريخ الموعد": "2026-09-24", "وقت الموعد": "10:00", "نوع الرحلة": "عادي", "احتياجات الضيف": "يحتاج مرافق، Needs Nurse" }];
+      "تاريخ الموعد": "2026-09-24", "وقت الموعد": "10:00", "نوع الرحلة": "عادي", "احتياجات الضيف": "يحتاج مرافق، Needs Nurse", "سبب الحجز في نفس اليوم": "موعد جديد من المستشفى" }];
     const [imported] = parseImportedAppointments(rows, [], 1, "2026-09-24").appointments;
     expect(imported.assistance).toEqual(["يحتاج مرافق", "يحتاج Nurse"]);
   });

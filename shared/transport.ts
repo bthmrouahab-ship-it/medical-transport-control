@@ -87,6 +87,8 @@ export type ClinicAppointment = {
   nurse?: boolean;
   /** نوع الموعد (اختياري): من APPOINTMENT_TYPES بالعربية، أو مكتوب بعد «أخرى» */
   appointmentType?: string;
+  /** سبب حجز الموعد الطبي في يومه نفسه: إلزامي عند إضافته لليوم أو نقله إلى اليوم (needsSameDayReason) */
+  sameDayReason?: string;
   /** رحلة غير طبية متكررة: رقم السلسلة نفسه لكل أيامها (يضيفها مشرف السيارات معًا، ويوقف القادم منها معًا) */
   seriesId?: string;
   /**
@@ -191,6 +193,23 @@ export const isPriority = (appointment: Pick<ClinicAppointment, "cancer" | "urge
 export const EMERGENCY_REFERRAL = "تحويلة طارئة";
 export const EMERGENCY_PICKUP_BUILDING = "03";
 export const isEmergencyReferral = (appointment: Pick<ClinicAppointment, "appointmentType">) => appointment.appointmentType === EMERGENCY_REFERRAL;
+
+/**
+ * سبب حجز الموعد في يومه نفسه (غير المجدول): إلزامي للموعد الطبي الذي تضيفه العيادة لليوم أو تنقله إلى اليوم.
+ * طلب العودة والنقل من مستشفى والتحويلة الطارئة لليوم بطبيعتها، فلا يُطلب لها. الموعد القديم بلا سبب لا يُطلب له عند تعديله.
+ */
+export const SAME_DAY_REASON_LABEL = "سبب الحجز في نفس اليوم";
+export const SAME_DAY_REASON_MAX = 200;
+export const SAME_DAY_REASON_MESSAGE = "اكتب سبب حجز الموعد في نفس اليوم";
+export const sameDayReasonValid = (reason: string | undefined) => (reason ?? "").trim().length >= 3;
+export function needsSameDayReason(
+  appointment: Pick<ClinicAppointment, "appointmentDate" | "returnOnly" | "fromClinic" | "appointmentType"> & Partial<Pick<ClinicAppointment, "category" | "urgent">>,
+  before?: Pick<ClinicAppointment, "appointmentDate">,
+  today = localDateString(),
+) {
+  if (appointment.category === "غير طبية" || appointment.urgent || isDirectRequest(appointment)) return false;
+  return appointment.appointmentDate === today && before?.appointmentDate !== today;
+}
 /** التحويلة الطارئة تُسجَّل بتاريخ اليوم فقط (نفس النص في rules.php) */
 export const EMERGENCY_TODAY_MESSAGE = "التحويلة الطارئة تُسجَّل بتاريخ اليوم فقط";
 /** مكان استلام الضيف في رحلة الذهاب من المجمع بالعربية والإنجليزية */
@@ -526,6 +545,7 @@ export function migrateAppointment(value: unknown, index = 0): ClinicAppointment
       : {}),
     ...(raw.nurse === true ? { nurse: true } : {}),
     ...(toText(raw.appointmentType) ? { appointmentType: toText(raw.appointmentType).slice(0, APPOINTMENT_TYPE_MAX) } : {}),
+    ...(toText(raw.sameDayReason) ? { sameDayReason: toText(raw.sameDayReason).slice(0, SAME_DAY_REASON_MAX) } : {}),
     ...(toText(raw.seriesId) ? { seriesId: toText(raw.seriesId) } : {}),
     ...(/^\d{2}:\d{2}$/.test(toText(raw.returnAt)) ? { returnAt: toText(raw.returnAt) } : {}),
     ...(toText(raw.authorizedBy) ? { authorizedBy: toText(raw.authorizedBy).slice(0, AUTHORIZED_BY_MAX) } : {}),
@@ -582,6 +602,8 @@ export function parseImportedAppointments(
     const returnOnly = isYes(readAliased(row, ["عودة فقط", "طلب عودة فقط", "return only"]), /عودة فقط|return only/i);
     // نوع الموعد (اختياري)
     const appointmentType = normalizeAppointmentType(readAliased(row, ["نوع الموعد", "appointment type"]));
+    // سبب الحجز في نفس اليوم: إلزامي لموعد اليوم
+    const sameDayReason = toText(readAliased(row, [SAME_DAY_REASON_LABEL, "سبب الحجز", "same-day reason", "same day reason"])).slice(0, SAME_DAY_REASON_MAX);
     // نقل من مستشفى إلى مستشفى: مستشفى الاستلام (عمود «من مستشفى»، من الدليل)
     const fromName = toText(readAliased(row, ["من مستشفى", "مستشفى الاستلام", "from hospital"]));
 
@@ -662,6 +684,11 @@ export function parseImportedAppointments(
       errors.push(`الصف ${excelRow}: الموعد مكرر`);
       return;
     }
+    // موعد اليوم نفسه: سبب الحجز في نفس اليوم إلزامي
+    if (!sameDayReasonValid(sameDayReason) && needsSameDayReason({ appointmentDate, returnOnly, fromClinic: fromHospital?.name, appointmentType }, undefined, today)) {
+      errors.push(`الصف ${excelRow}: ${SAME_DAY_REASON_MESSAGE} (عمود «${SAME_DAY_REASON_LABEL}»)`);
+      return;
+    }
     duplicateKeys.add(duplicateKey);
 
     appointments.push({
@@ -684,6 +711,7 @@ export function parseImportedAppointments(
       ...(fromHospital ? { fromClinic: fromHospital.name, fromHospitalId: fromHospital.id } : {}),
       ...(nurse ? { nurse: true } : {}),
       ...(appointmentType ? { appointmentType } : {}),
+      ...(sameDayReason ? { sameDayReason } : {}),
     });
   });
 

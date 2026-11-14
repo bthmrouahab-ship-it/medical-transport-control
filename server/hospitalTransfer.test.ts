@@ -109,7 +109,7 @@ describe("hospital to hospital transfer", () => {
 
   it("imports the «من مستشفى» column from the directory", () => {
     const row = { "اسم الضيف": "ضيف تجربة", "اسم العيادة أو المستشفى": "مستشفى الوكرة", "رقم المبنى": "17", "رقم الشقة": "4", "رقم الموبايل": "55500000",
-      "تاريخ الموعد": "2026-10-01", "وقت الموعد": "11:00", "نوع الرحلة": "عادي" };
+      "تاريخ الموعد": "2026-10-01", "وقت الموعد": "11:00", "نوع الرحلة": "عادي", "سبب الحجز في نفس اليوم": "موعد جديد من المستشفى" };
     const ok = parseImportedAppointments([{ ...row, "من مستشفى": "مركز الثمامة الصحي" }], [], 1, "2026-10-01");
     expect(ok.errors).toEqual([]);
     expect(ok.appointments[0]).toMatchObject({ fromClinic: "مركز الثمامة الصحي", fromHospitalId: "thumama-hc" });
