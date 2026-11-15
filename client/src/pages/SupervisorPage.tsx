@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import { goTo, reveal } from "@/lib/notify";
-import { Accessibility, AlertTriangle, ArrowLeftRight, Ban, BellRing, BriefcaseMedical, Building2, Check, CheckCircle2, ChevronDown, Clock3, Footprints, Hospital, House, Link2, MapPin, MessageSquareWarning, PauseCircle, Pencil, Flag, RotateCcw, ShieldCheck, Siren, Smartphone, Stethoscope, Timer, Truck, UserCheck, UserMinus, Users, XCircle } from "lucide-react";
+import { Accessibility, AlertTriangle, ArrowLeftRight, Ban, BellRing, BriefcaseMedical, Building2, Bus, Check, CheckCircle2, ChevronDown, Clock3, Footprints, Hospital, House, Link2, MapPin, MessageSquareWarning, PauseCircle, Pencil, Flag, RotateCcw, ShieldCheck, Siren, Smartphone, Stethoscope, Timer, Truck, UserCheck, UserMinus, Users, XCircle } from "lucide-react";
 import { NURSE_BUILDING } from "@shared/guests";
 import { isValidMobile, normalizeMobile } from "@shared/text";
 import {
@@ -1386,6 +1386,8 @@ function AtAppointmentRow({ appointment, request, day, driver, phase, next, nurs
               : phase.kind === "arrived" && phase.at
                 ? <Badge tone={overdue ? "red" : "green"} icon={overdue ? AlertTriangle : CheckCircle2}>{t("وصل إلى الوجهة", "Arrived")}{overdue ? ` ${dayLabel(localDateString(phase.at), new Date(), en)}` : ""} <span dir="ltr" className="tabular">{timeLabel(phase.at)}</span></Badge>
                 : <Badge tone="cyan" icon={CheckCircle2}>{t("تم استلام الضيف", "Guest picked up")}</Badge>}
+            {/* أرسله مسؤول العيادة بباص العيادة ذهابًا، والعودة يطلبها مشرف المبنى */}
+            {request.clinicBus && <Badge tone="violet" icon={Bus}>{t("ذهب بباص العيادة", "Went by the clinic bus")}</Badge>}
             {nurseTrip && <Badge tone={nurseWaiting ? "amber" : "green"} icon={Stethoscope}>{nurseTripText(nurseTrip, en)}</Badge>}
             {next && <Badge tone="cyan" icon={ArrowLeftRight}>{t("موعد آخر", "Next appointment")} <span dir="ltr" className="tabular">{next.appointmentAt}</span></Badge>}
             {/* رحلة غير طبية بعودة تلقائية: تُطلب سيارتها وحدها قبل وقتها بنصف ساعة */}

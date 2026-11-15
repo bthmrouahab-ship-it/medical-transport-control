@@ -30,6 +30,7 @@ import {
   X,
   Trash2,
   Truck,
+  Bus,
   Upload,
   Undo2,
   UserRoundSearch,
@@ -53,6 +54,7 @@ import {
   guestAlerts,
   isReturnOnly,
   isDirectRequest,
+  canSendByClinicBus,
   isHospitalTransfer,
   hospitalTransferSource,
   directStatus,
@@ -71,6 +73,7 @@ import {
   type ClinicAppointment,
   type Gender,
   type VehicleRequest,
+  type Vehicle,
   EMERGENCY_REFERRAL,
   EMERGENCY_PICKUP_BUILDING,
   isEmergencyReferral,
@@ -97,7 +100,7 @@ export function useAppointmentNames(lang: Lang, guests: Guest[], hospitals: Hosp
   }), [lang, index, hospitals]);
 }
 
-export function ClinicHome({ t, lang, appointments, date, onDateChange, onNew, onEdit, onDelete, onImport, lead = false, onApproval, canChange, requestOf }: {
+export function ClinicHome({ t, lang, appointments, date, onDateChange, onNew, onEdit, onDelete, onImport, lead = false, onApproval, canChange, requestOf, clinicBus, onClinicBus, onCancelClinicBus }: {
   t: ClinicText;
   lang: Lang;
   appointments: ClinicAppointment[];
@@ -116,6 +119,10 @@ export function ClinicHome({ t, lang, appointments, date, onDateChange, onNew, o
   canChange?: (appointment: ClinicAppointment) => boolean;
   /** طلب سيارة الموعد (لطلب العودة: حالة سيارته) */
   requestOf?: (appointment: ClinicAppointment) => VehicleRequest | undefined;
+  /** الباص المخصص للعيادة (null إن لم يُخصَّص): مسؤول العيادة يرسل به المواعيد المحددة ذهابًا، أو ذهابًا وعودة */
+  clinicBus?: Pick<Vehicle, "plate" | "driver"> | null;
+  onClinicBus?: (ids: string[], withReturn: boolean) => number;
+  onCancelClinicBus?: (ids: string[]) => number;
 }) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [importing, setImporting] = useState(false);
@@ -231,6 +238,20 @@ export function ClinicHome({ t, lang, appointments, date, onDateChange, onNew, o
     cell: (a) => {
       // طلب العودة من المستشفى والنقل من مستشفى لا يمران بالموافقة
       if (isDirectRequest(a)) return <Badge tone="cyan" icon={Truck}>{t.noApproval}</Badge>;
+      // أرسله مسؤول العيادة بباص العيادة (وله التراجع قبل يوم الموعد أو فيه، ما دام مشرف المبنى لم يطلب له سيارة)
+      if (a.clinicBus) {
+        const canUndo = lead && onCancelClinicBus && a.appointmentDate >= today && requestOf?.(a)?.clinicBus;
+        return (
+          <div className="flex min-w-[176px] flex-col gap-1.5">
+            <span className="flex flex-wrap items-center gap-1.5"><Badge tone="violet" icon={Bus}>{t.clinicBusBadge}</Badge></span>
+            <span className="text-[11px] text-slate-500">{a.clinicBusReturn ? t.clinicBusRoundTrip : t.clinicBusGoOnly}</span>
+            {a.clinicBusBy && <span className="text-[11px] text-slate-400">{t.clinicBusBy(a.clinicBusBy)}</span>}
+            {canUndo && (
+              <span><button type="button" onClick={() => { if (onCancelClinicBus([a.id])) toast.success(t.clinicBusCancelled(1)); }} className={btn("ghost", "sm")}><Undo2 className="h-3.5 w-3.5" /> {t.clinicBusUndo}</button></span>
+            )}
+          </div>
+        );
+      }
       const state = approvalOf(a);
       const by = state === "approved" ? a.approvedBy && t.approvedByText(a.approvedBy) : state === "excluded" ? a.excludedBy && t.excludedByText(a.excludedBy) : "";
       return (
@@ -449,6 +470,20 @@ export function ClinicHome({ t, lang, appointments, date, onDateChange, onNew, o
   const toApprove = chosen.filter(pendingOf);
   const toExclude = chosen.filter((appointment) => approvalOf(appointment) !== "excluded");
   const toRestore = chosen.filter((appointment) => approvalOf(appointment) === "excluded");
+  // باص العيادة: المحدد غير المستبعد الذي لم يُطلب له سيارة (لا طلب عودة ولا نقل ولا تحويلة طارئة)
+  const toBus = chosen.filter((appointment) => !requestOf?.(appointment) && canSendByClinicBus(appointment, []));
+  function sendBySelectedBus(withReturn: boolean) {
+    if (!clinicBus || !onClinicBus || !toBus.length) return;
+    const ids = toBus.map((appointment) => appointment.id);
+    const sent = onClinicBus(ids, withReturn);
+    setSelected(new Set());
+    if (!sent) return;
+    toast.success(t.clinicBusSent(sent, clinicBus.plate), {
+      description: withReturn ? t.clinicBusRoundTrip : t.clinicBusGoOnly,
+      action: onCancelClinicBus ? { label: t.undo, onClick: () => { onCancelClinicBus(ids); toast.success(t.undone); } } : undefined,
+      duration: 8000,
+    });
+  }
   function applyToSelected(list: ClinicAppointment[], approval: Approval) {
     if (approval === "approved") {
       const withAlerts = list.filter((appointment) => (alertsOf.get(appointment.id) ?? []).length > 0).length;
@@ -546,6 +581,16 @@ export function ClinicHome({ t, lang, appointments, date, onDateChange, onNew, o
               <button type="button" disabled={!toExclude.length} title={t.excludeSelectedHint} onClick={() => applyToSelected(toExclude, "excluded")} className={btn("secondary", "sm")}>
                 <EyeOff className="h-3.5 w-3.5" /> {t.excludeSelected(toExclude.length)}
               </button>
+              {toBus.length > 0 && (
+                <>
+                  <button type="button" disabled={!clinicBus} title={clinicBus ? t.clinicBusGoHint(clinicBus.plate) : t.clinicBusNone} onClick={() => sendBySelectedBus(false)} className={btn("secondary", "sm")}>
+                    <Bus className="h-3.5 w-3.5" /> {t.clinicBusGo(toBus.length)}
+                  </button>
+                  <button type="button" disabled={!clinicBus} title={clinicBus ? t.clinicBusBothHint(clinicBus.plate) : t.clinicBusNone} onClick={() => sendBySelectedBus(true)} className={btn("secondary", "sm")}>
+                    <Bus className="h-3.5 w-3.5" /> {t.clinicBusBoth(toBus.length)}
+                  </button>
+                </>
+              )}
               {toRestore.length > 0 && (
                 <button type="button" title={t.restoreSelectedHint} onClick={() => applyToSelected(toRestore, "pending")} className={btn("secondary", "sm")}>
                   <Undo2 className="h-3.5 w-3.5" /> {t.restoreSelected(toRestore.length)}

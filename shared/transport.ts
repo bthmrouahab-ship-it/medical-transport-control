@@ -89,6 +89,14 @@ export type ClinicAppointment = {
   appointmentType?: string;
   /** سبب حجز الموعد الطبي في يومه نفسه: إلزامي عند إضافته لليوم أو نقله إلى اليوم (needsSameDayReason) */
   sameDayReason?: string;
+  /**
+   * أرسله مسؤول العيادة بباص العيادة (sendByClinicBus): رحلة الذهاب منجزة بالباص المخصص للعيادة، باسمه ووقته.
+   * clinicBusReturn: والعودة بالباص أيضًا (الموعد «مكتملة»)، وإلا يطلب مشرف المبنى العودة كالمعتاد.
+   */
+  clinicBus?: true;
+  clinicBusBy?: string;
+  clinicBusAt?: string;
+  clinicBusReturn?: true;
   /** رحلة غير طبية متكررة: رقم السلسلة نفسه لكل أيامها (يضيفها مشرف السيارات معًا، ويوقف القادم منها معًا) */
   seriesId?: string;
   /**
@@ -344,6 +352,8 @@ export type VehicleRequest = {
    * لا يغيّر حالة الموعد، وعودة الضيف بعدها بدون الـ Nurse.
    */
   nurseOnly?: boolean;
+  /** رحلة بباص العيادة سجّلها مسؤول العيادة منجزة (لا يرسلها مشرف السيارات) */
+  clinicBus?: true;
   /** السائق سجّل وصوله إلى نقطة الاستلام من تطبيقه (ISO)؛ وقت استلامه الضيف هو pickedUpAt */
   driverArrivedAt?: string;
   /** يكتبها الخادم وحده للإحصائيات: وقت تسجيل وصول السيارة إلى نقطة الاستلام (مشرف المبنى)، ووقت اقتراب سيارة العودة أو النقل من المستشفى بالـ GPS */
@@ -546,6 +556,9 @@ export function migrateAppointment(value: unknown, index = 0): ClinicAppointment
     ...(raw.nurse === true ? { nurse: true } : {}),
     ...(toText(raw.appointmentType) ? { appointmentType: toText(raw.appointmentType).slice(0, APPOINTMENT_TYPE_MAX) } : {}),
     ...(toText(raw.sameDayReason) ? { sameDayReason: toText(raw.sameDayReason).slice(0, SAME_DAY_REASON_MAX) } : {}),
+    ...(raw.clinicBus === true
+      ? { clinicBus: true as const, clinicBusBy: toText(raw.clinicBusBy) || undefined, clinicBusAt: toText(raw.clinicBusAt) || undefined, ...(raw.clinicBusReturn === true ? { clinicBusReturn: true as const } : {}) }
+      : {}),
     ...(toText(raw.seriesId) ? { seriesId: toText(raw.seriesId) } : {}),
     ...(/^\d{2}:\d{2}$/.test(toText(raw.returnAt)) ? { returnAt: toText(raw.returnAt) } : {}),
     ...(toText(raw.authorizedBy) ? { authorizedBy: toText(raw.authorizedBy).slice(0, AUTHORIZED_BY_MAX) } : {}),
@@ -816,6 +829,7 @@ export function migrateRequest(value: unknown): VehicleRequest | null {
     removedAt: isoTime(raw.removedAt),
     // الطلب المؤجل حتى يجهز الضيف
     ...(raw.held === true && status === "بانتظار التوزيع" ? { held: true as const, heldAt: isoTime(raw.heldAt) } : {}),
+    ...(raw.clinicBus === true ? { clinicBus: true as const } : {}),
     // الخانات الفارغة لا تُضاف، حتى لا تظهر تغييرات وهمية عند المقارنة قبل الحفظ
     ...Object.fromEntries(Object.entries(check).filter(([, value]) => value !== undefined)),
   };
@@ -865,6 +879,85 @@ export function isHeld(request: Pick<VehicleRequest, "held" | "status">) {
 export function releaseHeld(request: VehicleRequest): VehicleRequest {
   const { held: _held, heldAt: _heldAt, ...rest } = request;
   return rest;
+}
+
+/** الباص المخصص للعيادة (تخصيص «باص العيادة»)، أو undefined إن لم يُخصَّص باص. */
+export const clinicBusOf = <T extends Pick<Vehicle, "kind" | "busRole">>(vehicles: T[]) => vehicles.find((vehicle) => busRoleOf(vehicle) === "clinic");
+
+/**
+ * يُرسَل بباص العيادة: موعد طبي ينتظر طلب السيارة (غير مستبعد)، لم يُطلب له سيارة، وليس طلب عودة ولا نقلًا ولا تحويلة طارئة.
+ */
+export function canSendByClinicBus(appointment: ClinicAppointment, requests: VehicleRequest[]) {
+  return appointment.status === "بانتظار طلب السيارة" && approvalOf(appointment) !== "excluded" && !isNonMedical(appointment)
+    && !appointment.urgent && !isDirectRequest(appointment) && !requests.some((request) => request.appointmentId === appointment.id);
+}
+
+/**
+ * مسؤول العيادة يرسل مواعيد بباص العيادة: يوافق عليها (إن لم يوافق بعد)، ورحلة الذهاب منجزة بالباص (طلب «وصلت الوجهة»
+ * clinicBus، فتُحسب في الإحصائيات «أُرسلت سيارة»)، والموعد «تم استلام المريض» فيظهر لمشرف المبنى في «ضيوف في الموعد»
+ * ويطلب العودة كالمعتاد؛ أو withReturn: والعودة بالباص أيضًا، والموعد «مكتملة».
+ */
+export function sendByClinicBus(
+  appointments: ClinicAppointment[],
+  requests: VehicleRequest[],
+  ids: string[],
+  bus: Pick<Vehicle, "plate" | "driver">,
+  by: string,
+  withReturn: boolean,
+  now = new Date(),
+) {
+  const at = now.toISOString();
+  const wanted = new Set(ids);
+  const chosen = appointments.filter((appointment) => wanted.has(appointment.id) && canSendByClinicBus(appointment, requests));
+  const chosenIds = new Set(chosen.map((appointment) => appointment.id));
+  const nextAppointments = appointments.map((appointment): ClinicAppointment => {
+    if (!chosenIds.has(appointment.id)) return appointment;
+    // الموعد الذي ينتظر الموافقة يُوافق عليه باسم المسؤول، والموافق عليه يبقى باسم من وافق
+    const approved = approvalOf(appointment) === "approved" ? {} : { approval: "approved" as const, approvedBy: by, approvedAt: at };
+    return {
+      ...appointment,
+      ...approved,
+      status: withReturn ? "مكتملة" : "تم استلام المريض",
+      clinicBus: true,
+      clinicBusBy: by,
+      clinicBusAt: at,
+      ...(withReturn ? { clinicBusReturn: true as const } : {}),
+    };
+  });
+  const trip = (appointment: ClinicAppointment, direction: VehicleRequest["direction"]): VehicleRequest => ({
+    id: `CB-${appointment.id}${direction === "عودة" ? "-R" : ""}`,
+    appointmentId: appointment.id,
+    direction,
+    status: "وصلت الوجهة",
+    notificationMethod: "whatsapp",
+    createdAt: appointment.appointmentAt,
+    vehiclePlate: bus.plate,
+    ...(bus.driver ? { driver: bus.driver } : {}),
+    clinicBus: true,
+  });
+  const added = chosen.flatMap((appointment) => [trip(appointment, "ذهاب"), ...(withReturn ? [trip(appointment, "عودة")] : [])]);
+  return { appointments: nextAppointments, requests: [...requests, ...added], sent: chosen.length };
+}
+
+/** إلغاء الإرسال بباص العيادة (تراجع): قبل يوم الموعد أو فيه، وما دام مشرف المبنى لم يطلب له سيارة أخرى. */
+export function canCancelClinicBus(appointment: ClinicAppointment, requests: VehicleRequest[], today = localDateString()) {
+  return appointment.clinicBus === true && appointment.appointmentDate >= today
+    && !requests.some((request) => request.appointmentId === appointment.id && !request.clinicBus);
+}
+
+/** يعيد المواعيد إلى «بانتظار طلب السيارة» (موافقًا عليها) ويحذف رحلات باص العيادة لها. */
+export function cancelClinicBus(appointments: ClinicAppointment[], requests: VehicleRequest[], ids: string[], today = localDateString()) {
+  const wanted = new Set(ids);
+  const chosenIds = new Set(appointments.filter((appointment) => wanted.has(appointment.id) && canCancelClinicBus(appointment, requests, today)).map((appointment) => appointment.id));
+  return {
+    appointments: appointments.map((appointment): ClinicAppointment => {
+      if (!chosenIds.has(appointment.id)) return appointment;
+      const { clinicBus: _bus, clinicBusBy: _by, clinicBusAt: _at, clinicBusReturn: _return, ...rest } = appointment;
+      return { ...rest, status: "بانتظار طلب السيارة" };
+    }),
+    requests: requests.filter((request) => !(request.clinicBus && chosenIds.has(request.appointmentId))),
+    cancelled: chosenIds.size,
+  };
 }
 
 /**
