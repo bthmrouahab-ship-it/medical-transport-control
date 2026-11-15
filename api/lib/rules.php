@@ -11,7 +11,7 @@ const APPOINTMENT_FIELDS = ['id', 'guestId', 'patientName', 'clinic', 'buildingN
     'appointmentAt', 'hospitalId', 'category', 'kind', 'assistance', 'status', 'cancelReason', 'cancelledBy', 'cancelledAt',
     'gender', 'cancer', 'returnedSelf', 'returnedSelfBy', 'returnedSelfAt', 'approval', 'approvedBy', 'approvedAt', 'excludedBy', 'excludedAt',
     'returnOnly', 'fromClinic', 'fromHospitalId', 'nurse', 'appointmentType', 'sameDayReason', 'seriesId', 'returnAt', 'authorizedBy', 'fleetRequest', 'addedAt',
-    'urgent', 'urgentOutcome', 'urgentOutcomeBy', 'urgentOutcomeAt', 'urgentFrom', '_o'];
+    'urgent', 'urgentOutcome', 'urgentOutcomeBy', 'urgentOutcomeAt', 'urgentFrom', 'clinicBus', 'clinicBusBy', 'clinicBusAt', 'clinicBusReturn', '_o'];
 /**
  * الحالة المستعجلة في شفت الليل (shared/urgent.ts): مشرف المبنى يطلب سيارة من المبنى إلى عيادة المجمع من 10 مساءً إلى
  * 6 صباحًا فقط (موعد urgent مع طلب سيارته في حفظ واحد)، ومشرف السيارات يرسل السائق. نتيجتها في
@@ -30,6 +30,8 @@ const URGENT_CLOCK_MINUTES = 30;
 const URGENT_GUEST_FIELDS = ['patientName', 'buildingNumber', 'apartmentNumber', 'mobile', 'gender', 'kind', 'assistance'];
 /** موافقة مسؤول العيادة: بانتظار الموافقة، أو موافق عليه (باسمه ووقته)، أو مستبعد بلا حذف (باسمه ووقته) */
 const APPROVAL_FIELDS = ['approval', 'approvedBy', 'approvedAt', 'excludedBy', 'excludedAt'];
+/** أرسله مسؤول العيادة بباص العيادة (sendByClinicBus في shared/transport.ts)، والعودة بالباص أيضًا */
+const CLINIC_BUS_FIELDS = ['clinicBus', 'clinicBusBy', 'clinicBusAt', 'clinicBusReturn'];
 /** بيانات الموعد نفسه: تعديل العيادة لها يعيد الموعد إلى انتظار موافقة مسؤولها */
 const APPOINTMENT_CONTENT_FIELDS = ['guestId', 'patientName', 'clinic', 'buildingNumber', 'apartmentNumber', 'mobile', 'appointmentDate', 'appointmentAt',
     'hospitalId', 'category', 'kind', 'assistance', 'gender', 'cancer', 'returnOnly', 'fromClinic', 'fromHospitalId', 'nurse', 'appointmentType', 'sameDayReason'];
@@ -64,7 +66,7 @@ const TRIP_RESET_FIELDS = ['vehiclePlate', 'driver', 'groupId', 'notificationSen
 const TRIP_UNDO_APPOINTMENT_STATUS = [['تم استلام المريض', 'تم طلب السيارة'], ['مكتملة', 'طلب عودة'], ['مكتملة', 'تم استلام المريض']];
 const REQUEST_FIELDS = ['id', 'appointmentId', 'vehiclePlate', 'driver', 'direction', 'status', 'notificationMethod',
     'createdAt', 'requestedOn', 'autoReturn', 'groupId', 'notificationSentAt', 'requestedBy', 'requestedByName', 'pickedUpAt', 'etaAt', 'destLat', 'destLng', 'arrivedAt', 'arrivalSource',
-    'fromAppointmentId', 'nurseOnly', 'driverArrivedAt', 'arrivalGps', 'pickupGps', ...CHECK_FIELDS, ...VEHICLE_CHANGE_FIELDS, ...TRIP_REMOVAL_FIELDS, ...HOLD_FIELDS,
+    'fromAppointmentId', 'nurseOnly', 'clinicBus', 'driverArrivedAt', 'arrivalGps', 'pickupGps', ...CHECK_FIELDS, ...VEHICLE_CHANGE_FIELDS, ...TRIP_REMOVAL_FIELDS, ...HOLD_FIELDS,
     // يكتبها الخادم وحده للإحصائيات (stamp_tracking في tracking.php)، واسم من طلب السيارة (stamp_requester)
     'pickupArrivedAt', 'nearPickupAt', '_o'];
 /**
@@ -929,6 +931,7 @@ function valid_appointment(array $data, string $id): bool
         && ($data['nurse'] ?? true) === true
         && valid_appointment_type($data)
         && valid_same_day_reason($data)
+        && valid_clinic_bus($data)
         // رحلة غير طبية متكررة: رقم سلسلتها
         && (!array_key_exists('seriesId', $data) || (is_text($data['seriesId'], 40) && $data['seriesId'] !== '' && ($data['category'] ?? '') === 'غير طبية'))
         // العودة التلقائية للرحلة غير الطبية: وقتها بعد وقت الذهاب في نفس اليوم (auto_returns في index.php)
@@ -1032,6 +1035,68 @@ function valid_cancel(array $user, array $after, array $changed): bool
         && is_text($after['cancelledAt'] ?? null, 40) && strtotime($after['cancelledAt']) !== false;
 }
 
+/** خانات باص العيادة في الموعد: clinicBus قيمته true فقط، ومعه اسم المسؤول ووقته، والعودة بالباص true أو بلا الخانة */
+function valid_clinic_bus(array $data): bool
+{
+    if (!array_key_exists('clinicBus', $data)) return !array_intersect(array_keys($data), CLINIC_BUS_FIELDS);
+    return $data['clinicBus'] === true && is_text($data['clinicBusBy'] ?? null, 120) && is_iso($data['clinicBusAt'] ?? null)
+        && ($data['clinicBusReturn'] ?? true) === true;
+}
+
+/**
+ * مسؤول العيادة يرسل الموعد بباص العيادة: من «بانتظار طلب السيارة» (غير مستبعد، وليس طلب عودة ولا نقلًا ولا تحويلة طارئة)
+ * إلى «تم استلام المريض» (أو «مكتملة» مع العودة بالباص) باسمه، موافقًا عليه؛ ومعه رحلات الباص في نفس الدفعة. والتراجع
+ * يعيده إلى «بانتظار طلب السيارة» قبل يوم الموعد أو فيه (ورحلات الباص تُحذف قبله).
+ */
+function clinic_bus_appointment_error(array $user, string $id, array $before, array $after, array $changed, ?callable $requestsOf): ?string
+{
+    $denied = 'ليست لديك صلاحية لتنفيذ هذا الإجراء.';
+    if ($user['role'] !== 'clinicLead' || !$requestsOf || !only($changed, ['status', ...CLINIC_BUS_FIELDS, ...APPROVAL_FIELDS])) return $denied;
+    if (($after['clinicBus'] ?? null) === true) {
+        if (($before['clinicBus'] ?? null) === true) return $denied;
+        if (($before['status'] ?? null) !== 'بانتظار طلب السيارة' || approval_of($before) === 'excluded' || direct_request($before)
+            || ($before['category'] ?? '') === 'غير طبية' || ($before['urgent'] ?? null) === true) {
+            return 'لا يمكن إرسال هذا الموعد بباص العيادة';
+        }
+        // الموعد يُحفظ قبل رحلات الباص في نفس الدفعة: لا طلب سيارة له بعد
+        if ($requestsOf($id)) return 'طُلبت سيارة لهذا الموعد، فلا يُرسل بباص العيادة';
+        if (!valid_clinic_bus($after) || $after['clinicBusBy'] !== $user['display_name']) return $denied;
+        $status = ($after['clinicBusReturn'] ?? null) === true ? 'مكتملة' : 'تم استلام المريض';
+        if (($after['status'] ?? null) !== $status || approval_of($after) !== 'approved') return $denied;
+        // الموعد الذي ينتظر الموافقة يُوافق عليه باسم المسؤول
+        if (array_intersect($changed, APPROVAL_FIELDS) && ($after['approvedBy'] ?? null) !== $user['display_name']) return $denied;
+        return null;
+    }
+    if (($before['clinicBus'] ?? null) !== true || array_intersect(array_keys($after), CLINIC_BUS_FIELDS)
+        || array_intersect($changed, APPROVAL_FIELDS) || ($after['status'] ?? null) !== 'بانتظار طلب السيارة') return $denied;
+    // رحلات الباص تُحذف قبل الموعد في نفس الدفعة، وطلب سيارة من مشرف المبنى (العودة) يمنع التراجع
+    if ($requestsOf($id)) return 'طلب مشرف المبنى سيارة لهذا الموعد، فلا يمكن التراجع عن باص العيادة';
+    $today = (new DateTimeImmutable('now', new DateTimeZone('Asia/Qatar')))->format('Y-m-d');
+    return ($after['appointmentDate'] ?? '') >= $today ? null : 'لا يمكن التراجع عن باص العيادة لموعد مضى يومه';
+}
+
+/** رحلة بباص العيادة (CB-<الموعد> للذهاب و CB-<الموعد>-R للعودة): منجزة بالباص المخصص للعيادة لموعد أرسله مسؤول العيادة */
+function clinic_bus_request_error(array $user, string $id, array $after, ?callable $docOf): ?string
+{
+    $denied = 'ليست لديك صلاحية لتنفيذ هذا الإجراء.';
+    if (!in_array($user['role'], ['admin', 'clinicLead'], true) || !$docOf) return $denied;
+    $appointmentId = $after['appointmentId'] ?? null;
+    $direction = $after['direction'] ?? null;
+    $valid = only(array_keys($after), ['id', 'appointmentId', 'direction', 'status', 'notificationMethod', 'createdAt', 'vehiclePlate', 'driver', 'clinicBus', '_o'])
+        && $after['clinicBus'] === true && ($after['status'] ?? null) === 'وصلت الوجهة'
+        && is_text($appointmentId, 160) && in_array($direction, ['ذهاب', 'عودة'], true)
+        && $id === 'CB-' . $appointmentId . ($direction === 'عودة' ? '-R' : '')
+        && in_array($after['notificationMethod'] ?? null, ['whatsapp', 'call'], true) && is_text($after['createdAt'] ?? null, 40)
+        && is_string($after['vehiclePlate'] ?? null) && valid_doc_id($after['vehiclePlate'])
+        && (!array_key_exists('driver', $after) || is_text($after['driver'], 120));
+    if (!$valid) return 'بيانات الطلب غير صالحة';
+    $bus = $docOf('fleet', $after['vehiclePlate']);
+    if (!$bus || ($bus['busRole'] ?? null) !== 'clinic') return 'خصص باصًا للعيادة أولًا (من قائمة السيارات عند مشرف السيارات)';
+    $linked = $docOf('appointments', $appointmentId);
+    if (!$linked || ($linked['clinicBus'] ?? null) !== true) return $denied;
+    return $direction === 'ذهاب' || ($linked['clinicBusReturn'] ?? null) === true ? null : $denied;
+}
+
 /** سبب حجز الموعد في نفس اليوم (sameDayReason): نص حتى SAME_DAY_REASON_MAX حرفًا، أو بلا الخانة */
 const SAME_DAY_REASON_MAX = 200;
 const SAME_DAY_REASON_MESSAGE = 'اكتب سبب حجز الموعد في نفس اليوم';
@@ -1098,6 +1163,8 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
                     }
                     return has_role($user, BUILDING_ROLES) ? urgent_case_error($after) : $denied;
                 }
+                // باص العيادة يُختار لموعد محفوظ (لا مع إضافته)
+                if ($role !== 'admin' && array_intersect(array_keys($after), CLINIC_BUS_FIELDS)) return $denied;
                 // «يطلب سيارتها مشرف السيارات لاحقًا»: رحلة غير طبية يضيفها مشرف السيارات بلا طلب سيارة
                 if (array_key_exists('fleetRequest', $after) && !($role === 'fleetSupervisor' && ($after['status'] ?? null) === 'بانتظار طلب السيارة')) return $denied;
                 // موعد العيادة لضيف من قائمة المجمع ولمستشفى من الدليل
@@ -1160,6 +1227,8 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
                 if ($role !== 'admin' && emergency_referral($after) && in_array('appointmentDate', $changed, true) && !emergency_today($after)) return EMERGENCY_TODAY_MESSAGE;
                 if (hospital_transfer($after) && !valid_appointment($after, $id)) return 'بيانات الموعد غير صالحة';
                 if ($role === 'admin') return null;
+                // الإرسال بباص العيادة والتراجع عنه (مسؤول العيادة)
+                if (array_intersect($changed, CLINIC_BUS_FIELDS)) return clinic_bus_appointment_error($user, $id, $before, $after, $changed, $requestsOf);
                 // تغيير الضيف أو الوجهة: من قائمة المجمع ودليل المستشفيات
                 if ($docOf && ($error = registry_error($after, $docOf, $changed))) return $error;
                 // نقل الموعد إلى اليوم: سبب الحجز في نفس اليوم
@@ -1217,8 +1286,9 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
             if ($after === null) {
                 if ($role === 'admin') return null;
                 // العيادة تحذف طلب سيارة العودة مع طلب العودة الذي أضافته، قبل إرسال السيارة فقط،
-                // ومسؤول العيادة يلغي طلب سيارة الممرضة كمشرف المبنى
+                // ومسؤول العيادة يلغي طلب سيارة الممرضة كمشرف المبنى، ورحلة باص العيادة عند التراجع عنها
                 if (has_role($user, CLINIC_ROLES)) {
+                    if (($before['clinicBus'] ?? null) === true) return $role === 'clinicLead' ? null : $denied;
                     $linked = $docOf ? $docOf('appointments', (string)($before['appointmentId'] ?? '')) : null;
                     if (nurse_lead($user, $linked)) return null;
                     return $linked !== null && direct_request($linked)
@@ -1233,6 +1303,8 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
                 return has_role($user, BUILDING_ROLES) && follows_request($user, $before) ? null : $denied;
             }
             if ($before === null) {
+                // رحلة بباص العيادة يسجّلها مسؤول العيادة منجزة
+                if (array_key_exists('clinicBus', $after)) return clinic_bus_request_error($user, $id, $after, $docOf);
                 // الطلب الجديد يبدأ دائمًا بانتظار التوزيع، والسيارة يحددها مشرف السيارات لاحقًا
                 if (!has_role($user, ['admin', ...BUILDING_ROLES, ...DISPATCH_ROLES, ...CLINIC_ROLES])) return $denied;
                 // مسؤول العيادة يطلب سيارة الممرضة باسمه كمشرف المبنى (طلب فيه requestedBy)

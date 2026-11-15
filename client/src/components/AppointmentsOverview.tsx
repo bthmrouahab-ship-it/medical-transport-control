@@ -1,6 +1,6 @@
 import { beforeLoaded, useHistory } from "@/lib/history";
 import { useMemo, useState } from "react";
-import { Accessibility, ArrowLeftRight, Ban, BriefcaseMedical, CalendarDays, Clock3, Eye, EyeOff, Filter, Footprints, House, Pencil, Repeat, Flag, PauseCircle, Send, Stethoscope, Trash2, Truck, UsersRound, X } from "lucide-react";
+import { Accessibility, ArrowLeftRight, Ban, BriefcaseMedical, Bus, CalendarDays, Clock3, Eye, EyeOff, Filter, Footprints, House, Pencil, Repeat, Flag, PauseCircle, Send, Stethoscope, Trash2, Truck, UsersRound, X } from "lucide-react";
 import {
   approvalOf,
   isApproved,
@@ -186,6 +186,7 @@ export function AppointmentsOverview({ appointments, requests, date, now, onStop
                 <Badge tone={request.nurseOnly || request.direction === "عودة" ? "amber" : isTransfer(request, a) ? "cyan" : "neutral"} icon={request.nurseOnly ? Stethoscope : isTransfer(request, a) ? ArrowLeftRight : undefined}>{requestKind(request, a)}</Badge>
                 <StatusBadge status={request.status} />
                 {isHeld(request) && <Badge tone="neutral" icon={PauseCircle}>مؤجل · الضيف غير جاهز</Badge>}
+                {request.clinicBus && <Badge tone="violet" icon={Bus}>بباص العيادة</Badge>}
                 {request.createdAt && (
                   <span className="text-slate-400">
                     {request.autoReturn ? `عودة تلقائية ${request.createdAt}` : request.requestedOn ? `حُجزت مسبقًا ${request.requestedOn.slice(8, 10)}-${request.requestedOn.slice(5, 7)} ${request.createdAt}` : `طُلبت ${request.createdAt}`}

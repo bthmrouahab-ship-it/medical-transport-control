@@ -235,6 +235,14 @@ function describe_write(PDO $pdo, string $col, string $id, ?array $before, ?arra
             if (($after['returnedSelf'] ?? null) === true && ($before['returnedSelf'] ?? null) !== true) {
                 return ['appointment', 'appointment.self_return', "عودة $who إلى المجمع بنفسه من {$details['destination']} ($when) · بلا سيارة عودة", $details];
             }
+            // باص العيادة: يرسله مسؤول العيادة (ورحلاته تُسجَّل معه هنا)، أو يتراجع عنه
+            if (($after['clinicBus'] ?? null) === true && ($before['clinicBus'] ?? null) !== true) {
+                $back = ($after['clinicBusReturn'] ?? null) === true ? 'ذهابًا وعودة' : 'ذهابًا · يطلب مشرف المبنى العودة';
+                return ['appointment', 'appointment.clinic_bus', "إرسال $noun $who ({$details['destination']}، $when) بباص العيادة $back" . ((($before['approval'] ?? 'approved') !== 'approved') ? ' · مع الموافقة عليه' : ''), $details];
+            }
+            if (($before['clinicBus'] ?? null) === true && ($after['clinicBus'] ?? null) !== true) {
+                return ['appointment', 'appointment.clinic_bus_cancel', "التراجع عن إرسال $noun $who ({$details['destination']}، $when) بباص العيادة", $details];
+            }
             // موافقة مسؤول العيادة أو استبعاده أو إرجاعه (بلا تعديل في بيانات الموعد)
             $from = $before['approval'] ?? 'approved';
             $to = $after['approval'] ?? 'approved';
@@ -272,6 +280,8 @@ function describe_write(PDO $pdo, string $col, string $id, ?array $before, ?arra
             if (!empty($request['nurseOnly'])) $who = "الـ Nurse مرافقة $who";
             $direction = $request['direction'] ?? 'ذهاب';
             $plate = $request['vehiclePlate'] ?? '';
+            // رحلات باص العيادة تُسجَّل مع إرسال الموعد بالباص (appointment.clinic_bus)
+            if (($request['clinicBus'] ?? null) === true) return null;
             if ($before === null) {
                 $details['status'] = 'بانتظار التوزيع';
                 if (!empty($request['fromAppointmentId'])) {

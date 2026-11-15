@@ -28,6 +28,9 @@ import {
   type VehicleRequest,
   transferSource,
   isDirectRequest,
+  cancelClinicBus,
+  clinicBusOf,
+  sendByClinicBus,
   isHospitalTransfer,
   directStatus,
 } from "@shared/transport";
@@ -523,6 +526,29 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
     setAppointments(next);
   }
 
+  /**
+   * مسؤول العيادة يرسل المواعيد المحددة بباص العيادة في حفظ واحد (الموعد أولًا ثم رحلات الباص): الذهاب منجز بالباص،
+   * والعودة بالباص أيضًا أو يطلبها مشرف المبنى. يعيد عدد ما أُرسل.
+   */
+  function sendClinicBus(ids: string[], withReturn: boolean) {
+    const bus = clinicBusOf(fleetVehicles);
+    if (!bus) return 0;
+    const result = sendByClinicBus(latestAppointments.current, requests, ids, bus, session.name, withReturn);
+    if (!result.sent) return 0;
+    updateBoth(result.appointments, result.requests, "appointments");
+    latestAppointments.current = result.appointments;
+    return result.sent;
+  }
+
+  /** التراجع عن باص العيادة: تُحذف رحلات الباص أولًا ثم يعود الموعد إلى «بانتظار طلب السيارة» */
+  function cancelClinicBusTrips(ids: string[]) {
+    const result = cancelClinicBus(latestAppointments.current, requests, ids);
+    if (!result.cancelled) return 0;
+    updateBoth(result.appointments, result.requests, "requests");
+    latestAppointments.current = result.appointments;
+    return result.cancelled;
+  }
+
   /** موعد واحد، أو موعدان لنفس الضيف في نفس اليوم يُضافان معًا في حفظ واحد */
   function saveAppointment(saved: ClinicAppointment[]) {
     const [first] = saved;
@@ -943,6 +969,9 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
             }}
             lead={isClinicLead}
             onApproval={setApproval}
+            clinicBus={clinicBusOf(fleetVehicles) ?? null}
+            onClinicBus={sendClinicBus}
+            onCancelClinicBus={cancelClinicBusTrips}
           />
         )}
         {view === "form" && isClinic && (
