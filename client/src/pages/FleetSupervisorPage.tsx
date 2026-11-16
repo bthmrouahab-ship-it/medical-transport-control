@@ -114,7 +114,7 @@ import {
   type VehicleWaiting,
 } from "@shared/transport";
 import type { Hospital } from "@shared/hospitals";
-import { assignDrivers, shortDriverName } from "@shared/drivers";
+import { shortDriverName } from "@shared/drivers";
 import { LATE_MINUTES, arrivalsOn, incomingCars, minutesSince, neededAt, returningText, stoppedMessage, stoppedVehicles, suggestReturnPickups, suggestReturnRedirects, tripEndpoints, tripPhase, vehicleAvailability, vehicleLocationState, type IncomingCar, type StoppedVehicle, type TripPhase, type VehicleLocationState } from "@shared/trips";
 import {
   Badge,
@@ -148,7 +148,6 @@ import { KindIcon, KindLabel, VehiclePicker } from "@/components/VehiclePicker";
 import DriverAssignment from "@/components/DriverAssignment";
 import { UrgentBadge } from "@/components/Urgent";
 import RoleSchedulesDialog from "@/components/RoleSchedulesDialog";
-import AddVehicleDialog from "@/components/AddVehicleDialog";
 import WaitingDialog, { type WaitCandidate } from "@/components/WaitingDialog";
 import { saveState } from "@/lib/appStore";
 import { reveal } from "@/lib/notify";
@@ -302,7 +301,6 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
   /** نافذة أوقات سيارات المدارس وباص الجامعة */
   const [editingSchedules, setEditingSchedules] = useState(false);
   /** نافذة إضافة سيارة جديدة */
-  const [addingVehicle, setAddingVehicle] = useState(false);
   /** نافذة انتظار السيارة في المستشفى (رقمها) */
   const [waitingPlate, setWaitingPlate] = useState<string | null>(null);
   /** سيارات متوقفة تجاهل المشرف تنبيهها (حتى تتحرك: السيارة ووقت بداية وقوفها) */
@@ -643,22 +641,6 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
     if (!window.confirm(`حذف الرحلة غير الطبية لـ ${appointment.patientName} (${appointment.clinic}، ${appointment.appointmentDate} ${appointment.appointmentAt})${appointment.seriesId ? "\nهذه الرحلة فقط، وتبقى باقي الرحلات المتكررة" : ""}؟`)) return;
     if (editingTrip?.id === appointment.id) setEditingTrip(null);
     onDeleteTrip(appointment);
-  }
-
-  /** سيارة جديدة برقم غير مسجل: متاحة للخدمة، ومعها سائقها إن اختاره (ينتقل من سيارته السابقة) في حفظ واحد */
-  function addVehicle(vehicle: Pick<Vehicle, "plate" | "kind">, driverId: string | null) {
-    if (vehicles.some((item) => item.plate === vehicle.plate)) {
-      toast.error(`رقم السيارة ${vehicle.plate} مسجل مسبقًا`);
-      return;
-    }
-    const added: Vehicle = { ...vehicle, driver: "", phone: "", available: true };
-    const next = driverId ? assignDrivers([...vehicles, added], drivers, new Map([[added.plate, driverId]]), new Date()) : [...vehicles, added];
-    onUpdate(next);
-    setAddingVehicle(false);
-    const driver = drivers.find((item) => item.id === driverId);
-    toast.success(`تمت إضافة السيارة ${vehicle.plate} (${vehicle.kind})`, {
-      description: driver ? `يقودها ${driver.name}` : "بلا سائق: اختر سائقها من «السائقون» قبل إرسالها في الرحلات",
-    });
   }
 
   /** حفظ أوقات سيارات المدارس وباص الجامعة للجميع */
@@ -1236,7 +1218,6 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
                 {/* أوقات سيارات المدارس وباص الجامعة: يعدّلها المشرف متى تغيّرت */}
                 <button type="button" onClick={() => setEditingSchedules(true)} title="أوقات سيارات المدارس وباص الجامعة" className={btn("secondary", "sm")}><CalendarClock className="h-4 w-4" /> الأوقات</button>
                 <button type="button" onClick={() => setAssigning("")} className={btn(withoutDriver ? "primary" : "secondary", "sm")}><UserCog className="h-4 w-4" /> السائقون</button>
-                <button type="button" onClick={() => setAddingVehicle(true)} aria-label="إضافة سيارة" title="إضافة سيارة برقم غير مسجل" className={btn("secondary", "sm")}><Plus className="h-4 w-4" /> سيارة</button>
               </div>
             )}
           >
@@ -1485,7 +1466,6 @@ export function FleetSupervisorPage({ vehicles, appointments, requests, date, on
           onClose={() => setAssigning(null)}
         />
       )}
-      {addingVehicle && <AddVehicleDialog vehicles={vehicles} drivers={drivers} onSave={addVehicle} onClose={() => setAddingVehicle(false)} />}
       {editingSchedules && <RoleSchedulesDialog schedules={schedules} counts={scheduledCounts} onSave={saveSchedules} onClose={() => setEditingSchedules(false)} />}
     </>
   );

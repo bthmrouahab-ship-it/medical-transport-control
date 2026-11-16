@@ -763,12 +763,6 @@ function valid_full_capacity(array $vehicle): bool
         || (is_bool($vehicle['fullCapacity']) && ($vehicle['kind'] ?? null) === 'سيدان');
 }
 
-/** رقم السيارة: من 2 إلى 12 رقمًا أو حرفًا إنجليزيًا أو شرطة (validateVehicle في shared/transport.ts) */
-function valid_plate($plate): bool
-{
-    return is_string($plate) && preg_match('/^[0-9A-Za-z-]{2,12}$/', $plate) === 1;
-}
-
 /**
  * رحلة غير طبية لم تُرسل سيارتها: قبل طلب سيارتها، أو طلبها (وكل طلباتها) بانتظار التوزيع. يعدّلها مشرف السيارات
  * أو يحذفها؛ وبعد إرسال السيارة تبقى كما هي (سجل الرحلة والإحصائيات).
@@ -1464,18 +1458,12 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
             return $denied;
 
         case 'fleet':
-            // المدير يعدّل كل البيانات، ومشرف السيارات يضيف سيارة جديدة ويغيّر الإتاحة والتخصيص والسائق
+            // المدير يضيف السيارات ويعدّل كل بياناتها، ومشرف السيارات يغيّر الإتاحة والتخصيص والسائق فقط (لا يضيف سيارة)
             if ($after === null) return $role === 'admin' ? null : $denied;
             if ($role === 'admin') {
                 return only(array_keys($after), VEHICLE_FIELDS) && ($after['plate'] ?? null) === $id
                     && in_array($after['kind'] ?? null, VEHICLE_KINDS, true) && valid_bus_role($after) && valid_full_capacity($after)
                     && valid_waiting($after) && valid_vehicle_driver($after, $docOf) ? null : 'بيانات السيارة غير صالحة';
-            }
-            // مشرف السيارات يضيف سيارة جديدة برقم غير مسجل: رقمها ونوعها، متاحة أو موقوفة، وسائقها اختياري (لا يحذف السيارات)
-            if ($role === 'fleetSupervisor' && $before === null) {
-                return only(array_keys($after), VEHICLE_FIELDS) && ($after['plate'] ?? null) === $id && valid_plate($id)
-                    && in_array($after['kind'] ?? null, VEHICLE_KINDS, true) && is_bool($after['available'] ?? null)
-                    && valid_bus_role($after) && valid_full_capacity($after) && valid_vehicle_driver($after, $docOf) ? null : 'بيانات السيارة غير صالحة';
             }
             // مشرف السيارات يغيّر إتاحة السيارة، وتخصيصها (باص المجمع أو الجامعة أو العيادة، أو سيارة المدارس)،
             // وتشغيل السيدان بطاقتها الكاملة (4 أشخاص)، والسائق الذي يقودها (في بداية الشفت)
