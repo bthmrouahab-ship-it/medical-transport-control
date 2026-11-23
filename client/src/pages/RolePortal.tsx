@@ -982,6 +982,7 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
             initial={editingAppointment}
             returnOnly={editingAppointment ? isReturnOnly(editingAppointment) : newKind === "return"}
             transfer={editingAppointment ? isHospitalTransfer(editingAppointment) : newKind === "transfer"}
+            appointments={appointments}
             onBack={() => { setEditingAppointment(null); setView("home"); }}
             onSave={saveAppointment}
           />

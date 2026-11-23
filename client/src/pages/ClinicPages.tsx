@@ -48,6 +48,7 @@ import {
   needsSameDayReason,
   sameDayReasonValid,
   SAME_DAY_REASON_MAX,
+  systemTripAwaitingReturn,
   SAME_DAY_REASON_LABEL,
   approvalOf,
   destinationLabels,
@@ -627,8 +628,10 @@ function CancelReason({ t, lang, appointment }: { t: ClinicText; lang: Lang; app
   );
 }
 
-export function ClinicForm({ t, lang, initial, defaultDate, returnOnly = false, transfer = false, onBack, onSave }: {
+export function ClinicForm({ t, lang, initial, defaultDate, returnOnly = false, transfer = false, appointments = [], onBack, onSave }: {
   t: ClinicText;
+  /** كل المواعيد: طلب العودة لضيف ذهب بسيارة المجمع ولم تُطلب عودته ينبّه أولًا (يطلبها مشرف المبنى) */
+  appointments?: ClinicAppointment[];
   lang: Lang;
   defaultDate: string;
   initial: ClinicAppointment | null;
@@ -678,6 +681,12 @@ export function ClinicForm({ t, lang, initial, defaultDate, returnOnly = false, 
   const sameDayRequired = needsSameDayReason({ ...sameDayKind, appointmentType: form.appointmentType }, initial ?? undefined)
     || (second.enabled && !initial && !returnOnly && !transfer && needsSameDayReason({ ...sameDayKind, appointmentType: second.appointmentType }));
   const showSameDayReason = sameDayRequired || Boolean(initial?.sameDayReason);
+  // طلب عودة جديد لضيف ذهب بسيارة المجمع ولم تُطلب عودته: يطلبها مشرف المبنى من «ضيوف في الموعد»
+  const wentBySystem = returnOnly && !initial && guest
+    ? systemTripAwaitingReturn({ guestId: guest.id, patientName: guest.name, buildingNumber: guest.buildingNumber, apartmentNumber: guest.apartmentNumber, appointmentDate: form.appointmentDate }, appointments)
+    : undefined;
+  const wentWhen = wentBySystem ? `${dayName(wentBySystem.appointmentDate)} ${wentBySystem.appointmentAt}` : "";
+  const wentHospital = wentBySystem ? (lang === "en" ? hospitals.find((item) => item.id === wentBySystem.hospitalId)?.nameEn || wentBySystem.clinic : wentBySystem.clinic) : "";
 
   function selectGuest(next: Guest | undefined) {
     setForm((current) => {
@@ -752,6 +761,7 @@ export function ClinicForm({ t, lang, initial, defaultDate, returnOnly = false, 
       document.getElementById("same-day-reason")?.focus();
       return;
     }
+    if (wentBySystem && !window.confirm(t.systemReturnConfirm(wentHospital, wentWhen))) return;
     // طلب العودة أو النقل ليوم غير اليوم: يُسأل أولًا (الطلب يصل إلى مشرف السيارات لذلك اليوم، لا سيارة اليوم)
     if ((returnOnly || transfer) && form.appointmentDate !== localDateString() && !window.confirm(t.directNotTodayConfirm(dayName(form.appointmentDate)))) return;
     const secondHospital = hospitals.find((item) => item.id === second.hospitalId);
@@ -834,6 +844,11 @@ export function ClinicForm({ t, lang, initial, defaultDate, returnOnly = false, 
             </p>
           )}
           <GuestPicker t={t} guests={guests} guest={guest} onSelect={selectGuest} notListed={notListed} cubanOnly={form.hospitalId !== PRIVATE_CAR_HOSPITAL} />
+          {wentBySystem && (
+            <p role="alert" className="flex sm:col-span-2 items-start gap-2 rounded-xl bg-amber-50 px-3.5 py-2.5 text-sm font-medium leading-6 text-amber-900 ring-1 ring-inset ring-amber-300">
+              <AlertTriangle className="mt-1 h-4 w-4 shrink-0" /> {t.systemReturn(wentHospital, wentWhen)}
+            </p>
+          )}
           {hasSpecialNeeds(guest) && <SpecialNeedsNote t={t} chosen={!initial} />}
           {transfer && <HospitalSelect id="hospital-from" label={t.transferFrom} value={form.fromHospitalId} onChange={(fromHospitalId) => setForm({ ...form, fromHospitalId })} hospitals={hospitals} lang={lang} placeholder={t.hospitalChoose} noMatch={t.hospitalNoMatch} wide />}
           <HospitalSelect id="hospital-first" label={returnOnly ? t.returnHospital : transfer ? t.transferTo : t.hospital} value={form.hospitalId} onChange={(hospitalId) => setForm({ ...form, hospitalId })} hospitals={hospitals} lang={lang} placeholder={t.hospitalChoose} noMatch={t.hospitalNoMatch} wide />

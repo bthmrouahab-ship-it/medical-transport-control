@@ -702,6 +702,12 @@ export function parseImportedAppointments(
       errors.push(`الصف ${excelRow}: ${SAME_DAY_REASON_MESSAGE} (عمود «${SAME_DAY_REASON_LABEL}»)`);
       return;
     }
+    // طلب عودة لضيف ذهب بسيارة المجمع ولم تُطلب عودته: يطلبها مشرف المبنى
+    const went = returnOnly ? systemTripAwaitingReturn({ guestId, patientName, buildingNumber, apartmentNumber, appointmentDate }, existingAppointments, today) : undefined;
+    if (went) {
+      errors.push(`الصف ${excelRow}: ${systemReturnMessage(went)}`);
+      return;
+    }
     duplicateKeys.add(duplicateKey);
 
     appointments.push({
@@ -1062,6 +1068,35 @@ const guestKey = (appointment: Pick<ClinicAppointment, "patientName" | "building
 
 /** نفس الضيف: الاسم والمبنى والشقة. */
 export const sameGuest = (a: ClinicAppointment, b: ClinicAppointment) => guestKey(a) === guestKey(b);
+
+/** أيام البحث عن ضيف ذهب بسيارة المجمع ولم تُطلب عودته (مثل «لم تُسجَّل عودتهم» عند مشرف المبنى) */
+export const SYSTEM_RETURN_DAYS = 7;
+
+/**
+ * الضيف ذهب بسيارة المجمع إلى موعد على النظام (اليوم أو في الأيام السبعة السابقة) ولم تُطلب عودته بعد:
+ * عودته يطلبها مشرف المبنى من «ضيوف في الموعد»، فلا تضيف العيادة له «طلب عودة من المستشفى».
+ * الموعد الذي ذهب إليه، أو undefined. (الحالة المستعجلة في عيادة المجمع لها نتيجتها ولا تُحسب.)
+ */
+export function systemTripAwaitingReturn(
+  candidate: Pick<ClinicAppointment, "patientName" | "buildingNumber" | "apartmentNumber" | "appointmentDate"> & { id?: string; guestId?: string },
+  appointments: ClinicAppointment[],
+  today = localDateString(),
+) {
+  const from = addDays(today, -SYSTEM_RETURN_DAYS);
+  const key = guestKey(candidate);
+  return appointments
+    .filter((appointment) =>
+      appointment.id !== candidate.id
+      && appointment.status === "تم استلام المريض"
+      && appointment.appointmentDate >= from && appointment.appointmentDate <= today
+      && !(appointment.urgent && (appointment.urgentOutcome || appointment.hospitalId === COMPLEX_CLINIC.id))
+      && (candidate.guestId && appointment.guestId ? appointment.guestId === candidate.guestId : guestKey(appointment) === key))
+    .sort((a, b) => `${b.appointmentDate} ${b.appointmentAt}`.localeCompare(`${a.appointmentDate} ${a.appointmentAt}`))[0];
+}
+
+/** رسالة العيادة عند طلب عودة لضيف ذهب بسيارة المجمع ولم تُطلب عودته */
+export const systemReturnMessage = (went: Pick<ClinicAppointment, "clinic" | "appointmentDate" | "appointmentAt">) =>
+  `الضيف ذهب بسيارة المجمع إلى ${went.clinic} (${went.appointmentDate} ${went.appointmentAt}) ولم تُطلب عودته بعد: يطلب عودته مشرف المبنى من «ضيوف في الموعد»، فلا يُضاف له طلب عودة من العيادة`;
 
 /** موعدان لنفس الضيف بفارق أقل من هذا يُعتبران في نفس الوقت (لا يمكن حضورهما معًا). */
 export const CONFLICT_MINUTES = 30;
