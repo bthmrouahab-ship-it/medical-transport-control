@@ -1069,6 +1069,16 @@ function clinic_bus_appointment_error(array $user, string $id, array $before, ar
     return ($after['appointmentDate'] ?? '') >= $today ? null : 'لا يمكن التراجع عن باص العيادة لموعد مضى يومه';
 }
 
+const PAST_APPOINTMENT_MESSAGE = 'لا يمكن تعديل موعد مضى يومه: أضف موعدًا جديدًا';
+const GUEST_CHANGE_MESSAGE = 'لا يمكن تغيير ضيف الموعد: احذفه وأضف موعدًا جديدًا للضيف الآخر';
+
+/** موعد مضى يومه (بتوقيت قطر) */
+function past_appointment(array $appointment): bool
+{
+    $today = (new DateTimeImmutable('now', new DateTimeZone('Asia/Qatar')))->format('Y-m-d');
+    return (string)($appointment['appointmentDate'] ?? '') < $today;
+}
+
 /** رحلة بباص العيادة (CB-<الموعد> للذهاب و CB-<الموعد>-R للعودة): منجزة بالباص المخصص للعيادة لموعد أرسله مسؤول العيادة */
 function clinic_bus_request_error(array $user, string $id, array $after, ?callable $docOf): ?string
 {
@@ -1223,6 +1233,10 @@ function authorize_write(array $user, string $col, string $id, ?array $before, ?
                 if ($role === 'admin') return null;
                 // الإرسال بباص العيادة والتراجع عنه (مسؤول العيادة)
                 if (array_intersect($changed, CLINIC_BUS_FIELDS)) return clinic_bus_appointment_error($user, $id, $before, $after, $changed, $requestsOf);
+                // الموعد الذي مضى يومه لا تُعدَّل بياناته (كان يُستعمل موعدًا جديدًا فيختفي القديم من الإحصائيات)
+                if (array_intersect($changed, APPOINTMENT_CONTENT_FIELDS) && past_appointment($before)) return PAST_APPOINTMENT_MESSAGE;
+                // ولا يتغير ضيف الموعد: الموعد لشخص آخر موعد جديد (والموعد القديم بلا رقم الضيف يُربط بضيفه)
+                if (($before['guestId'] ?? '') !== '' && ($after['guestId'] ?? '') !== ($before['guestId'] ?? '')) return GUEST_CHANGE_MESSAGE;
                 // تغيير الضيف أو الوجهة: من قائمة المجمع ودليل المستشفيات
                 if ($docOf && ($error = registry_error($after, $docOf, $changed))) return $error;
                 // نقل الموعد إلى اليوم: سبب الحجز في نفس اليوم

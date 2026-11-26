@@ -483,6 +483,10 @@ function RoleShell({ session, onLogout, onManager, onChangePassword }: {
       toast.error(t.errLocked);
       return;
     }
+    if (appointment.appointmentDate < localDateString()) {
+      toast.error(t.pastLocked);
+      return;
+    }
     setEditingAppointment(appointment);
     setView("form");
   }

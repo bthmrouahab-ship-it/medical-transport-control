@@ -386,9 +386,11 @@ export function ClinicHome({ t, lang, appointments, date, onDateChange, onNew, o
       filterable: false,
       cell: (a) => {
         const editable = canChange ? canChange(a) : a.status === WAITING;
+        // الموعد الذي مضى يومه لا يُعدَّل (يُضاف موعد جديد بدله)
+        const past = a.appointmentDate < localDateString();
         return (
           <div className="flex gap-1.5">
-            <button disabled={!editable} title={editable ? t.edit : t.lockedHint} aria-label={`${t.edit} ${names.guest(a)}`} onClick={() => onEdit(a)} className={cx(btn(expiredOf(a) ? "primary" : "secondary", "sm"), "w-9 px-0")}><Pencil className="h-3.5 w-3.5" /></button>
+            <button disabled={!editable || past} title={!editable ? t.lockedHint : past ? t.pastLocked : t.edit} aria-label={`${t.edit} ${names.guest(a)}`} onClick={() => onEdit(a)} className={cx(btn(expiredOf(a) ? "primary" : "secondary", "sm"), "w-9 px-0")}><Pencil className="h-3.5 w-3.5" /></button>
             <button disabled={!editable} title={editable ? t.delete : t.lockedHint} aria-label={`${t.delete} ${names.guest(a)}`} onClick={() => onDelete(a)} className={cx(btn("danger", "sm"), "w-9 px-0")}><Trash2 className="h-3.5 w-3.5" /></button>
           </div>
         );
@@ -843,7 +845,7 @@ export function ClinicForm({ t, lang, initial, defaultDate, returnOnly = false, 
               <ArrowLeftRight className="mt-1 h-4 w-4 shrink-0" /> {t.transferHint}
             </p>
           )}
-          <GuestPicker t={t} guests={guests} guest={guest} onSelect={selectGuest} notListed={notListed} cubanOnly={form.hospitalId !== PRIVATE_CAR_HOSPITAL} />
+          <GuestPicker t={t} guests={guests} guest={guest} onSelect={selectGuest} notListed={notListed} cubanOnly={form.hospitalId !== PRIVATE_CAR_HOSPITAL} locked={Boolean(initial?.guestId) && Boolean(guest)} />
           {wentBySystem && (
             <p role="alert" className="flex sm:col-span-2 items-start gap-2 rounded-xl bg-amber-50 px-3.5 py-2.5 text-sm font-medium leading-6 text-amber-900 ring-1 ring-inset ring-amber-300">
               <AlertTriangle className="mt-1 h-4 w-4 shrink-0" /> {t.systemReturn(wentHospital, wentWhen)}
@@ -1069,7 +1071,9 @@ const byUnit = (a: string, b: string) => a.localeCompare(b, "en", { numeric: tru
  * اختيار الضيف من قائمة ضيوف المجمع: بحث بالاسم (العربي أو الإنجليزي أو الهاتف)، أو بالمبنى والشقة
  * لمن كُتب اسمه بطريقة مختلفة. القائمة تظهر تحت الحقول وتضيق مع كل اختيار.
  */
-export function GuestPicker({ t, guests, guest, onSelect, notListed, cubanOnly }: {
+export function GuestPicker({ t, guests, guest, onSelect, notListed, cubanOnly, locked = false }: {
+  /** تعديل موعد له ضيف: لا يتغير الضيف */
+  locked?: boolean;
   t: ClinicText;
   /**
    * موعد طبي: صاحب السيارة الخاصة يُختار مع تنبيه المنع، ويختفي التنبيه بعد اختيار المستشفى الكوبي (المستثنى)
@@ -1145,9 +1149,12 @@ export function GuestPicker({ t, guests, guest, onSelect, notListed, cubanOnly }
             {hasPrivateCar(guest) && cubanOnly !== false && privateCarAlert(guest)}
             <p className="mt-2 text-[11px] leading-4 text-slate-400">{t.guestFromList}</p>
           </div>
-          <button type="button" onClick={() => { onSelect(undefined); requestAnimationFrame(() => inputRef.current?.focus()); }} className={btn("secondary", "sm")}>
-            <UserRoundSearch className="h-4 w-4" /> {t.guestChange}
-          </button>
+          {/* تعديل موعد: لا يتغير ضيفه (الموعد لشخص آخر موعد جديد) */}
+          {locked ? <p className="max-w-56 text-[11px] leading-4 text-slate-500">{t.guestLocked}</p> : (
+            <button type="button" onClick={() => { onSelect(undefined); requestAnimationFrame(() => inputRef.current?.focus()); }} className={btn("secondary", "sm")}>
+              <UserRoundSearch className="h-4 w-4" /> {t.guestChange}
+            </button>
+          )}
         </div>
       </div>
     );
